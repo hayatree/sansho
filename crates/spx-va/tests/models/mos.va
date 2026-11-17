@@ -1,0 +1,39 @@
+//! Original test model. Provenance: elementary square-law approximation and Accellera LRM 2.4.
+`include "disciplines.vams"
+`define SQUARE(x) ((x)*(x))
+`define ENABLE_NOISE
+module smallmos(d,g,s,b);
+ inout d,g,s,b;
+ electrical d,g,s,b;
+ ground b;
+ parameter real beta=1m from (0:inf), threshold=0.5;
+ parameter integer flavor=0;
+ integer i;
+ genvar j;
+ real vgs, ids, gain, values[0:3];
+ branch (d,s) channel;
+ analog begin : evaluate
+  real overdrive;
+  @(initial_step or initial_instance) begin
+   ids=0;
+   $strobe("beta=%g",beta);
+  end
+  vgs=V(g,s);
+  overdrive=max(vgs-threshold,0);
+  case (flavor)
+   0,2: ids=beta*`SQUARE(overdrive);
+   default: ids=0;
+  endcase
+  for (i=0;i<4;i=i+1) values[i]=ids;
+  gain=ddx(ids,V(g));
+  if ($param_given(beta)) ids=ids*$simparam("scale",1);
+  else ids=ids*$mfactor;
+  repeat (2) ids=ids+0;
+  while (ids<0) ids=0;
+  I(channel) <+ ids+ddt(1p*V(d,s));
+`ifdef ENABLE_NOISE
+  I(d,s) <+ white_noise(1e-20,"thermal")+flicker_noise(1e-25,1,"flicker");
+`endif
+  $debug("port current",I(<d>));
+ end
+endmodule

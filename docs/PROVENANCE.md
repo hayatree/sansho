@@ -16,6 +16,9 @@ that introduces the code.
 
 | Area | Implementation | References |
 |---|---|---|
+| Verilog-A preprocessing, lexical grammar, AST and parser | `spx-va/src` | Original implementation from knowledge of Accellera Verilog-AMS LRM 2.4 analog subset; recursive descent and precedence climbing from general compiler techniques |
+| Verilog-A built-in disciplines and constants | `spx-va/src/preproc.rs` | Original declarations from LRM nature/discipline semantics; mathematical constants, SI defining constants and CODATA 2022 values |
+| Verilog-A test models | `spx-va/tests` | Original resistor, junction and simplified square-law MOS examples; no third-party models |
 | Netlist syntax, number scale factors | `spx-netlist` | Nagel (1975), SPICE2 input format |
 | MNA stamps for R, C, L, V, I, E, F, G, H | `spx-devices/src/linear.rs`, `sources.rs` | Ho, Ruehli & Brennan (1975) |
 | PULSE / SIN / EXP / PWL waveforms and defaults | `spx-devices/src/waveform.rs` | Nagel (1975); commonly documented SPICE3 defaults |

@@ -1,0 +1,29 @@
+//! Original test model. Provenance: elementary junction equations and Accellera LRM 2.4.
+`include "disciplines.vams"
+`include "constants.vams"
+module junction(a,k);
+ inout a,k;
+ electrical a,k,j;
+ parameter real isat=1f from (0:inf), rs=1 from [0:inf);
+ parameter real cj=1p from [0:inf), tau=1n from [0:inf);
+ parameter integer mode=0 from [0:2] exclude 1;
+ parameter string label="junction";
+ localparam real vt=`P_K*300/`P_Q;
+ aliasparam saturation=isat;
+ real v, current, charge;
+ branch (a,j) series;
+ analog function real bounded;
+  input x;
+  real x;
+  begin
+   bounded=limexp(x);
+  end
+ endfunction
+ analog begin
+  V(series) <+ rs*I(series);
+  v=$limit(V(j,k),"pnjlim",vt);
+  current=isat*(bounded(v/vt)-1);
+  charge=cj*v+tau*current;
+  I(j,k) <+ current+ddt(charge);
+ end
+endmodule

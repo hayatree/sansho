@@ -1266,6 +1266,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "spx-va"
+version = "0.0.0"
+dependencies = [
+ "spx-diag",
+]
+
+[[package]]
 name = "spx-verify"
 version = "0.0.0"
 dependencies = [

@@ -7,6 +7,10 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 | Code | Severity | Summary |
 |---|---|---|
+| [`E-VA-SYNTAX`](#e-va-syntax) | error | Invalid Verilog-A syntax |
+| [`E-VA-UNSUPPORTED`](#e-va-unsupported) | error | Unsupported Verilog-A construct |
+| [`E-VA-PREPROC`](#e-va-preproc) | error | Verilog-A preprocessing failed |
+| [`E-VA-INCLUDE`](#e-va-include) | error | Verilog-A include failed |
 | [`E-PARSE-ARITY`](#e-parse-arity) | error | Wrong number of fields |
 | [`E-PARSE-DUPLICATE`](#e-parse-duplicate) | error | Duplicate name |
 | [`E-PARSE-ELEMENT`](#e-parse-element) | error | Unsupported element type |
@@ -52,6 +56,30 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-API-UNKNOWN-ID`](#e-api-unknown-id) | error | Unknown circuit or job |
 | [`E-API-UNKNOWN-SIGNAL`](#e-api-unknown-signal) | error | Unknown signal |
 | [`E-API-ALTER`](#e-api-alter) | error | Cannot alter parameter |
+
+## E-VA-SYNTAX
+
+**Invalid Verilog-A syntax.** The analog source does not match the supported grammar.
+
+- Check the source at the reported position and docs/verilog-a.md.
+
+## E-VA-UNSUPPORTED
+
+**Unsupported Verilog-A construct.** The source uses a language construct outside the analog compiler subset.
+
+- Check the source at the reported position and docs/verilog-a.md.
+
+## E-VA-PREPROC
+
+**Verilog-A preprocessing failed.** A macro or conditional directive is malformed or exceeds the expansion limit.
+
+- Check the source at the reported position and docs/verilog-a.md.
+
+## E-VA-INCLUDE
+
+**Verilog-A include failed.** An include could not be loaded or exceeds the nesting limit.
+
+- Check the source at the reported position and docs/verilog-a.md.
 
 ## E-PARSE-ARITY
 

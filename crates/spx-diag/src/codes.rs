@@ -61,6 +61,31 @@ const fn w(
 
 /// All registered codes, grouped by prefix.
 pub const CODES: &[CodeInfo] = &[
+    // --- Verilog-A frontend ---
+    e(
+        "E-VA-SYNTAX",
+        "Invalid Verilog-A syntax",
+        "The analog source does not match the supported grammar.",
+        &["Check the source at the reported position and docs/verilog-a.md."],
+    ),
+    e(
+        "E-VA-UNSUPPORTED",
+        "Unsupported Verilog-A construct",
+        "The source uses a language construct outside the analog compiler subset.",
+        &["Check the source at the reported position and docs/verilog-a.md."],
+    ),
+    e(
+        "E-VA-PREPROC",
+        "Verilog-A preprocessing failed",
+        "A macro or conditional directive is malformed or exceeds the expansion limit.",
+        &["Check the source at the reported position and docs/verilog-a.md."],
+    ),
+    e(
+        "E-VA-INCLUDE",
+        "Verilog-A include failed",
+        "An include could not be loaded or exceeds the nesting limit.",
+        &["Check the source at the reported position and docs/verilog-a.md."],
+    ),
     // --- Parsing ---
     e(
         "E-PARSE-ARITY",
