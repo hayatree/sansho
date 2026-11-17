@@ -5,3 +5,6 @@
 # Rust build output
 /target/
 /verify/out/
+
+# Third-party Verilog-A model sources used only as local test input (never committed)
+/va-models/
