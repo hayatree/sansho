@@ -91,9 +91,9 @@
 | `spx-osdi` | OSDI 0.3/0.4 loader (independently implemented from the spec); exposes `.osdi` models as `DeviceGroup` | libloading |
 | `spx-engine` | MNA assembly, Newton, homotopy, time integration, analyses | rayon |
 | `spx-output` | Columnar waveform store, ngspice raw writer (ASCII/binary), `.meas` evaluation | — |
-| `spx-api` | Session / Job API, structured results, diagnostics, determinism hash | — |
+| `spx-api` | Session / Job API, structured results, diagnostics, determinism hash | rayon |
 | `spx-cli` | `spx run deck.cir`, `--json`, ngspice-like batch mode | clap |
-| `spx-mcp` | MCP server (stdio / HTTP) | Rust MCP SDK (license to be checked) |
+| `spx-mcp` | MCP server (stdio; HTTP later) | serde_json (no SDK) |
 | `spx-py` | Python bindings | pyo3 |
 | `spx-gpu` | Batched device evaluation (feature flag) | wgpu / cudarc (dynamic loading) |
 | `spx-verify` | Regression suites, oracle comparison, report generation | — |
@@ -158,6 +158,13 @@ pub trait DeviceGroup: Send + Sync {
 
 Results are therefore bit-identical regardless of thread count or scheduling. Extra memory is about
 8 bytes × number of contributions.
+
+Implemented (M3) in `spx-engine/src/circuit.rs` (`Gather`) and `solve.rs` (`assemble`): device
+groups are split at elaboration into fixed-size chunks (64 nonlinear / 1024 linear instances), which
+are evaluated in parallel; every value of `G`, `C`, `f`, `q`, `b` is then gathered from its ordered
+source list. Chunk boundaries depend only on the netlist, never on the thread count, and parallel
+evaluation is enabled only for circuits with ≥ 256 nonlinear instances. A test checks bit-identical
+results for 1, 2, 5 and 8 threads.
 
 ---
 
@@ -253,12 +260,20 @@ also made deterministically.
 
 ```rust
 let mut s = Session::new(SessionOptions::default());
-let ckt  = s.load_netlist(text, LoadOpts::ngspice())?;  // or s.load_ir(json)
-let job  = s.run(&ckt, Analysis::Tran { .. })?;           // sync or async (JobHandle)
-let v    = job.signal("v(out)")?;                         // columnar waveform
-let m    = job.measure("rise_time v(out) 10% 90%")?;      // structured scalar
-s.alter(&ckt, "M1", "w", 2e-6)?;                          // incremental change → rerun reusing symbolic
+let c   = s.validate(text);                       // parse + elaborate + lint, nothing stored
+let c   = s.load(text)?;                          // → circuit_id, input_hash, stats, warnings
+let job = s.simulate(&c.circuit_id, None)?;       // or Some(&["tran 1n 1u".into()])
+let w   = s.waveform(&job.job_id, "v(out)", None, Reduce::Auto, None, None, 200)?;
+let m   = s.measure(&job.job_id, &["tran tr trig v(out) val=0.1 rise=1 targ v(out) val=0.9 rise=1".into()])?;
+s.alter(&c.circuit_id, &[Change { target: "m1".into(), param: "w".into(), value: 2e-6 }])?;
+let t   = s.sweep(&c.circuit_id, "rd", "value", &[5e3, 1e4, 2e4], &[])?;   // parallel (L0)
+let x   = s.explain(&job.job_id)?;                // diagnostics + code documentation
+let d   = s.export(&c.circuit_id)?;               // canonical deck, runs in ngspice
 ```
+
+Alterations edit the netlist AST (instance values, device parameters, model parameters,
+`.options`) and are re-elaborated on the next run; reusing the symbolic factorization across
+alterations is planned with the own sparse solver (M5).
 
 ### 7.2 Output principles
 
@@ -285,25 +300,38 @@ s.alter(&ckt, "M1", "w", 2e-6)?;                          // incremental change 
 ```
 
 - Pre-run lint: floating nodes, no DC path, V loops, unused models, suspicious units
-  (e.g. `1M` vs `1Meg`), etc.
-- Error codes are stable IDs, each with documentation.
+  (e.g. `1M` vs `1Meg`), implausible values, default MOSFET geometry, `.meas` signals that do not
+  exist (with "did you mean" suggestions), suspicious `.tran` steps.
+- Error codes are stable IDs, each with documentation: the registry in
+  `spx-diag/src/codes.rs` generates [`diagnostics.md`](diagnostics.md), and a test fails when a code
+  is used without being registered.
+- Convergence failures report the non-converged unknowns with their last value and update ratio,
+  the devices attached to the worst node, the strategies tried, and suggestions (implemented in M3).
 
 ### 7.4 MCP server (`spx-mcp`)
 
 | Tool | Purpose |
 |---|---|
 | `validate_netlist` | Parse + elaborate + lint only. Fast |
-| `estimate_cost` | Unknowns, device count, estimated time and memory |
-| `simulate` | Run an analysis, return a summary |
-| `get_waveform` | Fetch signals over a range with a point budget |
+| `load_netlist` | Store a netlist in the session, return a `circuit_id` |
+| `estimate_cost` | Unknowns, device count, estimated points, time and memory |
+| `simulate` | Run analyses (optionally overriding the cards), return a summary |
+| `get_waveform` | Fetch a signal over a range with a point budget (LTTB) |
 | `measure` | Evaluate `.meas`-style measurements after the fact |
-| `sweep` / `monte_carlo` | Async jobs (parallel layer L0) |
 | `alter_and_rerun` | Rerun with parameter deltas |
-| `explain_failure` | Diagnostic details and remedies |
-| `export_deck` | Export ngspice / Xyce decks (for cross-checking) |
+| `sweep` | Parameter sweep run in parallel (L0), table of measurements |
+| `explain_failure` | Diagnostic details and remedies, by job or by code |
+| `export_deck` | Export the canonical ngspice deck (for cross-checking) |
+
+The server implements the MCP stdio transport (JSON-RPC 2.0, one message per line, protocol
+revisions 2024-11-05 through 2025-11-25) directly on `serde_json`, without an SDK: the protocol
+surface needed is small, and this keeps startup fast and the dependency tree permissive. Tool
+results carry both `structuredContent` and the same JSON as text. Request errors (unknown ids, bad
+arguments) are tool results with `isError: true` and structured diagnostics; only protocol errors
+use JSON-RPC errors. `monte_carlo` and an HTTP transport are planned.
 
 Guarantees fast startup (single static binary) and determinism (same input → same hash → same
-result).
+result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/stdio.rs`.
 
 ---
 
@@ -312,14 +340,18 @@ result).
 | Layer | Target | Mechanism | When |
 |---|---|---|---|
 | L0 | Independent jobs (analyses of one netlist, batches of netlists) | Shared compiled circuit, one workspace per job, `std::thread::scope` with index-ordered results | M2 (done) |
-| L1 | Device evaluation within a run | Parallel over group × chunk (D3/D4) | M3 |
-| L2 | Matrix assembly within a run | Parallel reduction per value index | M3 |
+| L1 | Device evaluation within a run | Parallel over group × chunk (D3/D4) | M3 (done) |
+| L2 | Matrix assembly within a run | Parallel reduction per value index | M3 (done) |
 | L3 | LU within a run | Parallel BTF blocks, parallel refactor | M5 |
 | G1 | GPU batch | Same topology × N instances (MC): device eval on GPU; LU as CPU batch or cuDSS uniform batch | M5 |
 | G2 | GPU-resident single run | Assembly through LU entirely on GPU. Research track | TBD |
 
-- The thread pool can be injected by the caller (to avoid clashing with agent-side parallelism).
-- Parallelism is automatically suppressed for small circuits (thresholds set by benchmarks).
+- All levels run on a rayon pool. `run_with` creates one with `threads` workers;
+  `run_in_current_pool` uses the pool the caller installed (to avoid clashing with agent-side
+  parallelism), and a `Session` keeps one pool for its lifetime.
+- Parallelism is automatically suppressed for small circuits (fewer than 256 nonlinear instances).
+- Measured (M3, 1001-stage MOS1 ring oscillator, 1595 Newton iterations): assembly 466 ms on 1
+  thread, 219 ms on 4, 194 ms on 8; LU (serial until M5) ≈ 145 ms. Results are bit-identical.
 
 ---
 
@@ -379,7 +411,7 @@ result).
 | M0 | Repository foundation: workspace, licenses, CI, cargo-deny, PROVENANCE | CI green |
 | M1 | Linear circuits: basic parser, elaboration, MNA, OP/DC/AC/TRAN (trapezoidal), faer LU, raw output | RC/RLC match analytic solutions and ngspice |
 | M2 | Nonlinear: diode, BJT (GP), MOS1, Newton + limiting, gmin/source stepping, BDF2, LTE step control, `.meas`, L0 parallelism, JSON output | Small-circuit benchmarks within RMS error ≤ 1 vs ngspice (done: `verify/decks`) |
-| M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP |
+| M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP (done: `spx-mcp/tests/stdio.rs`) |
 | M4 | OSDI loader and PDKs: IHP SG13G2 (PSP103, ...), SKY130 (ported BSIM4 or OSDI), broader ngspice dialect | PDK testbenches match ngspice |
 | M5 | Performance: own KLU-style solver, bypass, parallel LU, GPU batch (G1) | ≥ 1.x× ngspice on C6288 single-core; further gains multi-core |
 | M6 | Extensions: noise, sensitivity, PSS/HB, HSPICE dialect, Python | — |
@@ -390,7 +422,7 @@ result).
 
 1. Final project name (trademark and crates.io checks)
 2. MSRV (proposal: latest stable − 2)
-3. Choice of Rust MCP SDK (license and maturity)
+3. ~~Choice of Rust MCP SDK~~ — resolved in M3: own implementation of the stdio transport (see §7.4)
 4. SKY130 BSIM4: port and build in, or OSDI only? (license conditions vs performance)
 5. First GPU backend: wgpu (portability) or CUDA (performance)
 6. Spilling the waveform store to disk for large transients (Arrow / Parquet?)

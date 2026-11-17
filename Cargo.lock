@@ -1181,6 +1181,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "spx-api"
+version = "0.0.0"
+dependencies = [
+ "rayon",
+ "serde",
+ "spx-diag",
+ "spx-engine",
+ "spx-netlist",
+ "spx-output",
+]
+
+[[package]]
 name = "spx-cli"
 version = "0.0.0"
 dependencies = [
@@ -1212,11 +1224,23 @@ dependencies = [
 name = "spx-engine"
 version = "0.0.0"
 dependencies = [
+ "rayon",
+ "serde",
  "spx-devices",
  "spx-diag",
  "spx-netlist",
  "spx-output",
  "spx-sparse",
+]
+
+[[package]]
+name = "spx-mcp"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "spx-api",
+ "spx-diag",
 ]
 
 [[package]]

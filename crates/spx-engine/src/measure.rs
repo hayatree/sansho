@@ -27,14 +27,47 @@ pub(crate) fn evaluate(cards: &[MeasureCard], results: &SimResults) -> Vec<Measu
                 .find(|a| a.kind == kind)
                 .ok_or_else(|| format!("no {label} analysis was run"))
                 .and_then(|a| measure(&c.kind, a));
+            let sweep_unit = match c.analysis {
+                MeasAnalysis::Tran => "s",
+                MeasAnalysis::Ac => "Hz",
+                MeasAnalysis::Dc => results
+                    .analyses
+                    .iter()
+                    .find(|a| a.kind == kind)
+                    .and_then(|a| a.scale.as_ref())
+                    .map_or("V", |v| v.quantity.unit()),
+            };
             Measurement {
                 name: c.name.clone(),
                 analysis: label.into(),
                 value: r.as_ref().ok().copied(),
+                unit: unit(&c.kind, sweep_unit),
                 error: r.err(),
             }
         })
         .collect()
+}
+
+/// Unit of a measurement result.
+fn unit(kind: &MeasKind, sweep: &str) -> String {
+    let sig = |s: &Signal| -> &'static str {
+        match s.func {
+            SignalFn::Db => "dB",
+            SignalFn::Phase => "rad",
+            _ if s.current => "A",
+            _ => "V",
+        }
+    };
+    match kind {
+        MeasKind::TrigTarg { .. } | MeasKind::When { .. } => sweep.into(),
+        MeasKind::Find { signal, .. } => sig(signal).into(),
+        MeasKind::Stat {
+            stat: MeasStat::Integ,
+            signal,
+            ..
+        } => format!("{}·{sweep}", sig(signal)),
+        MeasKind::Stat { signal, .. } => sig(signal).into(),
+    }
 }
 
 fn signal_name(s: &Signal) -> String {

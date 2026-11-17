@@ -17,6 +17,9 @@ missing_debug_implementations = "warn"
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+# Diagnostics are rich (culprits, attempts, suggestions) and only travel on error paths,
+# where their size does not matter.
+result_large_err = "allow"
 
 [profile.release]
 lto = "thin"

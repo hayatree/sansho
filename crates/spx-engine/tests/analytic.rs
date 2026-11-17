@@ -160,7 +160,13 @@ fn singular_matrix_is_diagnosed() {
     let err = run(&nl).expect_err("should fail");
     let first = &err.diagnostics[0];
     assert_eq!(first.code, "E-SOLVE-SINGULAR");
-    assert!(first.notes.iter().any(|n| n.contains('b')));
+    assert!(first.culprits.iter().any(|c| c.name == "b"));
+    assert!(
+        first
+            .suggestions
+            .iter()
+            .any(|s| s.action.contains("rshunt"))
+    );
     assert!(err.diagnostics.iter().any(|d| d.code == "W-ELAB-NODC"));
 }
 

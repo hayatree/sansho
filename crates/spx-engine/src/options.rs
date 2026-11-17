@@ -7,7 +7,7 @@ use spx_diag::Diagnostic;
 use spx_netlist::OptionCard;
 
 /// Numerical options.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SimOptions {
     /// Relative tolerance.
     pub reltol: f64,
@@ -48,7 +48,8 @@ pub struct SimOptions {
 }
 
 /// Transient integration method.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Method {
     /// Trapezoidal rule (default).
     Trap,

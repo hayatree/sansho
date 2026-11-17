@@ -33,7 +33,13 @@ that introduces the code.
 | Gmin stepping, source stepping | `spx-engine/src/analysis.rs` | Standard continuation methods (e.g. Nagel 1975; Vlach & Singhal, *Computer Methods for Circuit Analysis and Design*, 1983); adaptive schedules are original |
 | LTE step control, variable-step BDF2 | `spx-engine/src/analysis.rs` | Nagel (1975); Brayton, Gustavson & Hachtel, "A new efficient algorithm for solving differential-algebraic systems using implicit BDF", Proc. IEEE 60 (1972) |
 | `.meas` evaluation | `spx-netlist/src/meas.rs`, `spx-engine/src/measure.rs` | Original; card syntax as commonly documented for SPICE-family simulators |
-| Parallel job map (L0) | `spx-engine/src/parallel.rs` | Original |
+| Parallel jobs (L0), chunked device evaluation (L1), ordered gather assembly (L2) | `spx-engine/src/parallel.rs`, `circuit.rs`, `solve.rs` | Original design (`docs/architecture.md` D4); `rayon` crate (MIT/Apache-2.0) as a library dependency |
+| Diagnostic code registry, lint checks, "did you mean" (Levenshtein distance) | `spx-diag/src/codes.rs`, `spx-engine/src/lint.rs`, `spx-netlist/src/parser.rs` | Original; edit distance as in V. I. Levenshtein (1966), textbook dynamic programming |
+| Netlist writer | `spx-netlist/src/writer.rs` | Original; SPICE input format (Nagel 1975) |
+| Session / job API, summaries, alterations | `spx-api` | Original |
+| Input / result hashes | `spx-api/src/hash.rs` | FNV-1a by G. Fowler, L. C. Noll, K.-P. Vo (public domain; IETF draft-eastlake-fnv) |
+| Waveform downsampling (LTTB) | `spx-api/src/waveform.rs` | S. Steinarsson, *Downsampling Time Series for Visual Representation*, MSc thesis, University of Iceland, 2013 |
+| MCP server | `spx-mcp` | Model Context Protocol specification (modelcontextprotocol.io, revisions 2024-11-05 – 2025-11-25) and JSON-RPC 2.0 specification; no SDK code used |
 | ASCII raw reader, verification metric | `spx-output/src/raw_reader.rs`, `spx-verify` | Original; public rawfile layout |
 
 Reference simulators (ngspice) are only ever executed as external programs on our own decks

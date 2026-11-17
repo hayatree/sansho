@@ -9,6 +9,7 @@
 
 mod analysis;
 mod circuit;
+mod lint;
 mod measure;
 mod options;
 mod parallel;
@@ -18,6 +19,15 @@ pub use circuit::{Circuit, compile};
 pub use options::{Method, SimOptions};
 pub use parallel::default_threads;
 
+/// Evaluate `.meas` cards against existing results (e.g. measurements added after a run).
+pub fn measure(
+    cards: &[spx_netlist::MeasureCard],
+    results: &SimResults,
+) -> Vec<spx_output::Measurement> {
+    measure::evaluate(cards, results)
+}
+
+use rayon::prelude::*;
 use spx_diag::Diagnostic;
 use spx_netlist::{AnalysisCard, Netlist};
 use spx_output::SimResults;
@@ -44,7 +54,7 @@ pub struct RunError {
 /// Execution settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunConfig {
-    /// Maximum number of worker threads (independent analyses run concurrently).
+    /// Maximum number of worker threads. Results do not depend on this value.
     pub threads: usize,
 }
 
@@ -64,9 +74,44 @@ pub fn run(nl: &Netlist) -> Result<RunOutput, RunError> {
 /// Run several independent netlists, in parallel. Results are returned in input order and
 /// are identical to running each netlist alone.
 pub fn run_batch(netlists: &[Netlist], cfg: &RunConfig) -> Vec<Result<RunOutput, RunError>> {
-    let inner = RunConfig { threads: 1 };
-    parallel::map(netlists.len(), cfg.threads, |i| {
-        run_with(&netlists[i], &inner)
+    parallel::with_threads(cfg.threads, || {
+        netlists.par_iter().map(run_in_current_pool).collect()
+    })
+}
+
+/// A netlist that passed elaboration and lint.
+#[derive(Debug)]
+pub struct Checked {
+    /// The compiled circuit.
+    pub circuit: Circuit,
+    /// Effective simulation options.
+    pub options: SimOptions,
+    /// Warnings from parsing, options, elaboration and lint.
+    pub warnings: Vec<Diagnostic>,
+}
+
+/// Elaborate and lint a netlist without simulating it.
+///
+/// On failure, returns all diagnostics (errors first).
+pub fn check(nl: &Netlist) -> Result<Checked, Vec<Diagnostic>> {
+    let (options, mut warnings) = SimOptions::from_cards(&nl.options);
+    warnings.extend(nl.warnings.iter().cloned());
+    let (circuit, w) = compile(nl, &options).map_err(|mut d| {
+        d.extend(warnings.iter().cloned());
+        d
+    })?;
+    warnings.extend(w);
+    warnings.extend(lint::lint(nl, &circuit, &options));
+    if nl.analyses.is_empty() {
+        warnings.push(Diagnostic::warning(
+            "W-RUN-NOANALYSIS",
+            "the netlist contains no analysis card (.op, .dc, .ac, .tran)",
+        ));
+    }
+    Ok(Checked {
+        circuit,
+        options,
+        warnings,
     })
 }
 
@@ -121,30 +166,30 @@ fn card_span(card: &AnalysisCard) -> spx_diag::Span {
     }
 }
 
-/// Compile a netlist and run all of its analyses.
+/// Compile a netlist and run all of its analyses on a pool of `cfg.threads` threads.
 ///
-/// Analyses are independent of each other and run concurrently when `cfg.threads > 1`; the
-/// results do not depend on the thread count.
+/// Analyses run concurrently (L0) and large circuits evaluate devices and assemble the matrix
+/// in parallel (L1/L2); the results do not depend on the thread count.
 pub fn run_with(nl: &Netlist, cfg: &RunConfig) -> Result<RunOutput, RunError> {
-    let (opts, mut warnings) = SimOptions::from_cards(&nl.options);
-    warnings.extend(nl.warnings.iter().cloned());
-    let (ckt, w) = compile(nl, &opts).map_err(|mut d| {
-        d.extend(warnings.iter().cloned());
-        RunError {
-            diagnostics: d,
-            partial: None,
-        }
+    parallel::with_threads(cfg.threads, || run_in_current_pool(nl))
+}
+
+/// Like [`run_with`], but uses the rayon thread pool the caller is running in (see
+/// `rayon::ThreadPool::install`), so that an embedding application can share one pool.
+pub fn run_in_current_pool(nl: &Netlist) -> Result<RunOutput, RunError> {
+    let Checked {
+        circuit: ckt,
+        options: opts,
+        mut warnings,
+    } = check(nl).map_err(|diagnostics| RunError {
+        diagnostics,
+        partial: None,
     })?;
-    warnings.extend(w);
-    if nl.analyses.is_empty() {
-        warnings.push(Diagnostic::warning(
-            "W-RUN-NOANALYSIS",
-            "the netlist contains no analysis card (.op, .dc, .ac, .tran)",
-        ));
-    }
-    let outcomes = parallel::map(nl.analyses.len(), cfg.threads, |i| {
-        run_analysis(&ckt, nl, &opts, &nl.analyses[i])
-    });
+    let outcomes: Vec<_> = nl
+        .analyses
+        .par_iter()
+        .map(|card| run_analysis(&ckt, nl, &opts, card))
+        .collect();
     let mut results = SimResults {
         measures: Vec::new(),
         title: nl.title.clone(),

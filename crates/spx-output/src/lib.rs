@@ -166,6 +166,8 @@ pub struct Measurement {
     pub analysis: String,
     /// Value, if the measurement could be evaluated.
     pub value: Option<f64>,
+    /// Unit of the value, e.g. `s`, `V`, `dB`, `V·s`.
+    pub unit: String,
     /// Why the measurement failed, if it did.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

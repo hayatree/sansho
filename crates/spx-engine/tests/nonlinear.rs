@@ -166,6 +166,33 @@ fn results_do_not_depend_on_thread_count() {
     }
 }
 
+/// A ring oscillator large enough to enable parallel device evaluation and assembly (L1/L2).
+fn big_ring(stages: usize) -> String {
+    let mut s = String::from(
+        "big ring\nvdd vdd 0 1.8\n\
+         .model nm nmos vto=0.5 kp=100u lambda=0.02 cgso=1n cgdo=1n cj=1e-4 tox=10n\n\
+         .model pm pmos vto=-0.5 kp=40u lambda=0.02 cgso=1n cgdo=1n cj=1e-4 tox=10n\n\
+         ik 0 n0 pulse(0 1m 0 0.1n 0.1n 0.5n 1)\n",
+    );
+    for i in 0..stages {
+        let (a, b) = (i, (i + 1) % stages);
+        s += &format!("mp{i} n{b} n{a} vdd vdd pm w=2u l=0.5u ad=2p as=2p\n");
+        s += &format!("mn{i} n{b} n{a} 0 0 nm w=1u l=0.5u ad=1p as=1p\n");
+        s += &format!("c{i} n{b} 0 5f\n");
+    }
+    s + ".tran 0.1n 3n\n.end\n"
+}
+
+#[test]
+fn parallel_assembly_is_bit_identical() {
+    let nl = parse(&big_ring(301)).unwrap();
+    let a = run_with(&nl, &RunConfig { threads: 1 }).unwrap().results;
+    for threads in [2, 5, 8] {
+        let b = run_with(&nl, &RunConfig { threads }).unwrap().results;
+        assert_eq!(a, b, "threads = {threads}");
+    }
+}
+
 #[test]
 fn model_diagnostics() {
     let e = parse("t\nD1 a 0 nosuch\nV1 a 0 1\n.op\n").err().unwrap();
@@ -176,4 +203,21 @@ fn model_diagnostics() {
     let nl = parse("t\nM1 d g 0 0 m4\nV1 d 0 1\nV2 g 0 1\n.model m4 nmos level=54\n.op\n").unwrap();
     let err = run(&nl).err().unwrap();
     assert!(err.diagnostics.iter().any(|d| d.code == "E-ELAB-MODEL"));
+}
+
+#[test]
+fn convergence_failure_names_culprits() {
+    let nl = parse(
+        "t\nI1 0 a 1\nR1 a b 1\nD1 b 0 dd\nD2 0 b dd\n.model dd d is=1e-30 n=0.01\n\
+         .options gminsteps=0 srcsteps=0 itl1=3\n.op\n",
+    )
+    .unwrap();
+    let err = run(&nl).expect_err("should not converge");
+    let d = &err.diagnostics[0];
+    assert_eq!(d.code, "E-CONV-OP");
+    assert_eq!(d.attempts, ["newton"]);
+    assert_eq!(d.culprits[0].name, "b");
+    assert!(d.culprits.iter().any(|c| c.name == "d1"));
+    assert!(d.suggestions.iter().any(|s| s.action.contains("gminsteps")));
+    assert!(d.info().is_some());
 }

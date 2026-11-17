@@ -12,11 +12,13 @@ mod lexer;
 mod meas;
 mod number;
 mod parser;
+mod writer;
 
 pub use lexer::{Lexed, Line, Token, lex};
 pub use number::parse_number;
 pub use parser::parse;
 pub use spx_diag::{Diagnostic, Severity, Span};
+pub use writer::{write, write_analysis, write_measure};
 
 use serde::Serialize;
 
@@ -487,6 +489,29 @@ pub enum MeasKind {
         /// Interval end.
         to: Option<f64>,
     },
+}
+
+impl MeasEvent {
+    fn signal(&self) -> Option<&Signal> {
+        match self {
+            Self::Cross { signal, .. } => Some(signal),
+            Self::At { .. } => None,
+        }
+    }
+}
+
+impl MeasKind {
+    /// Every signal the measurement reads.
+    pub fn signals(&self) -> Vec<&Signal> {
+        match self {
+            Self::TrigTarg { trig, targ } => {
+                trig.signal().into_iter().chain(targ.signal()).collect()
+            }
+            Self::When { event } => event.signal().into_iter().collect(),
+            Self::Find { signal, event } => std::iter::once(signal).chain(event.signal()).collect(),
+            Self::Stat { signal, .. } => vec![signal],
+        }
+    }
 }
 
 /// A `.meas` card.

@@ -7,6 +7,10 @@
 
 #![forbid(unsafe_code)]
 
+mod codes;
+
+pub use codes::{CODES, CodeInfo, lookup};
+
 use serde::Serialize;
 
 /// A position in a netlist source (1-based line and column).
@@ -41,6 +45,72 @@ pub enum Severity {
     Warning,
 }
 
+/// What a [`Culprit`] refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CulpritKind {
+    /// A circuit node (its voltage).
+    Node,
+    /// A branch current unknown (voltage source, inductor, ...).
+    Branch,
+    /// A device instance.
+    Device,
+    /// A `.model` card.
+    Model,
+}
+
+/// A circuit object implicated by a diagnostic.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Culprit {
+    /// Object kind.
+    pub kind: CulpritKind,
+    /// Object name, e.g. `out`, `v(out)`, `m5`.
+    pub name: String,
+    /// Why this object is implicated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Last value of the unknown, if applicable (V or A).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
+    /// Last Newton update relative to the convergence tolerance (> 1 means not converged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_ratio: Option<f64>,
+}
+
+impl Culprit {
+    /// A culprit with a reason.
+    pub fn new(kind: CulpritKind, name: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            kind,
+            name: name.into(),
+            reason: Some(reason.into()),
+            value: None,
+            update_ratio: None,
+        }
+    }
+}
+
+/// Confidence of a [`Suggestion`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Confidence {
+    /// Likely to fix the problem.
+    High,
+    /// Often helps.
+    Medium,
+    /// Worth trying.
+    Low,
+}
+
+/// A concrete remedy.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Suggestion {
+    /// What to do, e.g. "add `.options rshunt=1e12`".
+    pub action: String,
+    /// How likely it is to help.
+    pub confidence: Confidence,
+}
+
 /// A structured error or warning.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Diagnostic {
@@ -53,9 +123,18 @@ pub struct Diagnostic {
     /// Source location, if applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub span: Option<Span>,
-    /// Additional notes and suggestions.
+    /// Additional notes.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// Circuit objects implicated, most relevant first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub culprits: Vec<Culprit>,
+    /// Strategies that were tried before giving up, in order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<String>,
+    /// Suggested remedies, most promising first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub suggestions: Vec<Suggestion>,
 }
 
 impl Diagnostic {
@@ -67,6 +146,9 @@ impl Diagnostic {
             message: message.into(),
             span: None,
             notes: Vec::new(),
+            culprits: Vec::new(),
+            attempts: Vec::new(),
+            suggestions: Vec::new(),
         }
     }
 
@@ -90,6 +172,32 @@ impl Diagnostic {
         self
     }
 
+    /// Attach a culprit.
+    pub fn with_culprit(mut self, c: Culprit) -> Self {
+        self.culprits.push(c);
+        self
+    }
+
+    /// Record the strategies that were tried.
+    pub fn with_attempts<S: Into<String>>(mut self, a: impl IntoIterator<Item = S>) -> Self {
+        self.attempts.extend(a.into_iter().map(Into::into));
+        self
+    }
+
+    /// Attach a suggested remedy.
+    pub fn with_suggestion(mut self, action: impl Into<String>, confidence: Confidence) -> Self {
+        self.suggestions.push(Suggestion {
+            action: action.into(),
+            confidence,
+        });
+        self
+    }
+
+    /// Documentation of this diagnostic's code, if registered.
+    pub fn info(&self) -> Option<&'static CodeInfo> {
+        lookup(self.code)
+    }
+
     /// Whether this is an error.
     pub fn is_error(&self) -> bool {
         self.severity == Severity::Error
@@ -109,7 +217,31 @@ impl std::fmt::Display for Diagnostic {
         for n in &self.notes {
             write!(f, "\n  note: {n}")?;
         }
+        for c in &self.culprits {
+            write!(f, "\n  culprit: {} `{}`", kind_name(c.kind), c.name)?;
+            if let Some(v) = c.value {
+                write!(f, " = {v:.6e}")?;
+            }
+            if let Some(r) = &c.reason {
+                write!(f, " ({r})")?;
+            }
+        }
+        if !self.attempts.is_empty() {
+            write!(f, "\n  tried: {}", self.attempts.join(" → "))?;
+        }
+        for s in &self.suggestions {
+            write!(f, "\n  help: {}", s.action)?;
+        }
         Ok(())
+    }
+}
+
+fn kind_name(k: CulpritKind) -> &'static str {
+    match k {
+        CulpritKind::Node => "node",
+        CulpritKind::Branch => "branch",
+        CulpritKind::Device => "device",
+        CulpritKind::Model => "model",
     }
 }
 

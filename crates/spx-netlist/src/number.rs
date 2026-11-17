@@ -70,9 +70,39 @@ pub fn parse_number(token: &str) -> Option<f64> {
     Some(base * scale)
 }
 
+/// The scale-suffix part of a numeric token (`"10Meg"` → `"Meg"`, `"1e-3"` → `""`).
+pub(crate) fn scale_suffix(token: &str) -> &str {
+    let b = token.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_alphabetic() {
+            let exponent = (c == b'e' || c == b'E')
+                && b.get(i + 1).is_some_and(|&d| {
+                    d.is_ascii_digit()
+                        || ((d == b'+' || d == b'-')
+                            && b.get(i + 2).is_some_and(u8::is_ascii_digit))
+                });
+            if !exponent {
+                return &token[i..];
+            }
+        }
+        i += 1;
+    }
+    ""
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_number;
+    use super::{parse_number, scale_suffix};
+
+    #[test]
+    fn suffixes() {
+        assert_eq!(scale_suffix("10Meg"), "Meg");
+        assert_eq!(scale_suffix("1e-3"), "");
+        assert_eq!(scale_suffix("2.2uF"), "uF");
+        assert_eq!(scale_suffix("1E3k"), "k");
+    }
 
     fn close(a: Option<f64>, b: f64) -> bool {
         a.is_some_and(|a| (a - b).abs() <= 1e-15 * b.abs().max(1.0))

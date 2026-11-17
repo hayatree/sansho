@@ -5,7 +5,7 @@
 //! approach described in Nagel (1975). See `docs/PROVENANCE.md`.
 
 use spx_devices::{AcSlots, EvalCtx, Mode, TranParams, UnknownKind};
-use spx_diag::Diagnostic;
+use spx_diag::{Confidence, Diagnostic};
 use spx_netlist::AcSweep;
 use spx_output::{AnalysisKind, AnalysisResult, Data, Quantity, Variable};
 use spx_sparse::{FaerLu, LinearSolver, c64};
@@ -47,6 +47,7 @@ pub(crate) fn solve_op(
     x: &mut [f64],
     ws: &mut Workspace,
     opts: &SimOptions,
+    code: &'static str,
     analysis: &str,
 ) -> Result<(), Diagnostic> {
     let integ = Integration::dc(ckt.dim());
@@ -61,17 +62,45 @@ pub(crate) fn solve_op(
         }
         Err(e) => e,
     };
-    if ckt.linear {
-        return Err(newton_diagnostic(ckt, &first, analysis));
+    if ckt.linear || matches!(first, crate::solve::NewtonError::Singular) {
+        return Err(newton_diagnostic(ckt, &first, code, analysis).with_attempts(["newton"]));
     }
-    if opts.gmin_steps > 0 && gmin_stepping(ckt, &init, &integ, x, &x0, ws, opts) {
-        return Ok(());
+    let mut attempts = vec!["newton"];
+    if opts.gmin_steps > 0 {
+        attempts.push("gmin_stepping");
+        if gmin_stepping(ckt, &init, &integ, x, &x0, ws, opts) {
+            return Ok(());
+        }
     }
-    if opts.src_steps > 0 && source_stepping(ckt, &init, &integ, x, ws, opts) {
-        return Ok(());
+    if opts.src_steps > 0 {
+        attempts.push("source_stepping");
+        if source_stepping(ckt, &init, &integ, x, ws, opts) {
+            return Ok(());
+        }
     }
-    Err(newton_diagnostic(ckt, &first, analysis)
-        .with_note("gmin stepping and source stepping also failed"))
+    let mut d = newton_diagnostic(ckt, &first, code, analysis).with_attempts(attempts);
+    if opts.itl1 < 500 {
+        d = d.with_suggestion(
+            format!(
+                "raise the iteration limit: `.options itl1=500` (now {})",
+                opts.itl1
+            ),
+            Confidence::Low,
+        );
+    }
+    if opts.gmin_steps == 0 || opts.src_steps == 0 {
+        d = d.with_suggestion(
+            "re-enable continuation: `.options gminsteps=100 srcsteps=100`",
+            Confidence::Medium,
+        );
+    }
+    if !ckt.no_dc_path.is_empty() {
+        d = d.with_suggestion("add `.options rshunt=1e12`", Confidence::Medium);
+    }
+    Err(d.with_suggestion(
+        "check the culprit devices for floating gates, missing bias or swapped terminals",
+        Confidence::Medium,
+    ))
 }
 
 /// Gmin stepping. Returns `true` on success with `x` and the committed state set.
@@ -192,6 +221,7 @@ pub(crate) fn op(ckt: &Circuit, opts: &SimOptions) -> Result<AnalysisResult, Dia
         &mut x,
         &mut ws,
         opts,
+        "E-CONV-OP",
         "operating point",
     )?;
     Ok(AnalysisResult {
@@ -238,7 +268,9 @@ pub(crate) fn dc_sweep(
             && newton(ckt, &ctx, &integ, &mut x, &mut ws, opts, opts.itl1, 0.0)
                 .map(|_| ws.commit())
                 .is_ok();
-        if !continued && let Err(d) = solve_op(ckt, &ctx, &mut x, &mut ws, opts, "DC sweep") {
+        if !continued
+            && let Err(d) = solve_op(ckt, &ctx, &mut x, &mut ws, opts, "E-CONV-DC", "DC sweep")
+        {
             result = Err(d.with_note(format!("at {source} = {v:e}")));
             break;
         }
@@ -298,7 +330,15 @@ pub(crate) fn ac(
     let mut ws = Workspace::new(ckt);
     let mut x = vec![0.0; n];
     let mut ctx = make_ctx(opts, Mode::Dc, NO_TRAN);
-    solve_op(ckt, &ctx, &mut x, &mut ws, opts, "AC operating point")?;
+    solve_op(
+        ckt,
+        &ctx,
+        &mut x,
+        &mut ws,
+        opts,
+        "E-CONV-OP",
+        "AC operating point",
+    )?;
     // Linearize at the operating point (no limiting, state = accepted operating point).
     ctx.limit = false;
     ws.restore();
@@ -500,6 +540,7 @@ pub(crate) fn tran(
         &mut x,
         &mut ws,
         opts,
+        "E-CONV-OP",
         "transient initial operating point",
     )?;
 
@@ -566,8 +607,19 @@ pub(crate) fn tran(
         if let Err(e) = newton(ckt, &ctx, &integ, &mut x_new, &mut ws, opts, opts.itl4, 0.0) {
             h /= 8.0;
             if h < hmin {
-                return Err(newton_diagnostic(ckt, &e, "transient")
-                    .with_note(format!("timestep too small at t = {:e} s", ctx.time)));
+                let mut d = newton_diagnostic(ckt, &e, "E-CONV-TRAN", "transient")
+                    .with_note(format!("timestep too small at t = {:e} s", ctx.time))
+                    .with_attempts(["newton", "timestep_reduction"]);
+                if opts.itl4 < 50 {
+                    d = d.with_suggestion(
+                        format!("raise `.options itl4=50` (now {})", opts.itl4),
+                        Confidence::Low,
+                    );
+                }
+                return Err(d.with_suggestion(
+                    "give pulse/pwl sources finite rise and fall times",
+                    Confidence::Medium,
+                ));
             }
             continue;
         }
@@ -651,7 +703,8 @@ mod tests {
         let n = ckt.dim();
         let mut ws = Workspace::new(&ckt);
         let mut direct = vec![0.0; n];
-        solve_op(&ckt, &ctx, &mut direct, &mut ws, &opts, "op").unwrap_or_else(|d| panic!("{d}"));
+        solve_op(&ckt, &ctx, &mut direct, &mut ws, &opts, "E-CONV-OP", "op")
+            .unwrap_or_else(|d| panic!("{d}"));
         let mut init = ctx;
         init.init_junctions = true;
         let integ = Integration::dc(n);

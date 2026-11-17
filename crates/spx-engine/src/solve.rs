@@ -8,10 +8,12 @@
 //! See `docs/PROVENANCE.md`.
 
 use spx_devices::{EvalCtx, Mode, Slots, StateRef, TranParams, UnknownKind};
-use spx_diag::Diagnostic;
+use spx_diag::{Confidence, Culprit, CulpritKind, Diagnostic};
 use spx_sparse::{FaerLu, LinearSolver, SolverError};
 
-use crate::circuit::{Circuit, DISCARD};
+use rayon::prelude::*;
+
+use crate::circuit::{Circuit, DISCARD, Gather};
 use crate::options::SimOptions;
 
 /// Integration terms for one timepoint.
@@ -120,9 +122,18 @@ pub(crate) fn make_ctx(opts: &SimOptions, mode: Mode, tran: TranParams) -> EvalC
     }
 }
 
+/// One device group with its slots and state, as zipped for evaluation.
+type EvalItem<'a> = (
+    (&'a Box<dyn spx_devices::DeviceGroup>, &'a mut Slots),
+    (&'a mut Vec<f64>, &'a Vec<f64>),
+);
+
 /// Evaluate all groups at `x` and sum contributions in a fixed order (architecture D4).
 ///
-/// `gshunt` is an extra conductance from every node to ground (gmin stepping).
+/// Device groups are evaluated in parallel (level L1) and every assembled value is gathered
+/// from its sources in a fixed order (level L2), so the result is bit-identical for any
+/// number of threads. `gshunt` is an extra conductance from every node to ground (gmin
+/// stepping).
 pub(crate) fn assemble(
     ckt: &Circuit,
     ctx: &EvalCtx,
@@ -131,53 +142,34 @@ pub(crate) fn assemble(
     opts: &SimOptions,
     gshunt: f64,
 ) {
-    ws.noncon = false;
-    let a = &mut ws.asm;
-    a.g.iter_mut().for_each(|v| *v = 0.0);
-    a.c.iter_mut().for_each(|v| *v = 0.0);
-    a.f.iter_mut().for_each(|v| *v = 0.0);
-    a.q.iter_mut().for_each(|v| *v = 0.0);
-    a.b.iter_mut().for_each(|v| *v = 0.0);
-    for (gi, group) in ckt.groups.iter().enumerate() {
-        let s = &mut ws.slots[gi];
+    let par = ckt.parallel && rayon::current_num_threads() > 1;
+    let eval = |((group, s), (current, accepted)): EvalItem<'_>| {
         s.noncon = false;
-        group.eval(
-            ctx,
-            x,
-            StateRef {
-                accepted: &ws.accepted[gi],
-                current: &mut ws.state[gi],
-            },
-            s,
-        );
-        ws.noncon |= s.noncon;
-        let l = &ckt.layouts[gi];
-        for (k, &idx) in ckt.gmap[gi].iter().enumerate() {
-            if idx != DISCARD {
-                a.g[idx] += s.g[k];
-            }
-        }
-        for (k, &idx) in ckt.cmap[gi].iter().enumerate() {
-            if idx != DISCARD {
-                a.c[idx] += s.c[k];
-            }
-        }
-        for (k, row) in l.f.iter().enumerate() {
-            if let Some(r) = *row {
-                a.f[r] += s.f[k];
-            }
-        }
-        for (k, row) in l.q.iter().enumerate() {
-            if let Some(r) = *row {
-                a.q[r] += s.q[k];
-            }
-        }
-        for (k, row) in l.b.iter().enumerate() {
-            if let Some(r) = *row {
-                a.b[r] += s.b[k];
-            }
-        }
+        group.eval(ctx, x, StateRef { accepted, current }, s);
+    };
+    let states = ws.state.iter_mut().zip(ws.accepted.iter());
+    if par {
+        ckt.groups
+            .par_iter()
+            .zip(ws.slots.par_iter_mut())
+            .zip(ws.state.par_iter_mut().zip(ws.accepted.par_iter()))
+            .for_each(eval);
+    } else {
+        ckt.groups
+            .iter()
+            .zip(ws.slots.iter_mut())
+            .zip(states)
+            .for_each(eval);
     }
+    ws.noncon = ws.slots.iter().any(|s| s.noncon);
+    let slots = &ws.slots;
+    let a = &mut ws.asm;
+    let gm = &ckt.gather;
+    gather(&mut a.g, &gm.g, slots, |s| &s.g, par);
+    gather(&mut a.c, &gm.c, slots, |s| &s.c, par);
+    gather(&mut a.f, &gm.f, slots, |s| &s.f, par);
+    gather(&mut a.q, &gm.q, slots, |s| &s.q, par);
+    gather(&mut a.b, &gm.b, slots, |s| &s.b, par);
     let g = opts.rshunt.map_or(0.0, |r| 1.0 / r) + gshunt;
     if g > 0.0 {
         for (i, &d) in ckt.node_diag.iter().enumerate() {
@@ -189,11 +181,61 @@ pub(crate) fn assemble(
     }
 }
 
+/// Destinations per parallel task in [`gather`].
+const GATHER_CHUNK: usize = 2048;
+
+/// `dst[i] = Σ sources of i`, accumulated in the fixed order of `map`.
+fn gather(dst: &mut [f64], map: &Gather, slots: &[Slots], pick: fn(&Slots) -> &[f64], par: bool) {
+    let fill = |base: usize, out: &mut [f64]| {
+        for (j, d) in out.iter_mut().enumerate() {
+            let mut sum = 0.0;
+            for &(g, k) in map.of(base + j) {
+                sum += pick(&slots[g as usize])[k as usize];
+            }
+            *d = sum;
+        }
+    };
+    if par && dst.len() > GATHER_CHUNK {
+        dst.par_chunks_mut(GATHER_CHUNK)
+            .enumerate()
+            .for_each(|(c, out)| fill(c * GATHER_CHUNK, out));
+    } else {
+        fill(0, dst);
+    }
+}
+
+/// An unknown that failed to converge.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Worst {
+    pub index: usize,
+    pub value: f64,
+    pub ratio: f64,
+}
+
+/// Number of non-converged unknowns reported in diagnostics.
+const REPORT_WORST: usize = 3;
+
+/// Keep the `REPORT_WORST` largest ratios (ties keep the lower index: deterministic).
+fn push_worst(list: &mut Vec<Worst>, w: Worst) {
+    if w.ratio <= 1.0 {
+        return;
+    }
+    let pos = list
+        .iter()
+        .position(|o| w.ratio > o.ratio)
+        .unwrap_or(list.len());
+    if pos < REPORT_WORST {
+        list.insert(pos, w);
+        list.truncate(REPORT_WORST);
+    }
+}
+
 /// Newton failure modes.
 #[derive(Debug)]
 pub(crate) enum NewtonError {
-    /// No convergence within the iteration limit.
-    NoConvergence { worst: usize },
+    /// No convergence within the iteration limit; the unknowns with the largest update
+    /// relative to their tolerance in the last iteration, largest first.
+    NoConvergence { worst: Vec<Worst> },
     /// Singular Jacobian.
     Singular,
     /// Other solver failure.
@@ -246,8 +288,7 @@ pub(crate) fn newton(
             Err(e) => return Err(NewtonError::Solver(e)),
         }
         let mut converged = true;
-        let mut worst = 0usize;
-        let mut worst_ratio = 0.0f64;
+        let mut worst = Vec::new();
         for i in 0..n {
             let old = x[i];
             let new = old + ws.rhs[i];
@@ -257,12 +298,18 @@ pub(crate) fn newton(
             };
             let tol = opts.reltol * old.abs().max(new.abs()) + atol;
             let ratio = ws.rhs[i].abs() / tol;
-            if ratio > worst_ratio {
-                worst_ratio = ratio;
-                worst = i;
-            }
             if ratio > 1.0 {
                 converged = false;
+                if max_iter == iter {
+                    push_worst(
+                        &mut worst,
+                        Worst {
+                            index: i,
+                            value: new,
+                            ratio,
+                        },
+                    );
+                }
             }
             x[i] = new;
         }
@@ -277,38 +324,91 @@ pub(crate) fn newton(
             return Err(NewtonError::NoConvergence { worst });
         }
     }
-    Err(NewtonError::NoConvergence { worst: 0 })
+    Err(NewtonError::NoConvergence { worst: Vec::new() })
 }
 
 /// Convert a Newton failure into a structured diagnostic.
-pub(crate) fn newton_diagnostic(ckt: &Circuit, err: &NewtonError, analysis: &str) -> Diagnostic {
+///
+/// `code` is the analysis-specific convergence code (`E-CONV-OP`, ...), used when Newton did
+/// not converge; a singular matrix is always `E-SOLVE-SINGULAR`.
+pub(crate) fn newton_diagnostic(
+    ckt: &Circuit,
+    err: &NewtonError,
+    code: &'static str,
+    analysis: &str,
+) -> Diagnostic {
     match err {
         NewtonError::Singular => {
             let mut d = Diagnostic::error(
                 "E-SOLVE-SINGULAR",
                 format!("{analysis}: the circuit matrix is singular"),
             );
-            if !ckt.no_dc_path.is_empty() {
-                d = d.with_note(format!(
-                    "node(s) without a DC path to ground: {}",
-                    ckt.no_dc_path.join(", ")
-                ));
-                d = d.with_note("add a resistor to ground or set `.options rshunt=1e12`");
-            } else {
-                d = d.with_note(
-                    "check for loops of voltage sources/inductors or cut sets of current sources",
+            if ckt.no_dc_path.is_empty() {
+                d = d.with_suggestion(
+                    "look for loops of voltage sources/inductors or cut sets of current sources",
+                    Confidence::Medium,
                 );
+            } else {
+                for n in &ckt.no_dc_path {
+                    d = d.with_culprit(Culprit::new(
+                        CulpritKind::Node,
+                        n.clone(),
+                        "no DC path to ground",
+                    ));
+                }
+                d = d
+                    .with_suggestion(
+                        "add a resistor to ground at the culprit node(s)",
+                        Confidence::High,
+                    )
+                    .with_suggestion("add `.options rshunt=1e12`", Confidence::High);
             }
             d
         }
-        NewtonError::NoConvergence { worst } => Diagnostic::error(
-            "E-CONV-NEWTON",
-            format!("{analysis}: Newton iteration did not converge"),
-        )
-        .with_note(format!(
-            "largest update at {}",
-            ckt.unknowns.names().get(*worst).map_or("?", String::as_str)
-        )),
+        NewtonError::NoConvergence { worst } => {
+            let mut d = Diagnostic::error(
+                code,
+                format!("{analysis}: Newton iteration did not converge"),
+            );
+            let names = ckt.unknowns.names();
+            let node_name = |i: usize| {
+                let n = names.get(i).map_or("?", String::as_str);
+                n.strip_prefix("v(")
+                    .and_then(|n| n.strip_suffix(')'))
+                    .unwrap_or(n)
+                    .to_string()
+            };
+            for w in worst {
+                let kind = if w.index < ckt.dim()
+                    && ckt.unknowns.kinds()[w.index] == UnknownKind::Voltage
+                {
+                    CulpritKind::Node
+                } else {
+                    CulpritKind::Branch
+                };
+                let name = match kind {
+                    CulpritKind::Node => node_name(w.index),
+                    _ => names.get(w.index).cloned().unwrap_or_default(),
+                };
+                d = d.with_culprit(Culprit {
+                    kind,
+                    name,
+                    reason: Some("largest Newton update in the last iteration".into()),
+                    value: Some(w.value),
+                    update_ratio: Some(w.ratio),
+                });
+            }
+            if let Some(w) = worst.first() {
+                for dev in ckt.devices_at(w.index).iter().take(4) {
+                    d = d.with_culprit(Culprit::new(
+                        CulpritKind::Device,
+                        dev.clone(),
+                        format!("connected to node `{}`", node_name(w.index)),
+                    ));
+                }
+            }
+            d
+        }
         NewtonError::Solver(e) => Diagnostic::error("E-SOLVE-BACKEND", format!("{analysis}: {e}")),
     }
 }

@@ -30,10 +30,6 @@ pub struct Circuit {
     pub(crate) groups: Vec<Box<dyn DeviceGroup>>,
     pub(crate) layouts: Vec<StampLayout>,
     pub(crate) pattern: CscPattern,
-    /// Per group: G slot → value index (or [`DISCARD`]).
-    pub(crate) gmap: Vec<Vec<usize>>,
-    /// Per group: C slot → value index (or [`DISCARD`]).
-    pub(crate) cmap: Vec<Vec<usize>>,
     /// Per unknown: value index of the diagonal if it is a node voltage, else [`DISCARD`]
     /// (for rshunt / gmin stepping).
     pub(crate) node_diag: Vec<usize>,
@@ -42,6 +38,103 @@ pub struct Circuit {
     pub(crate) no_dc_path: Vec<String>,
     /// Per group: number of state values.
     pub(crate) state_len: Vec<usize>,
+    /// Gather maps from group slots to assembled values (parallelism level L2).
+    pub(crate) gather: GatherMaps,
+    /// Whether the circuit is large enough for parallel evaluation to pay off.
+    pub(crate) parallel: bool,
+    /// Per external node: names of the attached elements, nonlinear devices first.
+    pub(crate) node_elements: Vec<Vec<String>>,
+}
+
+/// A source of one assembled value: `(group, slot)`.
+pub(crate) type Src = (u32, u32);
+
+/// For every destination index, the contributing slots in a fixed order (CSR layout).
+///
+/// Every destination is the sum of its sources, accumulated left to right starting from zero.
+/// The order is fixed at elaboration, so the floating-point result does not depend on how the
+/// destinations are distributed over threads (architecture D4).
+#[derive(Debug, Default)]
+pub(crate) struct Gather {
+    pub ptr: Vec<usize>,
+    pub src: Vec<Src>,
+}
+
+impl Gather {
+    /// Build from `(group, slot, destination)` triples given in accumulation order.
+    fn build(len: usize, entries: impl Iterator<Item = (usize, usize, usize)> + Clone) -> Self {
+        let mut ptr = vec![0usize; len + 1];
+        for (_, _, d) in entries.clone() {
+            ptr[d + 1] += 1;
+        }
+        for i in 0..len {
+            ptr[i + 1] += ptr[i];
+        }
+        let mut fill = ptr.clone();
+        let mut src = vec![(0u32, 0u32); ptr[len]];
+        for (g, k, d) in entries {
+            src[fill[d]] = (g as u32, k as u32);
+            fill[d] += 1;
+        }
+        Self { ptr, src }
+    }
+
+    /// Sources of destination `i`.
+    #[inline]
+    pub fn of(&self, i: usize) -> &[Src] {
+        &self.src[self.ptr[i]..self.ptr[i + 1]]
+    }
+}
+
+/// Gather maps for `G`, `C` (pattern values) and `f`, `q`, `b` (unknowns).
+#[derive(Debug, Default)]
+pub(crate) struct GatherMaps {
+    pub g: Gather,
+    pub c: Gather,
+    pub f: Gather,
+    pub q: Gather,
+    pub b: Gather,
+}
+
+/// Instances per chunk of a linear device group.
+const CHUNK_LINEAR: usize = 1024;
+/// Instances per chunk of a nonlinear device group.
+const CHUNK_NONLINEAR: usize = 64;
+/// Minimum number of nonlinear instances for parallel evaluation.
+const PARALLEL_MIN_NONLINEAR: usize = 256;
+
+/// A device group split into fixed-size chunks (the unit of parallel evaluation, L1).
+///
+/// Chunk boundaries depend only on the netlist, never on the thread count.
+struct Chunked<T> {
+    size: usize,
+    done: Vec<T>,
+    cur: T,
+}
+
+impl<T: DeviceGroup + Default + 'static> Chunked<T> {
+    fn new(size: usize) -> Self {
+        Self {
+            size,
+            done: Vec::new(),
+            cur: T::default(),
+        }
+    }
+
+    fn cur(&mut self) -> &mut T {
+        if self.cur.len() >= self.size {
+            self.done.push(std::mem::take(&mut self.cur));
+        }
+        &mut self.cur
+    }
+
+    fn into_groups(self, out: &mut Vec<Box<dyn DeviceGroup>>) {
+        for g in self.done.into_iter().chain([self.cur]) {
+            if !g.is_empty() {
+                out.push(Box::new(g));
+            }
+        }
+    }
 }
 
 impl Circuit {
@@ -58,6 +151,43 @@ impl Circuit {
     /// Number of unknowns.
     pub fn dim(&self) -> usize {
         self.unknowns.len()
+    }
+
+    /// Elements attached to unknown `index` (external node or device-internal node).
+    pub(crate) fn devices_at(&self, index: usize) -> Vec<String> {
+        if let Some(v) = self.node_elements.get(index) {
+            return v.clone();
+        }
+        // Internal nodes are named `v(<device>#<suffix>)`.
+        self.unknowns
+            .names()
+            .get(index)
+            .and_then(|n| n.strip_prefix("v("))
+            .and_then(|n| n.split_once('#'))
+            .map(|(dev, _)| vec![dev.to_string()])
+            .unwrap_or_default()
+    }
+
+    /// Number of device instances per device type, in group order.
+    pub fn device_counts(&self) -> Vec<(&'static str, usize)> {
+        let mut out: Vec<(&'static str, usize)> = Vec::new();
+        for g in &self.groups {
+            match out.last_mut() {
+                Some((t, n)) if *t == g.type_name() => *n += g.len(),
+                _ => out.push((g.type_name(), g.len())),
+            }
+        }
+        out
+    }
+
+    /// Number of structurally non-zero matrix entries.
+    pub fn nnz(&self) -> usize {
+        self.pattern.nnz()
+    }
+
+    /// Whether every device is linear.
+    pub fn is_linear(&self) -> bool {
+        self.linear
     }
 
     /// Allocate evaluation slots for every group.
@@ -151,6 +281,21 @@ pub fn compile(
             );
         }
     }
+    let mut node_elements: Vec<Vec<String>> = vec![Vec::new(); node_names.len()];
+    for nonlinear in [true, false] {
+        for e in &nl.elements {
+            if e.kind.model().is_some() != nonlinear {
+                continue;
+            }
+            for n in e.kind.nodes() {
+                if let Some(&i) = node_index.get(n)
+                    && !node_elements[i].contains(&e.name)
+                {
+                    node_elements[i].push(e.name.clone());
+                }
+            }
+        }
+    }
     let node = |name: &str| -> Node {
         if name == GROUND {
             None
@@ -231,36 +376,47 @@ pub fn compile(
     }
 
     // --- Device groups ---
-    let mut res = Resistors::default();
-    let mut cap = Capacitors::default();
-    let mut ind = Inductors::default();
-    let mut vsrc = VoltageSources::default();
-    let mut isrc = CurrentSources::default();
-    let mut e_src = Vcvs::default();
-    let mut g_src = Vccs::default();
-    let mut f_src = Cccs::default();
-    let mut h_src = Ccvs::default();
-    let mut diodes = Diodes::default();
-    let mut bjts = Bjts::default();
-    let mut mos1 = Mos1s::default();
+    let mut res = Chunked::<Resistors>::new(CHUNK_LINEAR);
+    let mut cap = Chunked::<Capacitors>::new(CHUNK_LINEAR);
+    let mut ind = Chunked::<Inductors>::new(CHUNK_LINEAR);
+    let mut vsrc = Chunked::<VoltageSources>::new(CHUNK_LINEAR);
+    let mut isrc = Chunked::<CurrentSources>::new(CHUNK_LINEAR);
+    let mut e_src = Chunked::<Vcvs>::new(CHUNK_LINEAR);
+    let mut g_src = Chunked::<Vccs>::new(CHUNK_LINEAR);
+    let mut f_src = Chunked::<Cccs>::new(CHUNK_LINEAR);
+    let mut h_src = Chunked::<Ccvs>::new(CHUNK_LINEAR);
+    let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
+    let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
+    let mut mos1 = Chunked::<Mos1s>::new(CHUNK_NONLINEAR);
+    let mut nonlinear_count = 0usize;
     let mut model_cache = ModelCache::new(&nl.models, opts);
     let mut errors = Vec::new();
     for e in &nl.elements {
         match &e.kind {
-            ElementKind::Resistor { p, n, value } => res.push(&e.name, node(p), node(n), *value),
-            ElementKind::Capacitor { p, n, value } => cap.push(&e.name, node(p), node(n), *value),
-            ElementKind::Inductor { p, n, value } => ind.push(&e.name, node(p), node(n), *value),
+            ElementKind::Resistor { p, n, value } => {
+                res.cur().push(&e.name, node(p), node(n), *value)
+            }
+            ElementKind::Capacitor { p, n, value } => {
+                cap.cur().push(&e.name, node(p), node(n), *value)
+            }
+            ElementKind::Inductor { p, n, value } => {
+                ind.cur().push(&e.name, node(p), node(n), *value)
+            }
             ElementKind::VoltageSource { p, n, source } => {
-                vsrc.push(&e.name, node(p), node(n), source.clone());
+                vsrc.cur().push(&e.name, node(p), node(n), source.clone());
             }
             ElementKind::CurrentSource { p, n, source } => {
-                isrc.push(&e.name, node(p), node(n), source.clone());
+                isrc.cur().push(&e.name, node(p), node(n), source.clone());
             }
             ElementKind::Vcvs { p, n, cp, cn, gain } => {
-                e_src.push(&e.name, [node(p), node(n), node(cp), node(cn)], *gain);
+                e_src
+                    .cur()
+                    .push(&e.name, [node(p), node(n), node(cp), node(cn)], *gain);
             }
             ElementKind::Vccs { p, n, cp, cn, gm } => {
-                g_src.push(&e.name, [node(p), node(n), node(cp), node(cn)], *gm);
+                g_src
+                    .cur()
+                    .push(&e.name, [node(p), node(n), node(cp), node(cn)], *gm);
             }
             ElementKind::Cccs {
                 p,
@@ -268,10 +424,10 @@ pub fn compile(
                 control,
                 gain,
             } => {
-                f_src.push(&e.name, node(p), node(n), control, *gain);
+                f_src.cur().push(&e.name, node(p), node(n), control, *gain);
             }
             ElementKind::Ccvs { p, n, control, r } => {
-                h_src.push(&e.name, node(p), node(n), control, *r);
+                h_src.cur().push(&e.name, node(p), node(n), control, *r);
             }
             ElementKind::Diode {
                 p,
@@ -286,7 +442,8 @@ pub fn compile(
                 let inst = ModelParams::new(params);
                 let area = inst.get("area", 1.0);
                 warn_instance(e, &inst, &mut diags);
-                diodes.push(&e.name, node(p), node(n), m, area, *off);
+                nonlinear_count += 1;
+                diodes.cur().push(&e.name, node(p), node(n), m, area, *off);
             }
             ElementKind::Bjt {
                 c,
@@ -304,7 +461,9 @@ pub fn compile(
                 let area = inst.get("area", 1.0);
                 warn_instance(e, &inst, &mut diags);
                 let sub = s.as_deref().and_then(node);
-                bjts.push(&e.name, [node(c), node(b), node(em), sub], m, area, *off);
+                nonlinear_count += 1;
+                bjts.cur()
+                    .push(&e.name, [node(c), node(b), node(em), sub], m, area, *off);
             }
             ElementKind::Mosfet {
                 d,
@@ -336,7 +495,9 @@ pub fn compile(
                     );
                     continue;
                 }
-                mos1.push(&e.name, [node(d), node(g), node(s), node(b)], m, geom, *off);
+                nonlinear_count += 1;
+                mos1.cur()
+                    .push(&e.name, [node(d), node(g), node(s), node(b)], m, geom, *off);
             }
         }
     }
@@ -344,21 +505,19 @@ pub fn compile(
         errors.extend(diags);
         return Err(errors);
     }
-    let mut groups: Vec<Box<dyn DeviceGroup>> = vec![
-        Box::new(res),
-        Box::new(cap),
-        Box::new(ind),
-        Box::new(vsrc),
-        Box::new(isrc),
-        Box::new(e_src),
-        Box::new(g_src),
-        Box::new(f_src),
-        Box::new(h_src),
-        Box::new(diodes),
-        Box::new(bjts),
-        Box::new(mos1),
-    ];
-    groups.retain(|g| !g.is_empty());
+    let mut groups: Vec<Box<dyn DeviceGroup>> = Vec::new();
+    res.into_groups(&mut groups);
+    cap.into_groups(&mut groups);
+    ind.into_groups(&mut groups);
+    vsrc.into_groups(&mut groups);
+    isrc.into_groups(&mut groups);
+    e_src.into_groups(&mut groups);
+    g_src.into_groups(&mut groups);
+    f_src.into_groups(&mut groups);
+    h_src.into_groups(&mut groups);
+    diodes.into_groups(&mut groups);
+    bjts.into_groups(&mut groups);
+    mos1.into_groups(&mut groups);
 
     // --- Unknowns and stamps ---
     let mut unknowns = Unknowns::with_nodes(node_names.iter().map(String::as_str));
@@ -405,6 +564,33 @@ pub fn compile(
     };
     let gmap = resolve(greq);
     let cmap = resolve(creq);
+    let slots_to = |maps: &[Vec<usize>]| {
+        maps.iter()
+            .enumerate()
+            .flat_map(|(g, m)| m.iter().enumerate().map(move |(k, &d)| (g, k, d)))
+            .filter(|&(_, _, d)| d != DISCARD)
+            .collect::<Vec<_>>()
+    };
+    let rows_to = |pick: fn(&StampLayout) -> &[Node]| {
+        layouts
+            .iter()
+            .enumerate()
+            .flat_map(move |(g, l)| {
+                pick(l)
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(k, r)| r.map(|r| (g, k, r)))
+            })
+            .collect::<Vec<_>>()
+    };
+    let nnz = pattern.nnz();
+    let gather = GatherMaps {
+        g: Gather::build(nnz, slots_to(&gmap).into_iter()),
+        c: Gather::build(nnz, slots_to(&cmap).into_iter()),
+        f: Gather::build(n, rows_to(|l| &l.f).into_iter()),
+        q: Gather::build(n, rows_to(|l| &l.q).into_iter()),
+        b: Gather::build(n, rows_to(|l| &l.b).into_iter()),
+    };
     // Diagonal of every node voltage, including internal device nodes.
     let node_diag = (0..n)
         .map(|i| {
@@ -425,12 +611,13 @@ pub fn compile(
             groups,
             layouts,
             pattern,
-            gmap,
-            cmap,
             node_diag,
             linear,
             no_dc_path,
             state_len,
+            gather,
+            parallel: nonlinear_count >= PARALLEL_MIN_NONLINEAR,
+            node_elements,
         },
         diags,
     ))

@@ -263,14 +263,8 @@ fn run(
 
 fn check(netlist: &PathBuf, json: bool) -> Result<ExitCode, ExitCode> {
     let text = read(netlist)?;
-    let result = spx_netlist::parse(&text).and_then(|nl| {
-        let (opts, mut w) = spx_engine::SimOptions::from_cards(&nl.options);
-        w.extend(nl.warnings.iter().cloned());
-        spx_engine::compile(&nl, &opts).map(|(_, w2)| {
-            w.extend(w2);
-            w
-        })
-    });
+    let result =
+        spx_netlist::parse(&text).and_then(|nl| spx_engine::check(&nl).map(|c| c.warnings));
     let (diags, ok) = match result {
         Ok(w) => (w, true),
         Err(d) => (d, false),

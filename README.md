@@ -4,17 +4,29 @@ A fast, agent-native SPICE circuit simulator written in Rust.
 
 > **Status:** pre-alpha. R, C, L, V, I, E, F, G, H, diodes, BJTs (Gummel–Poon) and level-1
 > MOSFETs; `.op`, `.dc`, `.ac`, `.tran` (trapezoidal or BDF2 with LTE control), `.meas`, `.model`,
-> `.options`. Results are checked against ngspice (`verify/`). See
-> [`docs/architecture.md`](docs/architecture.md).
+> `.options`. Results are checked against ngspice (`verify/`). Session API and MCP server for
+> AI agents; pre-run lint and structured diagnostics ([`docs/diagnostics.md`](docs/diagnostics.md));
+> bit-deterministic multithreading. See [`docs/architecture.md`](docs/architecture.md).
 
 ```sh
 cargo run -p spx-cli -- run examples/rc_lowpass.cir            # summary
 cargo run -p spx-cli -- run examples/rc_lowpass.cir -r out.raw  # ngspice-compatible raw file
 cargo run -p spx-cli -- run examples/rc_lowpass.cir --json      # machine-readable output
-cargo run -p spx-cli -- check examples/rc_lowpass.cir           # parse + elaborate only
+cargo run -p spx-cli -- check examples/rc_lowpass.cir           # parse + elaborate + lint
 cargo run -p spx-cli -- batch a.cir b.cir -j 8                   # parallel runs, JSON lines
 cargo run -p spx-verify                                          # compare with ngspice (Docker)
 ```
+
+### Use from an AI agent (MCP)
+
+```sh
+cargo build --release -p spx-mcp
+claude mcp add spx -- "$PWD/target/release/spx-mcp"   # or any MCP client, stdio transport
+```
+
+Tools: `validate_netlist`, `load_netlist`, `estimate_cost`, `simulate`, `get_waveform`, `measure`,
+`alter_and_rerun`, `sweep`, `explain_failure`, `export_deck`. Results are summary-first, carry
+units, and include input/result hashes for reproducibility.
 
 ## Goals
 
@@ -36,6 +48,8 @@ cargo run -p spx-verify                                          # compare with 
 | `crates/spx-devices` | Device model interface and built-in models |
 | `crates/spx-engine` | MNA assembly, Newton, analyses |
 | `crates/spx-output` | Result types, raw writer |
+| `crates/spx-api` | Session / job API for embedding and agents |
+| `crates/spx-mcp` | MCP server (`spx-mcp`, stdio) |
 | `crates/spx-cli` | `spx` command-line tool |
 | `crates/spx-verify` | Comparison against a reference simulator |
 | `tools/ngspice` | ngspice in Docker, used as a black-box reference |

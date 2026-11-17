@@ -3,10 +3,10 @@
 //! Provenance: original work based on the SPICE input format described in Nagel (1975) and
 //! general SPICE3 conventions. See `docs/PROVENANCE.md`.
 
-use spx_diag::{Diagnostic, Span};
+use spx_diag::{Confidence, Diagnostic, Span};
 
 use crate::lexer::{Line, Token, lex};
-use crate::number::parse_number;
+use crate::number::{parse_number, scale_suffix};
 use crate::{
     AcSweep, AnalysisCard, Element, ElementKind, ModelCard, Netlist, OptionCard, SourceSpec, TranFn,
 };
@@ -109,6 +109,56 @@ impl Parser {
         v
     }
 
+    /// Warn about component values that are probably unit mistakes.
+    fn lint_value(&mut self, letter: &str, t: &Token, value: f64) {
+        let suffix = scale_suffix(&t.text);
+        if matches!(letter, "R" | "C")
+            && suffix.starts_with('M')
+            && !suffix.to_ascii_lowercase().starts_with("meg")
+            && !suffix.to_ascii_lowercase().starts_with("mil")
+        {
+            let mantissa = &t.text[..t.text.len() - suffix.len()];
+            let unit = if letter == "R" { "Ω" } else { "F" };
+            self.diags.push(
+                Diagnostic::warning(
+                    "W-LINT-UNIT-MILLI",
+                    format!(
+                        "`{}` is {value:e} {unit}: SPICE reads `M` as milli, not mega",
+                        t.text
+                    ),
+                )
+                .with_span(t.span)
+                .with_suggestion(
+                    format!("write `{mantissa}meg` for mega, or `{mantissa}m` if milli is meant"),
+                    Confidence::High,
+                ),
+            );
+            return;
+        }
+        let implausible = match letter {
+            "C" => value.abs() >= 1.0,
+            "L" => value.abs() >= 1e3,
+            _ => false,
+        };
+        if implausible {
+            let unit = if letter == "C" { "F" } else { "H" };
+            self.diags.push(
+                Diagnostic::warning(
+                    "W-LINT-UNIT-RANGE",
+                    format!(
+                        "`{}` is {value:e} {unit}, which is implausibly large",
+                        t.text
+                    ),
+                )
+                .with_span(t.span)
+                .with_suggestion(
+                    "add the intended scale suffix (`u`, `n`, `p`, ...)",
+                    Confidence::Medium,
+                ),
+            );
+        }
+    }
+
     fn need<'a>(&mut self, line: &'a Line, count: usize, usage: &str) -> Option<&'a [Token]> {
         if line.tokens.len() < count {
             self.diags.push(
@@ -203,7 +253,9 @@ impl Parser {
                 }
                 i += 3;
             } else if value.is_none() && i == 3 {
-                value = Some(self.number(&t[i], "the element value")?);
+                let v = self.number(&t[i], "the element value")?;
+                self.lint_value(letter, &t[i], v);
+                value = Some(v);
                 i += 1;
             } else {
                 self.err(
