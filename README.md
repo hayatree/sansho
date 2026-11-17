@@ -2,7 +2,15 @@
 
 A fast, agent-native SPICE circuit simulator written in Rust.
 
-> **Status:** pre-alpha. Nothing works yet. See [`docs/architecture.md`](docs/architecture.md).
+> **Status:** pre-alpha. Linear circuits only (R, C, L, V, I, E, F, G, H) with `.op`, `.dc`, `.ac`
+> and `.tran`. See [`docs/architecture.md`](docs/architecture.md).
+
+```sh
+cargo run -p spx-cli -- run examples/rc_lowpass.cir            # summary
+cargo run -p spx-cli -- run examples/rc_lowpass.cir -r out.raw  # ngspice-compatible raw file
+cargo run -p spx-cli -- run examples/rc_lowpass.cir --json      # machine-readable output
+cargo run -p spx-cli -- check examples/rc_lowpass.cir           # parse + elaborate only
+```
 
 ## Goals
 
@@ -18,11 +26,14 @@ A fast, agent-native SPICE circuit simulator written in Rust.
 
 | Path | Contents |
 |---|---|
+| `crates/spx-diag` | Structured diagnostics |
 | `crates/spx-netlist` | Netlist lexer and parser |
 | `crates/spx-sparse` | Sparse linear solvers |
 | `crates/spx-devices` | Device model interface and built-in models |
 | `crates/spx-engine` | MNA assembly, Newton, analyses |
+| `crates/spx-output` | Result types, raw writer |
 | `crates/spx-cli` | `spx` command-line tool |
+| `examples/` | Example netlists |
 | `docs/` | Design documents and provenance records |
 
 ## Contributing

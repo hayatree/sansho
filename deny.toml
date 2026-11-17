@@ -6,6 +6,8 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# Report unmaintained crates only for direct dependencies (transitive ones are tracked upstream).
+unmaintained = "workspace"
 
 [licenses]
 version = 2

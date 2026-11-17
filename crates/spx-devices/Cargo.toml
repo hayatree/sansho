@@ -10,3 +10,7 @@ publish.workspace = true
 [lints]
 workspace = true
 
+
+[dependencies]
+spx-diag = { path = "../spx-diag" }
+spx-netlist = { path = "../spx-netlist" }
