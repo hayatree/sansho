@@ -129,7 +129,7 @@ impl DeviceGroup for VoltageSources {
         }
         Ok(())
     }
-    fn eval(&self, ctx: &EvalCtx, x: &[f64], out: &mut Slots) {
+    fn eval(&self, ctx: &EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
             let cur = x[self.k[i]];
             let v = volt(x, self.set.p[i]) - volt(x, self.set.n[i]);
@@ -184,7 +184,7 @@ impl DeviceGroup for CurrentSources {
         }
         Ok(())
     }
-    fn eval(&self, ctx: &EvalCtx, _x: &[f64], out: &mut Slots) {
+    fn eval(&self, ctx: &EvalCtx, _x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
             // Current leaves node p into the source and enters node n.
             let v = self.set.value(i, ctx);

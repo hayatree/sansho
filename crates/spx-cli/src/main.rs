@@ -4,6 +4,7 @@
 //! spx run deck.cir                # human-readable summary
 //! spx run deck.cir -r out.raw     # also write an ngspice-compatible ASCII raw file
 //! spx run deck.cir --json         # machine-readable JSON on stdout
+//! spx batch a.cir b.cir -j 8      # independent netlists in parallel, one JSON line each
 //! ```
 //!
 //! Exit codes: 0 success, 1 simulation or netlist error, 2 I/O or usage error.
@@ -40,6 +41,18 @@ enum Command {
         /// Print results and diagnostics as JSON on stdout.
         #[arg(long)]
         json: bool,
+        /// Maximum number of threads (default: all cores).
+        #[arg(short, long)]
+        jobs: Option<usize>,
+    },
+    /// Simulate several independent netlists in parallel and print one JSON line per netlist.
+    Batch {
+        /// Netlist files.
+        #[arg(required = true)]
+        netlists: Vec<PathBuf>,
+        /// Maximum number of threads (default: all cores).
+        #[arg(short, long)]
+        jobs: Option<usize>,
     },
     /// Parse and elaborate a netlist without simulating it.
     Check {
@@ -100,6 +113,15 @@ fn summary(results: &SimResults) {
             ),
         }
     }
+    if !results.measures.is_empty() {
+        println!("Measurements:");
+        for m in &results.measures {
+            match m.value {
+                Some(v) => println!("  {:<20} {:>16.6e}", m.name, v),
+                None => println!("  {:<20} {:>16}", m.name, "failed"),
+            }
+        }
+    }
 }
 
 fn write_raw(path: &PathBuf, results: &SimResults) -> Result<(), ExitCode> {
@@ -123,7 +145,73 @@ fn read(path: &PathBuf) -> Result<String, ExitCode> {
     })
 }
 
-fn run(netlist: &PathBuf, raw: Option<&PathBuf>, json: bool) -> Result<ExitCode, ExitCode> {
+fn config(jobs: Option<usize>) -> spx_engine::RunConfig {
+    spx_engine::RunConfig {
+        threads: jobs.unwrap_or_else(spx_engine::default_threads).max(1),
+    }
+}
+
+#[derive(Serialize)]
+struct BatchLine<'a> {
+    netlist: String,
+    #[serde(flatten)]
+    out: JsonOut<'a>,
+}
+
+fn batch(netlists: &[PathBuf], jobs: Option<usize>) -> Result<ExitCode, ExitCode> {
+    let mut parsed = Vec::with_capacity(netlists.len());
+    for p in netlists {
+        parsed.push(spx_netlist::parse(&read(p)?));
+    }
+    let good: Vec<spx_netlist::Netlist> = parsed
+        .iter()
+        .filter_map(|r| r.as_ref().ok().cloned())
+        .collect();
+    let mut outputs = spx_engine::run_batch(&good, &config(jobs)).into_iter();
+    let mut ok = true;
+    let mut stdout = std::io::stdout().lock();
+    for (path, r) in netlists.iter().zip(&parsed) {
+        let run = match r {
+            Ok(_) => outputs.next(),
+            Err(_) => None,
+        };
+        let out = match (r, &run) {
+            (Err(d), _) => JsonOut::Error {
+                diagnostics: d,
+                partial: None,
+            },
+            (Ok(_), Some(Ok(o))) => JsonOut::Ok {
+                diagnostics: &o.warnings,
+                results: Some(&o.results),
+            },
+            (Ok(_), Some(Err(e))) => JsonOut::Error {
+                diagnostics: &e.diagnostics,
+                partial: e.partial.as_ref(),
+            },
+            (Ok(_), None) => return Err(ExitCode::from(2)),
+        };
+        ok &= matches!(out, JsonOut::Ok { .. });
+        let line = BatchLine {
+            netlist: path.display().to_string(),
+            out,
+        };
+        if serde_json::to_writer(&mut stdout, &line).is_err() || writeln!(stdout).is_err() {
+            return Err(ExitCode::from(2));
+        }
+    }
+    Ok(if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
+}
+
+fn run(
+    netlist: &PathBuf,
+    raw: Option<&PathBuf>,
+    json: bool,
+    jobs: Option<usize>,
+) -> Result<ExitCode, ExitCode> {
     let text = read(netlist)?;
     let nl = match spx_netlist::parse(&text) {
         Ok(nl) => nl,
@@ -139,7 +227,7 @@ fn run(netlist: &PathBuf, raw: Option<&PathBuf>, json: bool) -> Result<ExitCode,
             return Ok(ExitCode::from(1));
         }
     };
-    match spx_engine::run(&nl) {
+    match spx_engine::run_with(&nl, &config(jobs)) {
         Ok(out) => {
             if let Some(p) = raw {
                 write_raw(p, &out.results)?;
@@ -229,7 +317,13 @@ impl MaxWith for ExitCode {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let r = match &cli.command {
-        Command::Run { netlist, raw, json } => run(netlist, raw.as_ref(), *json),
+        Command::Run {
+            netlist,
+            raw,
+            json,
+            jobs,
+        } => run(netlist, raw.as_ref(), *json, *jobs),
+        Command::Batch { netlists, jobs } => batch(netlists, *jobs),
         Command::Check { netlist, json } => check(netlist, *json),
     };
     r.unwrap_or_else(|code| code)

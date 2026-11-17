@@ -41,3 +41,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  verify:
+    name: compare with ngspice
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: docker build -t spx-ngspice:latest tools/ngspice
+      - run: cargo run --release -p spx-verify -- --json > verify-report.json || (cat verify-report.json; exit 1)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verify-report
+          path: verify-report.json

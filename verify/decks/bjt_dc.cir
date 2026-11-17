@@ -1,0 +1,11 @@
+BJT output characteristic (PNP and NPN)
+VCE c 0 5
+IB 0 b 10u
+Q1 c b 0 qn
+VEC ep 0 -5
+IBP bp 0 10u
+Q2 ep bp 0 qp
+.model qn npn is=1e-15 bf=150 vaf=60 ikf=20m ise=5e-14 ne=1.6 br=2 var=20 ikr=5m isc=1e-13
+.model qp pnp is=2e-15 bf=80 vaf=40 ikf=10m br=4
+.dc VCE 0 10 0.05
+.end

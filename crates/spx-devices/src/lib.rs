@@ -11,11 +11,21 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bjt;
+pub mod diode;
+pub mod dual;
+pub mod junction;
 mod linear;
+pub mod model;
+pub mod mos1;
 mod sources;
 pub mod waveform;
 
+pub use bjt::Bjts;
+pub use diode::Diodes;
 pub use linear::{Capacitors, Cccs, Ccvs, Inductors, Resistors, Vccs, Vcvs};
+pub use model::{ModelParams, ParamSpec};
+pub use mos1::Mos1s;
 pub use sources::{CurrentSources, VoltageSources, dc_value};
 
 use std::collections::HashMap;
@@ -59,6 +69,14 @@ impl Unknowns {
         self.names.push(format!("i({name})"));
         self.kinds.push(UnknownKind::Current);
         self.branches.insert(name.to_string(), idx);
+        idx
+    }
+
+    /// Allocate an internal node voltage `v(device#suffix)` (e.g. behind a series resistance).
+    pub fn alloc_internal_node(&mut self, device: &str, suffix: &str) -> usize {
+        let idx = self.names.len();
+        self.names.push(format!("v({device}#{suffix})"));
+        self.kinds.push(UnknownKind::Voltage);
         idx
     }
 
@@ -160,10 +178,62 @@ impl<'a> StampBuilder<'a> {
         self.unknowns.branch(name)
     }
 
+    /// Current number of declared entries `(g, c, f, q, b)`; used by groups to record slot
+    /// offsets of instances whose stamp size varies.
+    pub fn counts(&self) -> SlotOffsets {
+        SlotOffsets {
+            g: self.layout.g.len(),
+            c: self.layout.c.len(),
+            f: self.layout.f.len(),
+            q: self.layout.q.len(),
+        }
+    }
+
+    /// Declare the stamp of a linear resistor between `p` and `n` (4 `G`, 2 `f`).
+    pub fn resistor(&mut self, p: Node, n: Node) {
+        self.g2(p, n);
+        self.f(p);
+        self.f(n);
+    }
+
+    /// Declare the dense stamp of a nonlinear core with terminals `nodes`: `N²` entries of `G`
+    /// and of `C` (row-major), `N` rows of `f` and of `q`.
+    pub fn core(&mut self, nodes: &[Node]) {
+        for &r in nodes {
+            for &c in nodes {
+                self.g(r, c);
+            }
+        }
+        for &r in nodes {
+            for &c in nodes {
+                self.c(r, c);
+            }
+        }
+        for &r in nodes {
+            self.f(r);
+        }
+        for &r in nodes {
+            self.q(r);
+        }
+    }
+
     /// Finish and return the layout.
     pub fn finish(self) -> StampLayout {
         self.layout
     }
+}
+
+/// Slot offsets of one instance, recorded with [`StampBuilder::counts`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SlotOffsets {
+    /// Offset into `G` slots.
+    pub g: usize,
+    /// Offset into `C` slots.
+    pub c: usize,
+    /// Offset into `f` slots.
+    pub f: usize,
+    /// Offset into `q` slots.
+    pub q: usize,
 }
 
 /// Values written by [`DeviceGroup::eval`], parallel to the [`StampLayout`].
@@ -179,9 +249,57 @@ pub struct Slots {
     pub q: Vec<f64>,
     /// `b` row values.
     pub b: Vec<f64>,
+    /// Set by nonlinear devices when Newton limiting changed a controlling voltage, which means
+    /// the iteration must not be declared converged.
+    pub noncon: bool,
 }
 
 impl Slots {
+    /// Write a linear resistor stamp declared with [`StampBuilder::resistor`]; advances `at`.
+    pub fn resistor(&mut self, at: &mut SlotOffsets, g: f64, vp: f64, vn: f64) {
+        let i = g * (vp - vn);
+        self.g[at.g..at.g + 4].copy_from_slice(&[g, -g, -g, g]);
+        self.f[at.f] = i;
+        self.f[at.f + 1] = -i;
+        at.g += 4;
+        at.f += 2;
+    }
+
+    /// Write a nonlinear core declared with [`StampBuilder::core`]; advances `at`.
+    ///
+    /// `i[t]` / `q[t]` are the current / charge flowing into terminal `t` evaluated at the
+    /// linearization point `lin`, with gradients with respect to the terminal voltages. The
+    /// written residual is the first-order expansion at the actual terminal voltages `act`.
+    pub fn core<const N: usize>(
+        &mut self,
+        at: &mut SlotOffsets,
+        i: &[dual::Dual<N>; N],
+        q: &[dual::Dual<N>; N],
+        act: &[f64; N],
+        lin: &[f64; N],
+    ) {
+        let mut dv = [0.0; N];
+        for k in 0..N {
+            dv[k] = act[k] - lin[k];
+        }
+        for t in 0..N {
+            let mut fi = i[t].v;
+            let mut qi = q[t].v;
+            for u in 0..N {
+                self.g[at.g + t * N + u] = i[t].d[u];
+                self.c[at.c + t * N + u] = q[t].d[u];
+                fi += i[t].d[u] * dv[u];
+                qi += q[t].d[u] * dv[u];
+            }
+            self.f[at.f + t] = fi;
+            self.q[at.q + t] = qi;
+        }
+        at.g += N * N;
+        at.c += N * N;
+        at.f += N;
+        at.q += N;
+    }
+
     /// Allocate zeroed slots matching a layout.
     pub fn for_layout(l: &StampLayout) -> Self {
         Self {
@@ -190,8 +308,22 @@ impl Slots {
             f: vec![0.0; l.f.len()],
             q: vec![0.0; l.q.len()],
             b: vec![0.0; l.b.len()],
+            noncon: false,
         }
     }
+}
+
+/// Per-instance state of a group (e.g. last limited junction voltages, charge history).
+///
+/// `accepted` is the state at the last accepted solution (operating point or timepoint) and is
+/// read-only during a Newton solve; `current` is read and written by every evaluation. The
+/// engine copies `current` into `accepted` when a solution is accepted.
+#[derive(Debug)]
+pub struct StateRef<'a> {
+    /// State at the last accepted solution.
+    pub accepted: &'a [f64],
+    /// Working state of the current Newton iteration.
+    pub current: &'a mut [f64],
 }
 
 /// AC excitation written by [`DeviceGroup::eval_ac`], parallel to [`StampLayout::b`].
@@ -232,6 +364,16 @@ pub struct EvalCtx {
     pub tran: TranParams,
     /// Scale factor applied to all independent sources (source stepping).
     pub source_factor: f64,
+    /// Conductance placed in parallel with every pn junction (S).
+    pub gmin: f64,
+    /// Device temperature (K).
+    pub temp: f64,
+    /// Whether Newton limiting of junction voltages is enabled. Disabled for evaluations at a
+    /// converged solution (e.g. AC linearization, charge history updates).
+    pub limit: bool,
+    /// First iteration of a fresh DC solve: nonlinear devices ignore `x` and linearize around
+    /// their built-in initial junction voltages.
+    pub init_junctions: bool,
 }
 
 impl EvalCtx {
@@ -245,8 +387,27 @@ impl EvalCtx {
                 tstop: 0.0,
             },
             source_factor: 1.0,
+            gmin: 1e-12,
+            temp: REFTEMP,
+            limit: true,
+            init_junctions: false,
         }
     }
+}
+
+/// Default nominal temperature, 27 °C in kelvin.
+pub const REFTEMP: f64 = 300.15;
+
+/// Boltzmann constant (J/K).
+pub const BOLTZMANN: f64 = 1.380_649e-23;
+
+/// Elementary charge (C).
+pub const CHARGE: f64 = 1.602_176_634e-19;
+
+/// Thermal voltage `kT/q` at temperature `temp` (K).
+#[inline]
+pub fn thermal_voltage(temp: f64) -> f64 {
+    BOLTZMANN * temp / CHARGE
 }
 
 /// All instances of one device type.
@@ -265,14 +426,24 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
     /// Whether `f` and `q` are linear in `x` (enables single-solve Newton).
     fn is_linear(&self) -> bool;
 
-    /// Allocate branch-current unknowns. Called for all groups before any [`Self::setup`].
+    /// Allocate branch-current and internal-node unknowns. Called for all groups before any
+    /// [`Self::setup`].
     fn alloc_unknowns(&mut self, _u: &mut Unknowns) {}
+
+    /// Number of state values (see [`StateRef`]).
+    fn state_len(&self) -> usize {
+        0
+    }
 
     /// Declare contributions. Called once.
     fn setup(&mut self, b: &mut StampBuilder<'_>) -> Result<(), Diagnostic>;
 
     /// Evaluate `G`, `C`, `f`, `q`, `b` at `x` into `out` (slot order from `setup`).
-    fn eval(&self, ctx: &EvalCtx, x: &[f64], out: &mut Slots);
+    ///
+    /// Nonlinear devices may linearize around a limited point `x̃` instead of `x`; they must
+    /// then write `f(x̃) + G·(x − x̃)` (and likewise for `q`) so that the Newton step stays
+    /// consistent, and set [`Slots::noncon`].
+    fn eval(&self, ctx: &EvalCtx, x: &[f64], state: StateRef<'_>, out: &mut Slots);
 
     /// Write the AC excitation into the `b` slots. Default: no excitation.
     fn eval_ac(&self, out: &mut AcSlots) {

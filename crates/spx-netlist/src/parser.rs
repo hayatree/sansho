@@ -7,7 +7,12 @@ use spx_diag::{Diagnostic, Span};
 
 use crate::lexer::{Line, Token, lex};
 use crate::number::parse_number;
-use crate::{AcSweep, AnalysisCard, Element, ElementKind, Netlist, OptionCard, SourceSpec, TranFn};
+use crate::{
+    AcSweep, AnalysisCard, Element, ElementKind, ModelCard, Netlist, OptionCard, SourceSpec, TranFn,
+};
+
+/// Model types accepted on `.model` cards.
+const MODEL_TYPES: &[&str] = &["d", "npn", "pnp", "nmos", "pmos"];
 
 /// Parse netlist text.
 ///
@@ -45,6 +50,8 @@ pub fn parse(text: &str) -> Result<Netlist, Vec<Diagnostic>> {
             p.element(&head, line);
         }
     }
+    p.resolve_bjt_substrates();
+    p.check_models();
     if p.diags.iter().any(Diagnostic::is_error) {
         return Err(p.diags);
     }
@@ -53,6 +60,8 @@ pub fn parse(text: &str) -> Result<Netlist, Vec<Diagnostic>> {
         elements: p.elements,
         analyses: p.analyses,
         options: p.options,
+        models: p.models,
+        measures: p.measures,
         warnings: p.diags,
     })
 }
@@ -62,7 +71,19 @@ struct Parser {
     elements: Vec<Element>,
     analyses: Vec<AnalysisCard>,
     options: Vec<OptionCard>,
+    models: Vec<ModelCard>,
+    measures: Vec<crate::MeasureCard>,
     diags: Vec<Diagnostic>,
+    /// BJTs whose 4th/5th positional fields are ambiguous until all models are known:
+    /// (element index, positional tokens after the three terminals).
+    bjt_tail: Vec<(usize, Vec<Token>)>,
+}
+
+/// Fields of a semiconductor instance line after the name.
+struct DeviceFields {
+    positional: Vec<Token>,
+    params: Vec<(String, f64)>,
+    off: bool,
 }
 
 fn node_name(t: &Token) -> String {
@@ -117,6 +138,9 @@ impl Parser {
             Some(b'v') | Some(b'i') => self.source(line),
             Some(b'e') | Some(b'g') => self.vcontrolled(line),
             Some(b'f') | Some(b'h') => self.ccontrolled(line),
+            Some(b'd') => self.diode(line),
+            Some(b'q') => self.bjt(line),
+            Some(b'm') => self.mosfet(line),
             _ => {
                 self.err(
                     "E-PARSE-ELEMENT",
@@ -379,6 +403,264 @@ impl Parser {
         })
     }
 
+    /// Split instance fields into positional tokens, `key=value` pairs and the `off` flag.
+    fn device_fields(&mut self, line: &Line) -> Option<DeviceFields> {
+        let t = &line.tokens;
+        let mut f = DeviceFields {
+            positional: Vec::new(),
+            params: Vec::new(),
+            off: false,
+        };
+        let mut i = 1;
+        while i < t.len() {
+            if t.get(i + 1).is_some_and(Token::is_eq) {
+                let k = t[i].lower();
+                let Some(vt) = t.get(i + 2) else {
+                    self.err(
+                        "E-PARSE-ARITY",
+                        format!("missing value for `{k}`"),
+                        t[i].span,
+                    );
+                    return None;
+                };
+                let v = self.number(vt, &k)?;
+                f.params.push((k, v));
+                i += 3;
+            } else if t[i].lower() == "off" {
+                f.off = true;
+                i += 1;
+            } else {
+                f.positional.push(t[i].clone());
+                i += 1;
+            }
+        }
+        Some(f)
+    }
+
+    /// Parse an optional positional area factor.
+    fn area(&mut self, tok: Option<&Token>, params: &mut Vec<(String, f64)>) -> Option<()> {
+        if let Some(t) = tok {
+            let v = self.number(t, "the area factor")?;
+            params.insert(0, ("area".into(), v));
+        }
+        Some(())
+    }
+
+    fn diode(&mut self, line: &Line) -> Option<ElementKind> {
+        let usage = "Dname n+ n- model [area] [off]";
+        let mut f = self.device_fields(line)?;
+        if f.positional.len() < 3 || f.positional.len() > 4 {
+            return self.arity(line, usage);
+        }
+        self.area(f.positional.get(3), &mut f.params)?;
+        Some(ElementKind::Diode {
+            p: node_name(&f.positional[0]),
+            n: node_name(&f.positional[1]),
+            model: f.positional[2].lower(),
+            params: f.params,
+            off: f.off,
+        })
+    }
+
+    fn bjt(&mut self, line: &Line) -> Option<ElementKind> {
+        let usage = "Qname nc nb ne [ns] model [area] [off]";
+        let f = self.device_fields(line)?;
+        if f.positional.len() < 4 || f.positional.len() > 6 {
+            return self.arity(line, usage);
+        }
+        let p = &f.positional;
+        // Resolved after all `.model` cards are known; see `resolve_bjt_substrates`.
+        self.bjt_tail.push((self.elements.len(), p[3..].to_vec()));
+        Some(ElementKind::Bjt {
+            c: node_name(&p[0]),
+            b: node_name(&p[1]),
+            e: node_name(&p[2]),
+            s: None,
+            model: String::new(),
+            params: f.params,
+            off: f.off,
+        })
+    }
+
+    fn mosfet(&mut self, line: &Line) -> Option<ElementKind> {
+        let usage = "Mname nd ng ns nb model [l=..] [w=..] [ad=..] [as=..] [pd=..] [ps=..] [off]";
+        let f = self.device_fields(line)?;
+        if f.positional.len() != 5 {
+            return self.arity(line, usage);
+        }
+        let p = &f.positional;
+        Some(ElementKind::Mosfet {
+            d: node_name(&p[0]),
+            g: node_name(&p[1]),
+            s: node_name(&p[2]),
+            b: node_name(&p[3]),
+            model: p[4].lower(),
+            params: f.params,
+            off: f.off,
+        })
+    }
+
+    fn arity(&mut self, line: &Line, usage: &str) -> Option<ElementKind> {
+        self.diags.push(
+            Diagnostic::error(
+                "E-PARSE-ARITY",
+                format!("wrong number of fields for `{}`", line.tokens[0].text),
+            )
+            .with_span(line.span())
+            .with_note(format!("usage: {usage}")),
+        );
+        None
+    }
+
+    /// Decide for every BJT whether the 4th positional field is a substrate node or the model
+    /// name. It is the model name if a model of that name exists, or if no 5th field could be
+    /// one.
+    fn resolve_bjt_substrates(&mut self) {
+        let tails = std::mem::take(&mut self.bjt_tail);
+        for (idx, tail) in tails {
+            let is_model = |t: &Token| self.models.iter().any(|m| m.name == t.lower());
+            let (sub, model, rest) = if is_model(&tail[0]) || tail.len() == 1 {
+                (None, &tail[0], &tail[1..])
+            } else if tail.len() >= 2
+                && (is_model(&tail[1]) || parse_number(&tail[1].text).is_none())
+            {
+                (Some(node_name(&tail[0])), &tail[1], &tail[2..])
+            } else {
+                (None, &tail[0], &tail[1..])
+            };
+            let model = model.lower();
+            let mut area = Vec::new();
+            match rest {
+                [] => {}
+                [a] => {
+                    if self.area(Some(a), &mut area).is_none() {
+                        continue;
+                    }
+                }
+                [_, extra, ..] => {
+                    self.err(
+                        "E-PARSE-UNEXPECTED",
+                        format!("unexpected token `{}`", extra.text),
+                        extra.span,
+                    );
+                    continue;
+                }
+            }
+            if let Some(Element {
+                kind:
+                    ElementKind::Bjt {
+                        s,
+                        model: m,
+                        params,
+                        ..
+                    },
+                ..
+            }) = self.elements.get_mut(idx)
+            {
+                *s = sub;
+                *m = model;
+                for a in area.into_iter().rev() {
+                    params.insert(0, a);
+                }
+            }
+        }
+    }
+
+    /// Report instances that reference undefined models or models of the wrong type.
+    fn check_models(&mut self) {
+        let mut errs = Vec::new();
+        for e in &self.elements {
+            let Some(name) = e.kind.model() else { continue };
+            let expected: &[&str] = match e.kind {
+                ElementKind::Diode { .. } => &["d"],
+                ElementKind::Bjt { .. } => &["npn", "pnp"],
+                _ => &["nmos", "pmos"],
+            };
+            match self.models.iter().find(|m| m.name == name) {
+                None => errs.push(
+                    Diagnostic::error(
+                        "E-PARSE-MODEL",
+                        format!("`{}` references undefined model `{name}`", e.name),
+                    )
+                    .with_span(e.span),
+                ),
+                Some(m) if !expected.contains(&m.kind.as_str()) => errs.push(
+                    Diagnostic::error(
+                        "E-PARSE-MODEL",
+                        format!(
+                            "`{}` needs a model of type {}, but `{name}` is of type `{}`",
+                            e.name,
+                            expected.join("/"),
+                            m.kind
+                        ),
+                    )
+                    .with_span(e.span),
+                ),
+                Some(_) => {}
+            }
+        }
+        self.diags.extend(errs);
+    }
+
+    fn model_card(&mut self, line: &Line) {
+        let Some(t) = self.need(line, 3, ".model name type [(param=value ...)]") else {
+            return;
+        };
+        let name = t[1].lower();
+        let kind = t[2].lower();
+        if !MODEL_TYPES.contains(&kind.as_str()) {
+            self.diags.push(
+                Diagnostic::error(
+                    "E-PARSE-MODEL",
+                    format!("unsupported model type `{}`", t[2].text),
+                )
+                .with_span(t[2].span)
+                .with_note(format!("supported types: {}", MODEL_TYPES.join(", "))),
+            );
+            return;
+        }
+        if self.models.iter().any(|m| m.name == name) {
+            self.err(
+                "E-PARSE-DUPLICATE",
+                format!("duplicate model name `{name}`"),
+                t[1].span,
+            );
+            return;
+        }
+        let mut params = Vec::new();
+        let mut i = 3;
+        while i < t.len() {
+            let k = t[i].lower();
+            if !t.get(i + 1).is_some_and(Token::is_eq) {
+                self.err(
+                    "E-PARSE-UNEXPECTED",
+                    format!("expected `name=value` in .model, found `{}`", t[i].text),
+                    t[i].span,
+                );
+                return;
+            }
+            let Some(vt) = t.get(i + 2) else {
+                self.err(
+                    "E-PARSE-ARITY",
+                    format!("missing value for `{k}`"),
+                    t[i].span,
+                );
+                return;
+            };
+            let Some(v) = self.number(vt, &k) else {
+                return;
+            };
+            params.push((k, v));
+            i += 3;
+        }
+        self.models.push(ModelCard {
+            name,
+            kind,
+            params,
+            span: line.span(),
+        });
+    }
+
     fn no_extra(&mut self, t: &[Token], used: usize) {
         if let Some(x) = t.get(used) {
             self.diags.push(
@@ -536,6 +818,16 @@ impl Parser {
                             );
                             return;
                         };
+                        if name == "method" {
+                            // `method=gear|trap` is stored as a flag named after the method.
+                            self.options.push(OptionCard {
+                                name: vt.lower(),
+                                value: None,
+                                span: vt.span,
+                            });
+                            i += 3;
+                            continue;
+                        }
                         let Some(v) = self.number(vt, &name) else {
                             return;
                         };
@@ -553,6 +845,23 @@ impl Parser {
                         });
                         i += 1;
                     }
+                }
+            }
+            ".model" => self.model_card(line),
+            ".meas" | ".measure" => match crate::meas::parse_meas(line) {
+                Ok(m) => self.measures.push(m),
+                Err(d) => self.diags.push(d),
+            },
+            ".temp" => {
+                let Some(t) = self.need(line, 2, ".temp value") else {
+                    return;
+                };
+                if let Some(v) = self.number(&t[1], "the temperature") {
+                    self.options.push(OptionCard {
+                        name: "temp".into(),
+                        value: Some(v),
+                        span,
+                    });
                 }
             }
             ".title" => {}
@@ -610,7 +919,7 @@ R2 ignored after end 1
 
     #[test]
     fn reports_all_errors_with_spans() {
-        let src = "t\nR1 a b\nQ1 c b e mod\nC1 a 0 xyz\n";
+        let src = "t\nR1 a b\nZ1 c b e mod\nC1 a 0 xyz\n";
         let diags = parse(src).err().unwrap_or_default();
         let codes: Vec<_> = diags.iter().map(|d| d.code).collect();
         assert_eq!(

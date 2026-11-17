@@ -52,7 +52,7 @@ impl DeviceGroup for Resistors {
         }
         Ok(())
     }
-    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], out: &mut Slots) {
+    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
             let g = self.g[i];
             let cur = g * (volt(x, self.p[i]) - volt(x, self.n[i]));
@@ -117,7 +117,7 @@ impl DeviceGroup for Capacitors {
         }
         Ok(())
     }
-    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], out: &mut Slots) {
+    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
             let c = self.c[i];
             let q = c * (volt(x, self.p[i]) - volt(x, self.n[i]));
@@ -179,7 +179,7 @@ impl DeviceGroup for Inductors {
         }
         Ok(())
     }
-    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], out: &mut Slots) {
+    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
             let cur = x[self.k[i]];
             let v = volt(x, self.p[i]) - volt(x, self.n[i]);
@@ -238,7 +238,7 @@ impl DeviceGroup for Vcvs {
         }
         Ok(())
     }
-    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], out: &mut Slots) {
+    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
             let [p, n, cp, cn] = self.nodes[i];
             let a = self.gain[i];
@@ -288,7 +288,7 @@ impl DeviceGroup for Vccs {
         }
         Ok(())
     }
-    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], out: &mut Slots) {
+    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
             let [_, _, cp, cn] = self.nodes[i];
             let gm = self.gm[i];
@@ -368,7 +368,7 @@ impl DeviceGroup for Cccs {
         }
         Ok(())
     }
-    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], out: &mut Slots) {
+    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
             let a = self.gain[i];
             let cur = a * x[self.kc[i]];
@@ -432,7 +432,7 @@ impl DeviceGroup for Ccvs {
         }
         Ok(())
     }
-    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], out: &mut Slots) {
+    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
             let r = self.r[i];
             let cur = x[self.k[i]];

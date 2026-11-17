@@ -1,0 +1,16 @@
+BJT differential pair with current-mirror load
+* verify: rtol=5e-3
+VCC vcc 0 5
+VEE vee 0 -5
+VID inp inn 0
+VCM inn 0 0
+Q1 c1 inp e qn
+Q2 out inn e qn
+Q3 c1 c1 vcc qp
+Q4 out c1 vcc qp
+IEE e vee 1m
+RL out 0 100k
+.model qn npn is=1e-16 bf=150 vaf=80 br=1 rb=50 cje=10p cjc=5p tf=0.2n
+.model qp pnp is=1e-16 bf=60 vaf=40 rb=80 cje=10p cjc=6p tf=0.5n
+.dc VID -0.1 0.1 1m
+.end

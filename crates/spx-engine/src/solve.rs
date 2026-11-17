@@ -7,7 +7,7 @@
 //! Provenance: original work. Newton iteration and convergence criteria follow Nagel (1975).
 //! See `docs/PROVENANCE.md`.
 
-use spx_devices::{EvalCtx, Slots, UnknownKind};
+use spx_devices::{EvalCtx, Mode, Slots, StateRef, TranParams, UnknownKind};
 use spx_diag::Diagnostic;
 use spx_sparse::{FaerLu, LinearSolver, SolverError};
 
@@ -53,6 +53,12 @@ pub(crate) struct Workspace {
     rhs: Vec<f64>,
     lu: FaerLu<f64>,
     analyzed: bool,
+    /// Per-group device state of the current iteration.
+    pub state: Vec<Vec<f64>>,
+    /// Per-group device state at the last accepted solution.
+    pub accepted: Vec<Vec<f64>>,
+    /// Whether any device limited its controlling voltages in the last assembly.
+    pub noncon: bool,
 }
 
 impl Workspace {
@@ -72,18 +78,60 @@ impl Workspace {
             rhs: vec![0.0; n],
             lu: FaerLu::new(),
             analyzed: false,
+            state: ckt.state_len.iter().map(|&n| vec![0.0; n]).collect(),
+            accepted: ckt.state_len.iter().map(|&n| vec![0.0; n]).collect(),
+            noncon: false,
+        }
+    }
+
+    /// Accept the current device state.
+    pub(crate) fn commit(&mut self) {
+        for (a, s) in self.accepted.iter_mut().zip(&self.state) {
+            a.copy_from_slice(s);
+        }
+    }
+
+    /// Restart the working state from the accepted state.
+    pub(crate) fn restore(&mut self) {
+        for (s, a) in self.state.iter_mut().zip(&self.accepted) {
+            s.copy_from_slice(a);
+        }
+    }
+
+    /// Forget all device history (fresh analysis).
+    pub(crate) fn clear_state(&mut self) {
+        for v in self.state.iter_mut().chain(self.accepted.iter_mut()) {
+            v.iter_mut().for_each(|x| *x = 0.0);
         }
     }
 }
 
+/// Build an evaluation context from the options.
+pub(crate) fn make_ctx(opts: &SimOptions, mode: Mode, tran: TranParams) -> EvalCtx {
+    EvalCtx {
+        mode,
+        time: 0.0,
+        tran,
+        source_factor: 1.0,
+        gmin: opts.gmin,
+        temp: opts.temp + 273.15,
+        limit: true,
+        init_junctions: false,
+    }
+}
+
 /// Evaluate all groups at `x` and sum contributions in a fixed order (architecture D4).
+///
+/// `gshunt` is an extra conductance from every node to ground (gmin stepping).
 pub(crate) fn assemble(
     ckt: &Circuit,
     ctx: &EvalCtx,
     x: &[f64],
     ws: &mut Workspace,
     opts: &SimOptions,
+    gshunt: f64,
 ) {
+    ws.noncon = false;
     let a = &mut ws.asm;
     a.g.iter_mut().for_each(|v| *v = 0.0);
     a.c.iter_mut().for_each(|v| *v = 0.0);
@@ -92,7 +140,17 @@ pub(crate) fn assemble(
     a.b.iter_mut().for_each(|v| *v = 0.0);
     for (gi, group) in ckt.groups.iter().enumerate() {
         let s = &mut ws.slots[gi];
-        group.eval(ctx, x, s);
+        s.noncon = false;
+        group.eval(
+            ctx,
+            x,
+            StateRef {
+                accepted: &ws.accepted[gi],
+                current: &mut ws.state[gi],
+            },
+            s,
+        );
+        ws.noncon |= s.noncon;
         let l = &ckt.layouts[gi];
         for (k, &idx) in ckt.gmap[gi].iter().enumerate() {
             if idx != DISCARD {
@@ -120,8 +178,8 @@ pub(crate) fn assemble(
             }
         }
     }
-    if let Some(r) = opts.rshunt {
-        let g = 1.0 / r;
+    let g = opts.rshunt.map_or(0.0, |r| 1.0 / r) + gshunt;
+    if g > 0.0 {
         for (i, &d) in ckt.node_diag.iter().enumerate() {
             if d != DISCARD {
                 a.g[d] += g;
@@ -143,6 +201,10 @@ pub(crate) enum NewtonError {
 }
 
 /// Newton–Raphson iteration on `x` (updated in place). Returns the number of iterations.
+///
+/// Device state restarts from the accepted state. On the first iteration `ctx.init_junctions`
+/// is honoured; later iterations always use `x`. The caller commits the state on success.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn newton(
     ckt: &Circuit,
     ctx: &EvalCtx,
@@ -151,15 +213,21 @@ pub(crate) fn newton(
     ws: &mut Workspace,
     opts: &SimOptions,
     max_iter: usize,
+    gshunt: f64,
 ) -> Result<usize, NewtonError> {
     let n = ckt.dim();
     if !ws.analyzed {
         ws.lu.analyze(&ckt.pattern).map_err(NewtonError::Solver)?;
         ws.analyzed = true;
     }
+    ws.restore();
     let kinds = ckt.unknowns.kinds();
+    let mut ctx = *ctx;
     for iter in 1..=max_iter {
-        assemble(ckt, ctx, x, ws, opts);
+        if iter > 1 {
+            ctx.init_junctions = false;
+        }
+        assemble(ckt, &ctx, x, ws, opts, gshunt);
         let a = &ws.asm;
         for k in 0..ws.jac.len() {
             ws.jac[k] = a.g[k] + integ.a0 * a.c[k];
@@ -198,8 +266,11 @@ pub(crate) fn newton(
             }
             x[i] = new;
         }
+        if x.iter().any(|v| !v.is_finite()) {
+            return Err(NewtonError::Singular);
+        }
         // A linear circuit is solved exactly by one Newton step.
-        if ckt.linear || (converged && iter > 1) {
+        if ckt.linear || (converged && iter > 1 && !ws.noncon && !ctx.init_junctions) {
             return Ok(iter);
         }
         if max_iter == iter {

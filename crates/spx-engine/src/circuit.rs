@@ -6,12 +6,15 @@
 
 use std::collections::HashMap;
 
+use spx_devices::bjt::BjtModel;
+use spx_devices::diode::DiodeModel;
+use spx_devices::mos1::{Mos1Geometry, Mos1Model};
 use spx_devices::{
-    Capacitors, Cccs, Ccvs, CurrentSources, DeviceGroup, Inductors, Node, Resistors, Slots,
-    StampBuilder, StampLayout, Unknowns, Vccs, Vcvs, VoltageSources,
+    Bjts, Capacitors, Cccs, Ccvs, CurrentSources, DeviceGroup, Diodes, Inductors, ModelParams,
+    Mos1s, Node, Resistors, Slots, StampBuilder, StampLayout, Unknowns, Vccs, Vcvs, VoltageSources,
 };
 use spx_diag::Diagnostic;
-use spx_netlist::{ElementKind, GROUND, Netlist};
+use spx_netlist::{Element, ElementKind, GROUND, ModelCard, Netlist};
 use spx_sparse::{CscPattern, PatternBuilder};
 
 use crate::options::SimOptions;
@@ -31,11 +34,14 @@ pub struct Circuit {
     pub(crate) gmap: Vec<Vec<usize>>,
     /// Per group: C slot → value index (or [`DISCARD`]).
     pub(crate) cmap: Vec<Vec<usize>>,
-    /// Value indices of the node-voltage diagonal (for rshunt / gmin).
+    /// Per unknown: value index of the diagonal if it is a node voltage, else [`DISCARD`]
+    /// (for rshunt / gmin stepping).
     pub(crate) node_diag: Vec<usize>,
     pub(crate) linear: bool,
     /// Nodes without a DC path to ground (for diagnostics).
     pub(crate) no_dc_path: Vec<String>,
+    /// Per group: number of state values.
+    pub(crate) state_len: Vec<usize>,
 }
 
 impl Circuit {
@@ -164,8 +170,20 @@ pub fn compile(
             (g_id(node(ns[0])), g_id(node(ns[1])))
         };
         match &e.kind {
-            ElementKind::Resistor { .. } => {
+            ElementKind::Resistor { .. } | ElementKind::Diode { .. } => {
                 dc.union(p, n);
+            }
+            ElementKind::Bjt { .. } => {
+                // Collector, base and emitter are connected through junctions (gmin).
+                let b = g_id(node(e.kind.nodes()[2]));
+                dc.union(p, n);
+                dc.union(n, b);
+            }
+            ElementKind::Mosfet { d, s, b, .. } => {
+                // The gate has no DC path; drain/source/bulk are connected via the junctions.
+                let (d, s, b) = (g_id(node(d)), g_id(node(s)), g_id(node(b)));
+                dc.union(d, b);
+                dc.union(s, b);
             }
             ElementKind::Inductor { .. }
             | ElementKind::VoltageSource { .. }
@@ -222,6 +240,11 @@ pub fn compile(
     let mut g_src = Vccs::default();
     let mut f_src = Cccs::default();
     let mut h_src = Ccvs::default();
+    let mut diodes = Diodes::default();
+    let mut bjts = Bjts::default();
+    let mut mos1 = Mos1s::default();
+    let mut model_cache = ModelCache::new(&nl.models, opts);
+    let mut errors = Vec::new();
     for e in &nl.elements {
         match &e.kind {
             ElementKind::Resistor { p, n, value } => res.push(&e.name, node(p), node(n), *value),
@@ -250,7 +273,76 @@ pub fn compile(
             ElementKind::Ccvs { p, n, control, r } => {
                 h_src.push(&e.name, node(p), node(n), control, *r);
             }
+            ElementKind::Diode {
+                p,
+                n,
+                model,
+                params,
+                off,
+            } => {
+                let Some(m) = model_cache.diode(model, &mut diags, &mut errors) else {
+                    continue;
+                };
+                let inst = ModelParams::new(params);
+                let area = inst.get("area", 1.0);
+                warn_instance(e, &inst, &mut diags);
+                diodes.push(&e.name, node(p), node(n), m, area, *off);
+            }
+            ElementKind::Bjt {
+                c,
+                b,
+                e: em,
+                s,
+                model,
+                params,
+                off,
+            } => {
+                let Some(m) = model_cache.bjt(model, &mut diags, &mut errors) else {
+                    continue;
+                };
+                let inst = ModelParams::new(params);
+                let area = inst.get("area", 1.0);
+                warn_instance(e, &inst, &mut diags);
+                let sub = s.as_deref().and_then(node);
+                bjts.push(&e.name, [node(c), node(b), node(em), sub], m, area, *off);
+            }
+            ElementKind::Mosfet {
+                d,
+                g,
+                s,
+                b,
+                model,
+                params,
+                off,
+            } => {
+                let Some(m) = model_cache.mos(model, &mut diags, &mut errors) else {
+                    continue;
+                };
+                let inst = ModelParams::new(params);
+                let dflt = Mos1Geometry::default();
+                let geom = Mos1Geometry {
+                    l: inst.get("l", opts.defl.unwrap_or(dflt.l)),
+                    w: inst.get("w", opts.defw.unwrap_or(dflt.w)),
+                    ad: inst.get("ad", opts.defad.unwrap_or(0.0)),
+                    as_: inst.get("as", opts.defas.unwrap_or(0.0)),
+                    pd: inst.get("pd", 0.0),
+                    ps: inst.get("ps", 0.0),
+                };
+                warn_instance(e, &inst, &mut diags);
+                if let Some(msg) = Mos1s::check_geometry(&m, &geom) {
+                    errors.push(
+                        Diagnostic::error("E-ELAB-PARAM", format!("`{}`: {msg}", e.name))
+                            .with_span(e.span),
+                    );
+                    continue;
+                }
+                mos1.push(&e.name, [node(d), node(g), node(s), node(b)], m, geom, *off);
+            }
         }
+    }
+    if !errors.is_empty() {
+        errors.extend(diags);
+        return Err(errors);
     }
     let mut groups: Vec<Box<dyn DeviceGroup>> = vec![
         Box::new(res),
@@ -262,6 +354,9 @@ pub fn compile(
         Box::new(g_src),
         Box::new(f_src),
         Box::new(h_src),
+        Box::new(diodes),
+        Box::new(bjts),
+        Box::new(mos1),
     ];
     groups.retain(|g| !g.is_empty());
 
@@ -271,7 +366,6 @@ pub fn compile(
         g.alloc_unknowns(&mut unknowns);
     }
     let mut layouts = Vec::with_capacity(groups.len());
-    let mut errors = Vec::new();
     for g in &mut groups {
         let mut sb = StampBuilder::new(&unknowns);
         match g.setup(&mut sb) {
@@ -311,9 +405,17 @@ pub fn compile(
     };
     let gmap = resolve(greq);
     let cmap = resolve(creq);
-    let node_diag = (0..nn)
-        .map(|i| pattern.diag(i).unwrap_or(DISCARD))
+    // Diagonal of every node voltage, including internal device nodes.
+    let node_diag = (0..n)
+        .map(|i| {
+            if unknowns.kinds()[i] == spx_devices::UnknownKind::Voltage {
+                pattern.diag(i).unwrap_or(DISCARD)
+            } else {
+                DISCARD
+            }
+        })
         .collect();
+    let state_len = groups.iter().map(|g| g.state_len()).collect();
     let linear = groups.iter().all(|g| g.is_linear());
 
     Ok((
@@ -328,7 +430,183 @@ pub fn compile(
             node_diag,
             linear,
             no_dc_path,
+            state_len,
         },
         diags,
     ))
+}
+
+/// Resolves `.model` cards into typed models once per model name, emitting warnings once.
+struct ModelCache<'a> {
+    cards: &'a [ModelCard],
+    temp_differs: bool,
+    diodes: HashMap<String, Option<DiodeModel>>,
+    bjts: HashMap<String, Option<BjtModel>>,
+    mos: HashMap<String, Option<Mos1Model>>,
+}
+
+impl<'a> ModelCache<'a> {
+    fn new(cards: &'a [ModelCard], opts: &SimOptions) -> Self {
+        Self {
+            cards,
+            temp_differs: (opts.temp - opts.tnom).abs() > 1e-9,
+            diodes: HashMap::new(),
+            bjts: HashMap::new(),
+            mos: HashMap::new(),
+        }
+    }
+
+    fn card(&self, name: &str) -> Option<&'a ModelCard> {
+        self.cards.iter().find(|c| c.name == name)
+    }
+
+    /// Common checks; returns the parameter list and polarity.
+    fn prepare(
+        &self,
+        card: &ModelCard,
+        diags: &mut Vec<Diagnostic>,
+        errors: &mut Vec<Diagnostic>,
+    ) -> Option<(ModelParams, f64)> {
+        let params = ModelParams::new(&card.params);
+        let level = params.get("level", 1.0);
+        if level != 1.0 {
+            let mut d = Diagnostic::error(
+                "E-ELAB-MODEL",
+                format!(
+                    "model `{}`: level {level} is not supported (only level 1)",
+                    card.name
+                ),
+            )
+            .with_span(card.span);
+            if matches!(card.kind.as_str(), "nmos" | "pmos") {
+                d = d.with_note("advanced MOSFET models will be supported through OSDI (planned)");
+            }
+            errors.push(d);
+            return None;
+        }
+        if let Some(t) = params.opt(&["tnom"])
+            && (t - 27.0).abs() > 1e-9
+        {
+            diags.push(
+                Diagnostic::warning(
+                    "W-MODEL-TEMP",
+                    format!(
+                        "model `{}`: TNOM = {t} is not supported yet; parameters are used as \
+                         given at the simulation temperature",
+                        card.name
+                    ),
+                )
+                .with_span(card.span),
+            );
+        }
+        if self.temp_differs {
+            diags.push(
+                Diagnostic::warning(
+                    "W-MODEL-TEMP",
+                    format!(
+                        "model `{}`: temperature scaling is not implemented yet; parameters are \
+                         not adjusted to TEMP",
+                        card.name
+                    ),
+                )
+                .with_span(card.span),
+            );
+        }
+        let polarity = match card.kind.as_str() {
+            "pnp" | "pmos" => -1.0,
+            _ => 1.0,
+        };
+        Some((params, polarity))
+    }
+
+    fn warn_ignored(card: &ModelCard, ignored: &[String], diags: &mut Vec<Diagnostic>) {
+        if !ignored.is_empty() {
+            diags.push(
+                Diagnostic::warning(
+                    "W-MODEL-IGNORED",
+                    format!(
+                        "model `{}`: unsupported parameter(s) ignored: {}",
+                        card.name,
+                        ignored.join(", ")
+                    ),
+                )
+                .with_span(card.span),
+            );
+        }
+    }
+
+    fn diode(
+        &mut self,
+        name: &str,
+        diags: &mut Vec<Diagnostic>,
+        errors: &mut Vec<Diagnostic>,
+    ) -> Option<DiodeModel> {
+        if let Some(m) = self.diodes.get(name) {
+            return m.clone();
+        }
+        let card = self.card(name)?;
+        let m = self.prepare(card, diags, errors).map(|(p, _)| {
+            let (m, ignored) = DiodeModel::from_params(&p);
+            Self::warn_ignored(card, &ignored, diags);
+            m
+        });
+        self.diodes.insert(name.to_string(), m.clone());
+        m
+    }
+
+    fn bjt(
+        &mut self,
+        name: &str,
+        diags: &mut Vec<Diagnostic>,
+        errors: &mut Vec<Diagnostic>,
+    ) -> Option<BjtModel> {
+        if let Some(m) = self.bjts.get(name) {
+            return m.clone();
+        }
+        let card = self.card(name)?;
+        let m = self.prepare(card, diags, errors).map(|(p, pol)| {
+            let (m, ignored) = BjtModel::from_params(&p, pol);
+            Self::warn_ignored(card, &ignored, diags);
+            m
+        });
+        self.bjts.insert(name.to_string(), m.clone());
+        m
+    }
+
+    fn mos(
+        &mut self,
+        name: &str,
+        diags: &mut Vec<Diagnostic>,
+        errors: &mut Vec<Diagnostic>,
+    ) -> Option<Mos1Model> {
+        if let Some(m) = self.mos.get(name) {
+            return m.clone();
+        }
+        let card = self.card(name)?;
+        let m = self.prepare(card, diags, errors).map(|(p, pol)| {
+            let (m, ignored) = Mos1Model::from_params(&p, pol);
+            Self::warn_ignored(card, &ignored, diags);
+            m
+        });
+        self.mos.insert(name.to_string(), m.clone());
+        m
+    }
+}
+
+/// Warn about instance parameters that were not consumed.
+fn warn_instance(e: &Element, inst: &ModelParams, diags: &mut Vec<Diagnostic>) {
+    let unused = inst.unused();
+    if !unused.is_empty() {
+        diags.push(
+            Diagnostic::warning(
+                "W-PARSE-IGNORED",
+                format!(
+                    "`{}`: unsupported instance parameter(s) ignored: {}",
+                    e.name,
+                    unused.join(", ")
+                ),
+            )
+            .with_span(e.span),
+        );
+    }
 }

@@ -1,0 +1,13 @@
+CMOS inverter, level 1
+VDD vdd 0 3.3
+VIN in 0 DC 0 PULSE(0 3.3 1n 0.2n 0.2n 5n 10n)
+MP out in vdd vdd pch l=1u w=4u ad=8p as=8p pd=12u ps=12u
+MN out in 0 0 nch l=1u w=2u ad=4p as=4p pd=8u ps=8u
+CL out 0 50f
+.model nch nmos vto=0.7 kp=110u gamma=0.4 phi=0.7 lambda=0.04 tox=9n cgso=0.3n cgdo=0.3n
++ cj=0.5m mj=0.5 cjsw=0.3n mjsw=0.33 pb=0.9
+.model pch pmos vto=-0.8 kp=50u gamma=0.5 phi=0.7 lambda=0.05 tox=9n cgso=0.3n cgdo=0.3n
++ cj=0.6m mj=0.5 cjsw=0.35n mjsw=0.33 pb=0.9
+.dc VIN 0 3.3 0.01
+.tran 0.01n 20n
+.end

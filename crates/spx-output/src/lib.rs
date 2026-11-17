@@ -1,4 +1,4 @@
-//! Simulation results, the ngspice-compatible raw file writer and JSON serialization.
+//! Simulation results, the ngspice-compatible raw file writer/reader and JSON serialization.
 //!
 //! Results are stored column-wise: one vector per variable.
 //!
@@ -7,6 +7,10 @@
 //! See `docs/PROVENANCE.md`.
 
 #![forbid(unsafe_code)]
+
+mod raw_reader;
+
+pub use raw_reader::{RawError, read_raw_ascii};
 
 use std::io::{self, Write};
 
@@ -153,6 +157,20 @@ impl AnalysisResult {
     }
 }
 
+/// Result of one `.meas` card.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Measurement {
+    /// Measurement name.
+    pub name: String,
+    /// Analysis it was evaluated on (`tran`, `ac`, `dc`).
+    pub analysis: String,
+    /// Value, if the measurement could be evaluated.
+    pub value: Option<f64>,
+    /// Why the measurement failed, if it did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Results of all analyses of one run.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SimResults {
@@ -160,6 +178,9 @@ pub struct SimResults {
     pub title: String,
     /// One entry per analysis, in netlist order.
     pub analyses: Vec<AnalysisResult>,
+    /// `.meas` results in netlist order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub measures: Vec<Measurement>,
 }
 
 /// Write results as an ngspice-compatible ASCII raw file (one plot per analysis).
@@ -225,6 +246,7 @@ mod tests {
     #[test]
     fn raw_ascii_layout() {
         let r = SimResults {
+            measures: vec![],
             title: "t".into(),
             analyses: vec![AnalysisResult {
                 kind: AnalysisKind::Tran,

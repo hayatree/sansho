@@ -1,0 +1,9 @@
+Half-wave rectifier, BDF2
+V1 in 0 DC 0 SIN(0 5 1k)
+D1 in out dmod
+R1 out 0 1k
+C1 out 0 10u
+.model dmod d is=2.52n n=1.752 rs=0.568 cjo=4p m=0.4 tt=20n
+.options method=gear
+.tran 10u 3m
+.end

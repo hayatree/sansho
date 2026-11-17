@@ -1,0 +1,19 @@
+Common-emitter amplifier (Gummel-Poon)
+VCC vcc 0 12
+VIN in 0 DC 0 AC 1 SIN(0 10m 10k)
+C1 in b 10u
+R1 vcc b 47k
+R2 b 0 10k
+RC vcc c 3.9k
+RE e 0 1k
+CE e 0 100u
+Q1 c b e qmod
+.model qmod npn is=1e-14 bf=200 vaf=100 ikf=0.1 ise=1e-13 ne=1.5 br=3 rb=100 re=0.5 rc=1
++ cje=20p vje=0.7 mje=0.33 cjc=8p vjc=0.6 mjc=0.4 tf=0.3n tr=50n xtf=2 vtf=4 itf=0.2
+.op
+.ac dec 10 10 100meg
+.meas ac gmax MAX vdb(c)
+.meas ac f3db WHEN vdb(c)=30 FALL=1
+.meas ac ph1k FIND vp(c) AT=1k
+.tran 1u 300u
+.end

@@ -171,7 +171,15 @@ Results are therefore bit-identical regardless of thread count or scheduling. Ex
   - voltage unknowns: `|Δx| ≤ reltol·max(|x|,|x_prev|) + vntol`
   - current unknowns: `... + abstol`
   - plus per-device current convergence checks (SPICE `noncon` equivalent).
-- Limiting: device-side `limit()` (pnjlim/fetlim) and global damping.
+- Limiting: device-side. Devices linearize around a limited point `x̃` and return
+  `f(x̃) + G·(x − x̃)` so the Newton step stays consistent; limiting marks the iteration as not
+  converged (`Slots::noncon`). Junctions use Nagel's logarithmic limiting; FET control voltages use
+  an original step clamp.
+- Device Jacobians come from forward-mode dual numbers (`spx-devices/src/dual.rs`): model
+  equations are written once and their derivatives are exact.
+- Device state (`StateRef`): an `accepted` copy (last accepted solution, read-only during a solve)
+  and a `current` copy (per iteration). Used for limiting history and incremental charge models
+  (MOS1 Meyer capacitances).
 - **Device bypass**: skip evaluation of instances whose terminal voltages changed less than a
   threshold (optional, off by default → enabled after accuracy validation).
 
@@ -184,6 +192,10 @@ plain Newton → gmin stepping (diagonal gmin / junction gmin) → source steppi
 
 Every attempt is recorded in the diagnostic so agents can see where it got stuck.
 
+Implemented in M2: plain Newton, diagonal gmin stepping (adaptive factor, ending with a solve at
+zero shunt), adaptive source stepping. Junction gmin is always present. Pseudo-transient is
+planned.
+
 ### 5.3 Transient analysis
 
 - Integration methods behind an `Integrator` trait:
@@ -192,7 +204,12 @@ Every attempt is recorded in the diagnostic so agents can see where it got stuck
 - Step control: charge-based LTE (preserving SPICE `trtol` / `chgtol` semantics), breakpoint
   management (source corners, `.tran` tstop/tmax), reduced step after breakpoints, step ÷8 on Newton
   failure.
-- Initial conditions: OP → `.ic` / `UIC`, `.nodeset`.
+- Initial conditions: OP → `.ic` / `UIC`, `.nodeset` (planned).
+
+Implemented in M2: trapezoidal (default) and variable-step BDF2 (`.options method=gear`);
+backward Euler for the first steps after t = 0 and after every breakpoint (history is reset there);
+LTE from divided differences of the assembled charge vector with SPICE `trtol`/`chgtol`/`reltol`
+semantics; rejected steps shrink by at least 10 %, accepted steps grow by at most 2×.
 
 ### 5.4 Small-signal analyses
 
@@ -294,7 +311,7 @@ result).
 
 | Layer | Target | Mechanism | When |
 |---|---|---|---|
-| L0 | Independent jobs (sweeps, corners, MC) | Share `CompiledCircuit`, one `SimState` per job, rayon | M2 |
+| L0 | Independent jobs (analyses of one netlist, batches of netlists) | Shared compiled circuit, one workspace per job, `std::thread::scope` with index-ordered results | M2 (done) |
 | L1 | Device evaluation within a run | Parallel over group × chunk (D3/D4) | M3 |
 | L2 | Matrix assembly within a run | Parallel reduction per value index | M3 |
 | L3 | LU within a run | Parallel BTF blocks, parallel refactor | M5 |
@@ -311,8 +328,13 @@ result).
 - **Oracles**: ngspice (BSD; installed and run in CI) as primary, Xyce as secondary — invoked only as
   external processes, no code imported. Circuits with analytic solutions (RC, RLC, linear networks)
   are compared against exact values.
-- **Metric** (Xyce `xyce_verify` style): `e_i = (y_ref − y)/(reltol·|y_ref| + abstol)`; pass if
-  RMS ≤ 1. OP per node; AC magnitude and phase; TRAN with time interpolation; `.meas` scalars.
+- **Metric** (implemented in M2): per variable `max|y − y_ref| / (rtol·max|y_ref| + atol)`, i.e.
+  the worst error relative to the reference full scale; pass if ≤ 1. TRAN results are linearly
+  interpolated onto the reference time points, AC compares complex values, `.meas` scalars are
+  compared relatively. Tolerances can be overridden per deck with `* verify:` comments. An
+  RMS-based variant (`xyce_verify` style) can be added for long waveforms.
+- **Running**: `cargo run -p spx-verify` runs every deck in `verify/decks` with spx and with
+  ngspice in Docker (`tools/ngspice`); `--cached` reuses reference results.
 - **Tiers**:
   1. Device level (I-V / C-V curves; Jacobian checked against finite differences)
   2. Small circuits
@@ -356,7 +378,7 @@ result).
 |---|---|---|
 | M0 | Repository foundation: workspace, licenses, CI, cargo-deny, PROVENANCE | CI green |
 | M1 | Linear circuits: basic parser, elaboration, MNA, OP/DC/AC/TRAN (trapezoidal), faer LU, raw output | RC/RLC match analytic solutions and ngspice |
-| M2 | Nonlinear: diode, BJT (GP), MOS1, Newton + limiting, gmin/source stepping, BDF2, LTE step control, `.meas`, L0 parallelism, JSON output | Small-circuit benchmarks within RMS error ≤ 1 vs ngspice |
+| M2 | Nonlinear: diode, BJT (GP), MOS1, Newton + limiting, gmin/source stepping, BDF2, LTE step control, `.meas`, L0 parallelism, JSON output | Small-circuit benchmarks within RMS error ≤ 1 vs ngspice (done: `verify/decks`) |
 | M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP |
 | M4 | OSDI loader and PDKs: IHP SG13G2 (PSP103, ...), SKY130 (ported BSIM4 or OSDI), broader ngspice dialect | PDK testbenches match ngspice |
 | M5 | Performance: own KLU-style solver, bypass, parallel LU, GPU batch (G1) | ≥ 1.x× ngspice on C6288 single-core; further gains multi-core |

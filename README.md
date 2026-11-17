@@ -2,14 +2,18 @@
 
 A fast, agent-native SPICE circuit simulator written in Rust.
 
-> **Status:** pre-alpha. Linear circuits only (R, C, L, V, I, E, F, G, H) with `.op`, `.dc`, `.ac`
-> and `.tran`. See [`docs/architecture.md`](docs/architecture.md).
+> **Status:** pre-alpha. R, C, L, V, I, E, F, G, H, diodes, BJTs (Gummel–Poon) and level-1
+> MOSFETs; `.op`, `.dc`, `.ac`, `.tran` (trapezoidal or BDF2 with LTE control), `.meas`, `.model`,
+> `.options`. Results are checked against ngspice (`verify/`). See
+> [`docs/architecture.md`](docs/architecture.md).
 
 ```sh
 cargo run -p spx-cli -- run examples/rc_lowpass.cir            # summary
 cargo run -p spx-cli -- run examples/rc_lowpass.cir -r out.raw  # ngspice-compatible raw file
 cargo run -p spx-cli -- run examples/rc_lowpass.cir --json      # machine-readable output
 cargo run -p spx-cli -- check examples/rc_lowpass.cir           # parse + elaborate only
+cargo run -p spx-cli -- batch a.cir b.cir -j 8                   # parallel runs, JSON lines
+cargo run -p spx-verify                                          # compare with ngspice (Docker)
 ```
 
 ## Goals
@@ -33,6 +37,9 @@ cargo run -p spx-cli -- check examples/rc_lowpass.cir           # parse + elabor
 | `crates/spx-engine` | MNA assembly, Newton, analyses |
 | `crates/spx-output` | Result types, raw writer |
 | `crates/spx-cli` | `spx` command-line tool |
+| `crates/spx-verify` | Comparison against a reference simulator |
+| `tools/ngspice` | ngspice in Docker, used as a black-box reference |
+| `verify/decks` | Verification circuits |
 | `examples/` | Example netlists |
 | `docs/` | Design documents and provenance records |
 

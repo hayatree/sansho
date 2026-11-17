@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod lexer;
+mod meas;
 mod number;
 mod parser;
 
@@ -33,6 +34,10 @@ pub struct Netlist {
     pub analyses: Vec<AnalysisCard>,
     /// `.options` entries.
     pub options: Vec<OptionCard>,
+    /// `.model` cards in source order.
+    pub models: Vec<ModelCard>,
+    /// `.meas` cards in source order.
+    pub measures: Vec<MeasureCard>,
     /// Non-fatal diagnostics (warnings).
     pub warnings: Vec<Diagnostic>,
 }
@@ -146,6 +151,78 @@ pub enum ElementKind {
         /// Transresistance in ohms.
         r: f64,
     },
+    /// `Dxxx n+ n- model [area] [off] [key=value ...]`
+    Diode {
+        /// Anode.
+        p: String,
+        /// Cathode.
+        n: String,
+        /// Model name (lower-cased).
+        model: String,
+        /// Instance parameters (`area` included when given positionally).
+        params: Vec<(String, f64)>,
+        /// `off` flag (initial guess hint for the operating point).
+        off: bool,
+    },
+    /// `Qxxx nc nb ne [ns] model [area] [off] [key=value ...]`
+    Bjt {
+        /// Collector.
+        c: String,
+        /// Base.
+        b: String,
+        /// Emitter.
+        e: String,
+        /// Substrate (ground when omitted).
+        s: Option<String>,
+        /// Model name (lower-cased).
+        model: String,
+        /// Instance parameters.
+        params: Vec<(String, f64)>,
+        /// `off` flag.
+        off: bool,
+    },
+    /// `Mxxx nd ng ns nb model [key=value ...] [off]`
+    Mosfet {
+        /// Drain.
+        d: String,
+        /// Gate.
+        g: String,
+        /// Source.
+        s: String,
+        /// Bulk.
+        b: String,
+        /// Model name (lower-cased).
+        model: String,
+        /// Instance parameters (`l`, `w`, `ad`, `as`, `pd`, `ps`, ...).
+        params: Vec<(String, f64)>,
+        /// `off` flag.
+        off: bool,
+    },
+}
+
+impl ElementKind {
+    /// Model name for semiconductor devices.
+    pub fn model(&self) -> Option<&str> {
+        match self {
+            Self::Diode { model, .. } | Self::Bjt { model, .. } | Self::Mosfet { model, .. } => {
+                Some(model)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A `.model name type (params)` card.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ModelCard {
+    /// Lower-cased model name.
+    pub name: String,
+    /// Lower-cased model type (`d`, `npn`, `pnp`, `nmos`, `pmos`).
+    pub kind: String,
+    /// Parameters in source order (lower-cased names).
+    pub params: Vec<(String, f64)>,
+    /// Card location.
+    pub span: Span,
 }
 
 impl ElementKind {
@@ -162,6 +239,15 @@ impl ElementKind {
             Self::Vcvs { p, n, cp, cn, .. } | Self::Vccs { p, n, cp, cn, .. } => {
                 vec![p, n, cp, cn]
             }
+            Self::Diode { p, n, .. } => vec![p, n],
+            Self::Bjt { c, b, e, s, .. } => {
+                let mut v: Vec<&str> = vec![c, b, e];
+                if let Some(s) = s {
+                    v.push(s);
+                }
+                v
+            }
+            Self::Mosfet { d, g, s, b, .. } => vec![d, g, s, b],
         }
     }
 }
@@ -266,5 +352,152 @@ pub struct OptionCard {
     /// Numeric value, if any.
     pub value: Option<f64>,
     /// Location of the option name.
+    pub span: Span,
+}
+
+/// Analysis a `.meas` card applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MeasAnalysis {
+    /// `.meas dc`
+    Dc,
+    /// `.meas ac`
+    Ac,
+    /// `.meas tran`
+    Tran,
+}
+
+/// How a complex (AC) or real value is reduced to a real number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SignalFn {
+    /// Plain `v(..)` / `i(..)`: the real value, or the magnitude for AC results.
+    Plain,
+    /// `vm`, `im`: magnitude.
+    Mag,
+    /// `vdb`, `idb`: 20·log10 of the magnitude.
+    Db,
+    /// `vp`, `ip`: phase in radians.
+    Phase,
+    /// `vr`, `ir`: real part.
+    Re,
+    /// `vi`, `ii`: imaginary part.
+    Im,
+}
+
+/// A measured signal such as `v(out)`, `v(a,b)`, `vdb(out)` or `i(v1)`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Signal {
+    /// Reduction function.
+    pub func: SignalFn,
+    /// `true` for branch currents `i(..)`.
+    pub current: bool,
+    /// Node (or voltage source for currents), lower-cased.
+    pub pos: String,
+    /// Optional reference node for differential voltages.
+    pub neg: Option<String>,
+}
+
+/// Which crossing of a threshold counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CrossDir {
+    /// Rising crossings.
+    Rise,
+    /// Falling crossings.
+    Fall,
+    /// Any crossing.
+    Cross,
+}
+
+/// A point on the sweep axis defined by a threshold crossing or a fixed value.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum MeasEvent {
+    /// The `n`-th crossing (`None` = last) of `value` by `signal`, ignoring crossings before
+    /// `td`.
+    Cross {
+        /// Signal.
+        signal: Signal,
+        /// Threshold.
+        value: f64,
+        /// Direction.
+        dir: CrossDir,
+        /// 1-based crossing number, `None` for `LAST`.
+        n: Option<u32>,
+        /// Delay before crossings are counted.
+        td: f64,
+    },
+    /// A fixed sweep value (`AT=`).
+    At {
+        /// Sweep value.
+        at: f64,
+    },
+}
+
+/// Statistic computed over an interval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MeasStat {
+    /// Maximum.
+    Max,
+    /// Minimum.
+    Min,
+    /// Peak-to-peak.
+    Pp,
+    /// Average (integral divided by the interval length).
+    Avg,
+    /// Root mean square.
+    Rms,
+    /// Trapezoidal integral.
+    Integ,
+}
+
+/// What a `.meas` card computes.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MeasKind {
+    /// `TRIG ... TARG ...`: sweep distance between two events.
+    TrigTarg {
+        /// Trigger event.
+        trig: MeasEvent,
+        /// Target event.
+        targ: MeasEvent,
+    },
+    /// `WHEN ...`: sweep value of an event.
+    When {
+        /// Event.
+        event: MeasEvent,
+    },
+    /// `FIND sig WHEN ...` / `FIND sig AT=...`: value of a signal at an event.
+    Find {
+        /// Signal.
+        signal: Signal,
+        /// Event.
+        event: MeasEvent,
+    },
+    /// `MAX|MIN|PP|AVG|RMS|INTEG sig [FROM=] [TO=]`
+    Stat {
+        /// Statistic.
+        stat: MeasStat,
+        /// Signal.
+        signal: Signal,
+        /// Interval start.
+        from: Option<f64>,
+        /// Interval end.
+        to: Option<f64>,
+    },
+}
+
+/// A `.meas` card.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MeasureCard {
+    /// Lower-cased result name.
+    pub name: String,
+    /// Analysis the measurement applies to.
+    pub analysis: MeasAnalysis,
+    /// Measurement definition.
+    pub kind: MeasKind,
+    /// Card location.
     pub span: Span,
 }

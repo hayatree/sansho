@@ -1,0 +1,32 @@
+Five-stage CMOS ring oscillator
+* verify: rtol_tran=3e-2
+* The waveforms drift in phase; the oscillation period itself agrees to about 0.05 %.
+VDD vdd 0 1.8
+MP1 n2 n1 vdd vdd pch l=0.5u w=2u
+MN1 n2 n1 0 0 nch l=0.5u w=1u
+MP2 n3 n2 vdd vdd pch l=0.5u w=2u
+MN2 n3 n2 0 0 nch l=0.5u w=1u
+MP3 n4 n3 vdd vdd pch l=0.5u w=2u
+MN3 n4 n3 0 0 nch l=0.5u w=1u
+MP4 n5 n4 vdd vdd pch l=0.5u w=2u
+MN4 n5 n4 0 0 nch l=0.5u w=1u
+MP5 n1 n5 vdd vdd pch l=0.5u w=2u
+MN5 n1 n5 0 0 nch l=0.5u w=1u
+C1 n1 0 10f
+C2 n2 0 10f
+C3 n3 0 10f
+C4 n4 0 10f
+C5 n5 0 10f
+* kick the oscillator out of its metastable operating point
+IK 0 n1 PULSE(0 100u 0.1n 0.1n 0.1n 0.5n 1)
+.model nch nmos vto=0.5 kp=170u gamma=0.4 phi=0.8 lambda=0.08 tox=5n cgso=0.2n cgdo=0.2n
+.model pch pmos vto=-0.5 kp=60u gamma=0.4 phi=0.8 lambda=0.1 tox=5n cgso=0.2n cgdo=0.2n
+.tran 10p 5n
+.meas tran period TRIG v(n1) VAL=0.9 RISE=2 TARG v(n1) VAL=0.9 RISE=3
+.meas tran tpd TRIG v(n1) VAL=0.9 RISE=2 TARG v(n2) VAL=0.9 FALL=2
+.meas tran vmax MAX v(n3) FROM=1n TO=5n
+.meas tran vavg AVG v(n3) FROM=1n TO=5n
+.meas tran irms RMS i(vdd) FROM=1n TO=5n
+.meas tran tcross WHEN v(n4)=0.9 CROSS=LAST
+.meas tran vfind FIND v(n2) WHEN v(n1)=0.9 FALL=2
+.end

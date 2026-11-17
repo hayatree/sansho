@@ -11,8 +11,14 @@ use spx_output::{AnalysisKind, AnalysisResult, Data, Quantity, Variable};
 use spx_sparse::{FaerLu, LinearSolver, c64};
 
 use crate::circuit::Circuit;
+use crate::options::Method;
 use crate::options::SimOptions;
-use crate::solve::{Integration, Workspace, assemble, newton, newton_diagnostic};
+use crate::solve::{Integration, Workspace, assemble, make_ctx, newton, newton_diagnostic};
+
+const NO_TRAN: TranParams = TranParams {
+    tstep: 0.0,
+    tstop: 0.0,
+};
 
 fn variables(ckt: &Circuit) -> Vec<Variable> {
     ckt.unknowns
@@ -30,6 +36,11 @@ fn variables(ckt: &Circuit) -> Vec<Variable> {
 }
 
 /// Solve the DC operating point with the given source mode.
+///
+/// Strategy: plain Newton from the device initial guesses; if that fails, gmin stepping (a
+/// shunt conductance on every node, reduced geometrically to zero); if that fails too, source
+/// stepping (all independent sources ramped from 0 to their full value). On success the device
+/// state is committed.
 pub(crate) fn solve_op(
     ckt: &Circuit,
     ctx: &EvalCtx,
@@ -39,9 +50,136 @@ pub(crate) fn solve_op(
     analysis: &str,
 ) -> Result<(), Diagnostic> {
     let integ = Integration::dc(ckt.dim());
-    newton(ckt, ctx, &integ, x, ws, opts, opts.itl1)
-        .map(|_| ())
-        .map_err(|e| newton_diagnostic(ckt, &e, analysis))
+    let mut init = *ctx;
+    init.init_junctions = true;
+    let x0 = x.to_vec();
+    ws.clear_state();
+    let first = match newton(ckt, &init, &integ, x, ws, opts, opts.itl1, 0.0) {
+        Ok(_) => {
+            ws.commit();
+            return Ok(());
+        }
+        Err(e) => e,
+    };
+    if ckt.linear {
+        return Err(newton_diagnostic(ckt, &first, analysis));
+    }
+    if opts.gmin_steps > 0 && gmin_stepping(ckt, &init, &integ, x, &x0, ws, opts) {
+        return Ok(());
+    }
+    if opts.src_steps > 0 && source_stepping(ckt, &init, &integ, x, ws, opts) {
+        return Ok(());
+    }
+    Err(newton_diagnostic(ckt, &first, analysis)
+        .with_note("gmin stepping and source stepping also failed"))
+}
+
+/// Gmin stepping. Returns `true` on success with `x` and the committed state set.
+fn gmin_stepping(
+    ckt: &Circuit,
+    init: &EvalCtx,
+    integ: &Integration,
+    x: &mut [f64],
+    x0: &[f64],
+    ws: &mut Workspace,
+    opts: &SimOptions,
+) -> bool {
+    let mut ctx = *init;
+    x.copy_from_slice(x0);
+    ws.clear_state();
+    let mut g = 1e-2;
+    let mut factor = 10.0f64;
+    let mut saved = x.to_vec();
+    let mut solves = 0;
+    // Find a starting shunt that converges.
+    loop {
+        solves += 1;
+        if newton(ckt, &ctx, integ, x, ws, opts, opts.itl1, g).is_ok() {
+            ws.commit();
+            break;
+        }
+        if solves >= opts.gmin_steps || g >= 1.0 {
+            return false;
+        }
+        x.copy_from_slice(x0);
+        ws.clear_state();
+        g *= 10.0;
+    }
+    ctx.init_junctions = false;
+    let floor = opts.gmin.max(1e-15);
+    while solves < opts.gmin_steps {
+        let next = if g <= floor {
+            0.0
+        } else {
+            (g / factor).max(floor * 0.999)
+        };
+        saved.copy_from_slice(x);
+        solves += 1;
+        match newton(ckt, &ctx, integ, x, ws, opts, opts.itl1, next) {
+            Ok(_) => {
+                ws.commit();
+                if next == 0.0 {
+                    return true;
+                }
+                g = next;
+                factor = (factor * 2.0).min(10.0);
+            }
+            Err(_) => {
+                x.copy_from_slice(&saved);
+                factor = factor.sqrt();
+                if factor < 1.0001 {
+                    return false;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Source stepping. Returns `true` on success with `x` and the committed state set.
+fn source_stepping(
+    ckt: &Circuit,
+    init: &EvalCtx,
+    integ: &Integration,
+    x: &mut [f64],
+    ws: &mut Workspace,
+    opts: &SimOptions,
+) -> bool {
+    let mut ctx = *init;
+    x.iter_mut().for_each(|v| *v = 0.0);
+    ws.clear_state();
+    ctx.source_factor = 0.0;
+    ctx.init_junctions = false;
+    if newton(ckt, &ctx, integ, x, ws, opts, opts.itl1, 0.0).is_err() {
+        return false;
+    }
+    ws.commit();
+    let mut s = 0.0f64;
+    let mut ds = 0.1f64;
+    let mut saved = x.to_vec();
+    for _ in 0..opts.src_steps {
+        let next = (s + ds).min(1.0);
+        ctx.source_factor = next;
+        saved.copy_from_slice(x);
+        match newton(ckt, &ctx, integ, x, ws, opts, opts.itl1, 0.0) {
+            Ok(_) => {
+                ws.commit();
+                if next >= 1.0 {
+                    return true;
+                }
+                s = next;
+                ds = (ds * 1.5).min(0.5);
+            }
+            Err(_) => {
+                x.copy_from_slice(&saved);
+                ds /= 4.0;
+                if ds < 1e-7 {
+                    return false;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// `.op`
@@ -50,7 +188,7 @@ pub(crate) fn op(ckt: &Circuit, opts: &SimOptions) -> Result<AnalysisResult, Dia
     let mut x = vec![0.0; ckt.dim()];
     solve_op(
         ckt,
-        &EvalCtx::dc(),
+        &make_ctx(opts, Mode::Dc, NO_TRAN),
         &mut x,
         &mut ws,
         opts,
@@ -90,10 +228,17 @@ pub(crate) fn dc_sweep(
     let mut scale = Vec::with_capacity(count);
     let mut cols = vec![Vec::with_capacity(count); n];
     let mut result = Ok(());
+    let ctx = make_ctx(opts, Mode::Dc, NO_TRAN);
+    let integ = Integration::dc(n);
     for k in 0..count {
         let v = start + k as f64 * step;
         ckt.set_param(source, "dc", v);
-        if let Err(d) = solve_op(ckt, &EvalCtx::dc(), &mut x, &mut ws, opts, "DC sweep") {
+        // Continue from the previous point; fall back to a full operating-point solve.
+        let continued = k > 0
+            && newton(ckt, &ctx, &integ, &mut x, &mut ws, opts, opts.itl1, 0.0)
+                .map(|_| ws.commit())
+                .is_ok();
+        if !continued && let Err(d) = solve_op(ckt, &ctx, &mut x, &mut ws, opts, "DC sweep") {
             result = Err(d.with_note(format!("at {source} = {v:e}")));
             break;
         }
@@ -152,10 +297,12 @@ pub(crate) fn ac(
     let n = ckt.dim();
     let mut ws = Workspace::new(ckt);
     let mut x = vec![0.0; n];
-    let ctx = EvalCtx::dc();
+    let mut ctx = make_ctx(opts, Mode::Dc, NO_TRAN);
     solve_op(ckt, &ctx, &mut x, &mut ws, opts, "AC operating point")?;
-    // Linearize at the operating point.
-    assemble(ckt, &ctx, &x, &mut ws, opts);
+    // Linearize at the operating point (no limiting, state = accepted operating point).
+    ctx.limit = false;
+    ws.restore();
+    assemble(ckt, &ctx, &x, &mut ws, opts, 0.0);
     let mut b = vec![c64::new(0.0, 0.0); n];
     for (gi, group) in ckt.groups.iter().enumerate() {
         let l = &ckt.layouts[gi];
@@ -201,6 +348,138 @@ pub(crate) fn ac(
     })
 }
 
+/// Number of accepted points kept for truncation-error estimates.
+const HISTORY: usize = 3;
+
+/// Accepted solutions used for divided differences (newest first).
+#[derive(Debug, Default)]
+struct History {
+    t: Vec<f64>,
+    q: Vec<Vec<f64>>,
+}
+
+impl History {
+    fn clear(&mut self) {
+        self.t.clear();
+        self.q.clear();
+    }
+    fn push(&mut self, t: f64, q: &[f64]) {
+        if self.t.len() == HISTORY {
+            self.t.pop();
+            if let Some(mut old) = self.q.pop() {
+                old.copy_from_slice(q);
+                self.q.insert(0, old);
+            }
+        } else {
+            self.q.insert(0, q.to_vec());
+        }
+        self.t.insert(0, t);
+    }
+    fn len(&self) -> usize {
+        self.t.len()
+    }
+}
+
+/// Integration coefficients for a step of size `h` from the newest history point.
+fn integration(
+    method: Method,
+    order: usize,
+    h: f64,
+    hist: &History,
+    qdot: &[f64],
+    integ: &mut Integration,
+) {
+    let q0 = &hist.q[0];
+    if order == 1 {
+        integ.a0 = 1.0 / h;
+        for (i, v) in integ.hist.iter_mut().enumerate() {
+            *v = -q0[i] / h;
+        }
+        return;
+    }
+    match method {
+        Method::Trap => {
+            integ.a0 = 2.0 / h;
+            for (i, v) in integ.hist.iter_mut().enumerate() {
+                *v = -integ.a0 * q0[i] - qdot[i];
+            }
+        }
+        Method::Gear => {
+            // Variable-step BDF2 with step ratio w = h / h_prev.
+            let q1 = &hist.q[1];
+            let w = h / (hist.t[0] - hist.t[1]);
+            integ.a0 = (1.0 + 2.0 * w) / ((1.0 + w) * h);
+            let c0 = -(1.0 + w) / h;
+            let c1 = w * w / ((1.0 + w) * h);
+            for (i, v) in integ.hist.iter_mut().enumerate() {
+                *v = c0 * q0[i] + c1 * q1[i];
+            }
+        }
+    }
+}
+
+/// Ratio of the estimated local truncation error to its tolerance (≤ 1 means acceptable),
+/// computed from divided differences of the charges over the new point and the history.
+#[allow(clippy::too_many_arguments)]
+fn lte_ratio(
+    method: Method,
+    order: usize,
+    h: f64,
+    t_new: f64,
+    q_new: &[f64],
+    qdot_new: &[f64],
+    qdot_old: &[f64],
+    hist: &History,
+    opts: &SimOptions,
+) -> f64 {
+    let ts = [
+        t_new,
+        hist.t[0],
+        hist.t[1],
+        hist.t.get(2).copied().unwrap_or(0.0),
+    ];
+    // LTE = C · h^(k+1) · (k+1)! · DD_(k+1).
+    let coeff = match (order, method) {
+        (1, _) => h * h,
+        (_, Method::Trap) => 0.5 * h * h * h,
+        (_, Method::Gear) => 4.0 / 3.0 * h * h * h,
+    };
+    let mut worst = 0.0f64;
+    for i in 0..q_new.len() {
+        let qs = [
+            q_new[i],
+            hist.q[0][i],
+            hist.q[1][i],
+            hist.q.get(2).map_or(0.0, |q| q[i]),
+        ];
+        let d1 = [
+            (qs[0] - qs[1]) / (ts[0] - ts[1]),
+            (qs[1] - qs[2]) / (ts[1] - ts[2]),
+            (qs[2] - qs[3]) / (ts[2] - ts[3]),
+        ];
+        let d2 = [
+            (d1[0] - d1[1]) / (ts[0] - ts[2]),
+            (d1[1] - d1[2]) / (ts[1] - ts[3]),
+        ];
+        let dd = if order == 1 {
+            d2[0]
+        } else {
+            (d2[0] - d2[1]) / (ts[0] - ts[3])
+        };
+        let lte = (coeff * dd).abs();
+        if lte == 0.0 {
+            continue;
+        }
+        let qtol = (opts.reltol * qs[0].abs().max(qs[1].abs())).max(opts.chgtol);
+        let itol = (opts.abstol + opts.reltol * qdot_new[i].abs().max(qdot_old[i].abs())) * h;
+        let r = lte / (opts.trtol * qtol.max(itol));
+        if r.is_finite() {
+            worst = worst.max(r);
+        }
+    }
+    worst
+}
+
 /// `.tran`
 pub(crate) fn tran(
     ckt: &Circuit,
@@ -212,12 +491,7 @@ pub(crate) fn tran(
 ) -> Result<AnalysisResult, Diagnostic> {
     let n = ckt.dim();
     let tp = TranParams { tstep, tstop };
-    let mut ctx = EvalCtx {
-        mode: Mode::Tran,
-        time: 0.0,
-        tran: tp,
-        source_factor: 1.0,
-    };
+    let mut ctx = make_ctx(opts, Mode::Tran, tp);
     let mut ws = Workspace::new(ckt);
     let mut x = vec![0.0; n];
     solve_op(
@@ -247,9 +521,15 @@ pub(crate) fn tran(
     bps.sort_by(f64::total_cmp);
     bps.dedup_by(|a, b| (*a - *b).abs() <= eps);
 
-    assemble(ckt, &ctx, &x, &mut ws, opts);
-    let mut q_prev = ws.asm.q.clone();
-    let mut qdot_prev = vec![0.0; n];
+    // Charges at the operating point.
+    let mut eval_ctx = ctx;
+    eval_ctx.limit = false;
+    ws.restore();
+    assemble(ckt, &eval_ctx, &x, &mut ws, opts, 0.0);
+    let mut hist = History::default();
+    hist.push(0.0, &ws.asm.q);
+    let mut qdot = vec![0.0; n];
+    let mut qdot_new = vec![0.0; n];
 
     let mut times = Vec::new();
     let mut cols: Vec<Vec<f64>> = vec![Vec::new(); n];
@@ -265,52 +545,81 @@ pub(crate) fn tran(
 
     let mut t = 0.0;
     let mut bp_idx = 0;
-    let mut after_bp = true;
+    // The first step is taken without error control, so start small.
+    let mut h = 0.01 * hmax.min(bps.first().copied().unwrap_or(tstop));
     let mut integ = Integration::dc(n);
     let mut x_new = x.clone();
     while t < tstop - eps {
         let next_bp = bps.get(bp_idx).copied().unwrap_or(tstop);
-        let mut h = if after_bp { 0.1 * hmax } else { hmax };
-        if next_bp - t <= h * 1.1 {
+        h = h.min(hmax);
+        if t + h >= next_bp - eps {
             h = next_bp - t;
+        } else if t + 2.0 * h > next_bp {
+            // Avoid leaving a sliver before the breakpoint.
+            h = 0.5 * (next_bp - t);
         }
-        let mut accepted = false;
-        while !accepted {
-            let order1 = after_bp;
-            integ.a0 = if order1 { 1.0 / h } else { 2.0 / h };
-            for i in 0..n {
-                integ.hist[i] = -integ.a0 * q_prev[i] - if order1 { 0.0 } else { qdot_prev[i] };
+        // Order 1 until enough history exists since the last breakpoint.
+        let order = if hist.len() >= 3 { 2 } else { 1 };
+        integration(opts.method, order, h, &hist, &qdot, &mut integ);
+        ctx.time = t + h;
+        x_new.copy_from_slice(&x);
+        if let Err(e) = newton(ckt, &ctx, &integ, &mut x_new, &mut ws, opts, opts.itl4, 0.0) {
+            h /= 8.0;
+            if h < hmin {
+                return Err(newton_diagnostic(ckt, &e, "transient")
+                    .with_note(format!("timestep too small at t = {:e} s", ctx.time)));
             }
-            ctx.time = t + h;
-            x_new.copy_from_slice(&x);
-            match newton(ckt, &ctx, &integ, &mut x_new, &mut ws, opts, opts.itl4) {
-                Ok(_) => accepted = true,
-                Err(e) => {
-                    h /= 8.0;
-                    if h < hmin {
-                        return Err(newton_diagnostic(ckt, &e, "transient")
-                            .with_note(format!("timestep too small at t = {:e} s", ctx.time)));
-                    }
-                }
-            }
+            continue;
         }
-        // Update charge history.
-        assemble(ckt, &ctx, &x_new, &mut ws, opts);
+        // Charges at the converged point (state is updated consistently for commit).
+        eval_ctx.time = ctx.time;
+        assemble(ckt, &eval_ctx, &x_new, &mut ws, opts, 0.0);
         for i in 0..n {
-            let q = ws.asm.q[i];
-            qdot_prev[i] = integ.a0 * q + integ.hist[i];
-            q_prev[i] = q;
+            qdot_new[i] = integ.a0 * ws.asm.q[i] + integ.hist[i];
         }
+        // Truncation-error control (needs order + 1 history points).
+        let mut grow = 2.0;
+        if hist.len() > order {
+            let r = lte_ratio(
+                opts.method,
+                order,
+                h,
+                ctx.time,
+                &ws.asm.q,
+                &qdot_new,
+                &qdot,
+                &hist,
+                opts,
+            );
+            let factor = 0.9 * r.max(1e-12).powf(-1.0 / (order as f64 + 1.0));
+            if r > 1.0 {
+                let h_new = h * factor.clamp(0.125, 0.9);
+                if h_new >= hmin {
+                    h = h_new;
+                    continue;
+                }
+                // Cannot reduce further; accept with a diagnostic-free best effort.
+            }
+            grow = factor.clamp(0.5, 2.0);
+        }
+        // Accept.
+        ws.commit();
         t += h;
-        if (t - next_bp).abs() <= eps {
+        let hit_bp = (t - next_bp).abs() <= eps;
+        if hit_bp {
             t = next_bp;
             bp_idx += 1;
-            after_bp = true;
-        } else {
-            after_bp = false;
+            hist.clear();
         }
+        hist.push(t, &ws.asm.q);
+        qdot.copy_from_slice(&qdot_new);
         x.copy_from_slice(&x_new);
         record(t, &x, &mut times, &mut cols);
+        h *= grow;
+        if hit_bp {
+            let gap = bps.get(bp_idx).copied().unwrap_or(tstop) - t;
+            h = h.min(0.1 * hmax.min(gap));
+        }
     }
 
     Ok(AnalysisResult {
@@ -328,6 +637,40 @@ pub(crate) fn tran(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::circuit::compile;
+
+    /// Gmin stepping and source stepping must reach the same operating point as plain Newton.
+    #[test]
+    fn continuation_methods_reach_the_operating_point() {
+        let src = "t\nV1 a 0 3\nR1 a b 100\nD1 b c dm\nD2 c 0 dm\nQ1 a c 0 qm\n\
+                   .model dm d is=1e-12 rs=5\n.model qm npn bf=50 rb=10\n.op\n";
+        let nl = spx_netlist::parse(src).unwrap_or_else(|d| panic!("{d:?}"));
+        let opts = SimOptions::default();
+        let (ckt, _) = compile(&nl, &opts).unwrap_or_else(|d| panic!("{d:?}"));
+        let ctx = make_ctx(&opts, Mode::Dc, NO_TRAN);
+        let n = ckt.dim();
+        let mut ws = Workspace::new(&ckt);
+        let mut direct = vec![0.0; n];
+        solve_op(&ckt, &ctx, &mut direct, &mut ws, &opts, "op").unwrap_or_else(|d| panic!("{d}"));
+        let mut init = ctx;
+        init.init_junctions = true;
+        let integ = Integration::dc(n);
+        let mut x = vec![0.0; n];
+        assert!(gmin_stepping(
+            &ckt,
+            &init,
+            &integ,
+            &mut x,
+            &vec![0.0; n],
+            &mut ws,
+            &opts
+        ));
+        let close = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(p, q)| (p - q).abs() < 1e-5);
+        assert!(close(&x, &direct), "{x:?} vs {direct:?}");
+        let mut x = vec![0.0; n];
+        assert!(source_stepping(&ckt, &init, &integ, &mut x, &mut ws, &opts));
+        assert!(close(&x, &direct), "{x:?} vs {direct:?}");
+    }
 
     #[test]
     fn ac_frequency_grids() {
