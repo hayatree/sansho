@@ -1,0 +1,6 @@
+# Private research material (not part of the published project)
+/reports/
+/research_notes/
+
+# Rust build output
+/target/
