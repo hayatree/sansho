@@ -2,21 +2,33 @@
 //! Provenance: original implementation from the Accellera Verilog-AMS LRM 2.4; see docs/PROVENANCE.md.
 use crate::preproc::Preprocessed;
 use spx_diag::{Diagnostic, Span};
+/// Lexical token categories.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
+    /// Identifier reference.
     Ident(String),
+    /// System identifier.
     System(String),
+    /// Integer literal.
     Int(i64),
+    /// Real literal.
     Real(f64),
+    /// String literal.
     Str(String),
+    /// Operator or punctuation.
     Symbol(String),
+    /// End-of-input marker.
     Eof,
 }
+/// A lexical token and its original source position.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
+    /// Syntactic form.
     pub kind: TokenKind,
+    /// Original source position.
     pub span: Span,
 }
+/// Tokenize preprocessed text and collect lexical diagnostics.
 pub fn lex(source: &Preprocessed) -> (Vec<Token>, Vec<Diagnostic>) {
     let s = &source.text;
     let b = s.as_bytes();

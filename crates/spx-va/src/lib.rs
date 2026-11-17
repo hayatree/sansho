@@ -1,17 +1,28 @@
-//! Clean-room Verilog-A compact-model syntax frontend.
+//! Clean-room Verilog-A compact-model compiler and AD evaluator.
 //! Provenance: original implementation from the Accellera Verilog-AMS LRM 2.4; see docs/PROVENANCE.md.
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 pub mod ast;
+mod dual;
+mod eval;
+mod ir;
 pub mod lexer;
+mod limit;
 mod parser;
+mod sema;
+pub use eval::{Analysis, Bound, EvalInput, EvalOutput, Scratch, StateIo};
+pub use ir::{CompiledModule, ParamInfo};
+pub use sema::compile_module;
 pub mod preproc;
 pub use ast::*;
 use spx_diag::Diagnostic;
 
 /// Supplies include text and its canonical source name. No filesystem access is implicit.
 pub trait VaLoader {
+    /// Load include text and its canonical name, relative to an optional source.
     fn load(&self, path: &str, from: Option<&str>) -> Result<(String, String), String>;
 }
+/// Include loader that rejects external file access.
 #[derive(Debug)]
 pub struct NoVaFiles;
 impl VaLoader for NoVaFiles {
@@ -19,7 +30,7 @@ impl VaLoader for NoVaFiles {
         Err(format!("file access disabled: {path}"))
     }
 }
-/// Parse analog syntax; semantic validation and evaluation belong to later phases.
+/// Parse analog syntax; call `compile_module` for semantic validation and lowering.
 pub fn parse_va(text: &str, loader: &dyn VaLoader) -> Result<SourceFile, Vec<Diagnostic>> {
     let (source, mut diagnostics) = preproc::preprocess(text, loader);
     let (tokens, errors) = lexer::lex(&source);

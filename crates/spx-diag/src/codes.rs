@@ -61,7 +61,21 @@ const fn w(
 
 /// All registered codes, grouped by prefix.
 pub const CODES: &[CodeInfo] = &[
-    // --- Verilog-A frontend ---
+    // --- Verilog-A compiler ---
+    e(
+        "E-VA-SEMA",
+        "Invalid Verilog-A semantics",
+        "A name, type, assignment, branch access, or function call is invalid.",
+        &[
+            "Check declarations, argument counts, types and contribution targets at the reported span.",
+        ],
+    ),
+    e(
+        "E-VA-PARAM",
+        "Invalid Verilog-A parameter binding",
+        "A parameter name is unknown, cannot be overridden, or violates its declared type or range.",
+        &["Use a declared non-local parameter name and a finite value within its allowed ranges."],
+    ),
     e(
         "E-VA-SYNTAX",
         "Invalid Verilog-A syntax",

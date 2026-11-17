@@ -1,6 +1,6 @@
 # Verilog-A compact-model compiler (`spx-va`)
 
-Status: design (M4). Implementation proceeds in the phases listed at the end.
+Status: VA-1 and VA-2 implemented (M4). Simulator integration begins in VA-3.
 
 ## 1. Purpose and constraints
 
@@ -37,8 +37,8 @@ Crate layout (`crates/spx-va`, depends only on `spx-diag`):
 | `lexer.rs` | Tokens: identifiers (incl. escaped `\foo `), system identifiers (`$vt`), numbers (integer, real, SI suffixes `T G M K k m u n p f a`), strings, operators, attributes `(* ... *)` skipped |
 | `ast.rs` | Syntax tree (see §3) |
 | `parser.rs` | Recursive descent with precedence climbing for expressions |
-| `sema.rs` | (phase 2) symbol resolution, types, branch/port mapping, parameter ranges |
-| `ir.rs`, `eval.rs` | (phase 2) lowered code and the AD interpreter |
+| `sema.rs` | Symbol resolution, type checks, branch/port mapping, linear `ddt` validation |
+| `ir.rs`, `eval.rs`, `dual.rs`, `limit.rs` | Resolved typed tree, dense dynamic AD interpreter, parameter binding, limiting |
 | `device.rs` | (phase 3) `DeviceGroup` implementation for compiled modules |
 
 ## 3. Supported language subset (target: BSIM4, PSP103, BSIM-CMG, HICUM/L2 sources)
@@ -93,11 +93,12 @@ All nodes carry `spx_diag::Span` (line, column, file index into the preprocessor
   produces, per node, the resistive current `f` and the reactive charge `q` (arguments of `ddt`)
   with exact Jacobians, which map directly onto spx's `G`, `C`, `f`, `q` slots (dense core stamp
   over the instance's nodes).
-- `@(initial_model)` / parameter-only expressions are evaluated once per model / instance
-  (hoisting), not every iteration.
-- `$limit(V(a,b), "pnjlim", ...)` uses spx's junction limiting and sets `noncon`.
-- Collapsing of internal nodes (`V(a,b) <+ 0` with zero-valued resistance) is detected per
-  instance.
+- Parameter defaults are evaluated at binding. Initialization events execute when the caller sets
+  `initial_step`; general parameter-expression hoisting remains VA-5 work.
+- `$limit(V(a,b), "pnjlim", vt, vcrit)` uses an independently written logarithmic limiter based
+  on Nagel (1975) and sets `noncon`. `fetlim` uses an original bounded voltage step.
+- Voltage contributions allocate branch-current unknowns; internal-node collapsing is deferred
+  to VA-4.
 - Later: JIT through Cranelift (Apache-2.0) behind a feature flag.
 
 ## 5. Netlist integration (phase 3)
@@ -120,8 +121,80 @@ N1 a k dmod                           * ngspice OSDI-style instance letter `N`
 
 | Phase | Scope | Exit criterion |
 |---|---|---|
-| VA-1 | Preprocessor, lexer, parser, AST, diagnostics | Parses hand-written test models covering §3; robust errors |
-| VA-2 | Semantic analysis, IR, AD interpreter | Evaluates test models; Jacobians match finite differences |
+| VA-1 (done) | Preprocessor, lexer, parser, AST, diagnostics | Parses hand-written test models covering §3; robust errors |
+| VA-2 (done) | Semantic analysis, IR, AD interpreter | Evaluates test models; Jacobians match finite differences |
 | VA-3 | Device integration, `.hdl`, `N` instances | VA diode/resistor match built-ins; engine tests pass |
 | VA-4 | Coverage for real models, `$limit`, hoisting, node collapsing | User-supplied BSIM4/PSP103 parse and simulate; match ngspice+OpenVAF |
 | VA-5 | Performance (hoisting, JIT) | Within 2× of OSDI-compiled models in ngspice |
+
+
+## 8. VA-2 library API and execution contract
+
+`parse_va(text, loader)` produces a `SourceFile`; `compile_module(&source, name)` resolves and
+lowers one module to an immutable `CompiledModule`. `None` selects the last module. Compilation
+reports `E-VA-SEMA` for invalid names/types/arity/assignments and `E-VA-UNSUPPORTED` for constructs
+outside this phase, with source spans. Public frontend and evaluator types have rustdoc comments.
+No new dependencies or external source implementations are used.
+
+`compiled.bind(&[(name, value)])` evaluates defaults in declaration order, applies overrides,
+checks ranges, resolves aliases and records explicit supply for `$param_given`. `bind_instance`
+applies overrides to a model binding, retaining explicitly supplied model values and recomputing
+unsupplied dependent defaults. Integer parameters round to nearest (ties away from zero); integer
+variable assignments truncate toward zero. String parameters retain their source defaults and
+are usable in comparisons and case selection; the numeric binding API cannot override strings.
+Multiple `from` ranges form a union; every `exclude` removes values from that union. Local
+parameters cannot be externally overridden. Invalid bindings report `E-VA-PARAM`.
+
+`compiled.eval(&bound, &input, state, &mut output)` provides a convenience per-binding instance
+workspace. `eval_with_scratch(&bound, &input, state, &mut scratch, &mut output)` permits multiple
+instances or threads to share immutable bindings with separate `Scratch::default()` workspaces.
+`Bound` and `CompiledModule` are Send + Sync. Reusing a scratch with a different binding resets
+its retained variables. Output buffers and variable storage are reused; expression temporaries
+still allocate dynamic gradient vectors. Hoisting and allocation optimization remain VA-5 work.
+Treat the public compiled metadata as read-only.
+
+Unknown order is `ports`, `internal_nodes`, `branch_unknowns`. Ground ports retain an unused,
+zero residual row/column to preserve terminal order; their input voltage is ignored. Unused
+internal nets are omitted. Branch orientation follows its first contribution, and reversed
+accesses change sign. Each voltage branch injects its unknown current once, while its equation
+is `V(a,b) - sum(contributions)`; the charge channel of the sum has a negative sign in that row.
+The evaluator clears outputs each call, validates input/state shapes and stops on a runtime
+failure through `EvalOutput.error`. Loop execution has a total 100,000-step budget.
+
+Supply at least `state_len()` entries in both `StateIo` slices. Limiting reads the previous
+Newton value from `current` (falling back to `accepted` for a non-finite history entry), then
+writes the new value into `current`, including when limiting is disabled. The simulator must
+copy accepted state into current on rollback. Limiting retains the incoming voltage gradient:
+its Jacobian is the device linearization at the limited point, rather than a derivative of the
+limiting algorithm. `noncon` is set for a change larger than `1e-14 * (1 + abs(vnew))`.
+User limiters are called as `(vnew, vold, extra_args...)`. `fetlim` clamps a step to
+`0.5 + 0.5 * abs(vold - threshold)` volts. `limexp` equals `exp` through 80, with the tangent
+line continued above 80. Piecewise derivatives follow the active arm (first argument at min/max
+ties); `abs(0)` and `hypot(0,0)` have zero gradient.
+
+Initialization events all use `input.initial_step`; the caller controls when to assert it.
+Module variables retain numeric values between calls, while their old gradients are cleared.
+Block locals have per-instance static storage; function locals initialize on entry. `$temperature` is kelvin, `$vt` uses
+`k/q = 8.617333262145179e-5 V/K`, and `$simparam("gmin", default)` falls back to `input.gmin`.
+`analysis("ic")` follows `initial_step`; `static` is synonymous with `dc`. Informational system
+tasks and `$warning` are ignored. Error/finish/fatal tasks populate `output.error`.
+
+### Current limitations
+
+- `ddt` is supported only in contribution expressions, linearly with parameter-only scaling.
+  Dynamic scaling, nested derivatives and reactive temporaries produce compile diagnostics.
+- `ddx(e,V(n))` returns the first gradient component with **zero gradient of its own**;
+  second derivatives and differentiation with respect to `V(a,b)` are unsupported.
+- Reading a branch current requires a voltage contribution on that branch. Port-flow accesses,
+  `idt`, cross/timer events, recursion, and block-local parameters are unsupported.
+- Arrays are one-dimensional with parameter-only bounds and at most 100,001 elements;
+  array function arguments and their initializers are unsupported. Function nesting and
+  semantic expression nesting are capped at 128. Integer arithmetic uses f64 storage, so
+  integers beyond the exact f64 range are not represented exactly.
+- Noise generators return zero. There is no simulator integration, node collapsing, general
+  expression hoisting or JIT in this phase.
+
+The authored evaluator regression suite checks analytic resistor stamps, diode and nonlinear
+MOS-like charge Jacobians against central finite differences at relative tolerance `1e-6`,
+voltage-source signs/orientation, limiting state, ranges, integer arithmetic, arrays/control
+flow/functions, environment queries, initialization, runtime failure paths and spanned errors.

@@ -3,10 +3,14 @@
 use crate::VaLoader;
 use spx_diag::{Diagnostic, Span};
 use std::collections::BTreeMap;
+/// Expanded source and per-byte original source positions.
 #[derive(Debug, Clone)]
 pub struct Preprocessed {
+    /// Expanded source text.
     pub text: String,
+    /// Original source position for each byte of expanded text.
     pub positions: Vec<Span>,
+    /// Canonical source names indexed by span file IDs.
     pub sources: Vec<String>,
 }
 #[derive(Clone)]
@@ -23,6 +27,7 @@ struct Processor<'a> {
     expansion_positions: Vec<Span>,
     expansions: usize,
 }
+/// Expand directives and macros using only the supplied include loader.
 pub fn preprocess(text: &str, loader: &dyn VaLoader) -> (Preprocessed, Vec<Diagnostic>) {
     let mut p = Processor {
         loader,

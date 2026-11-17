@@ -7,6 +7,8 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 | Code | Severity | Summary |
 |---|---|---|
+| [`E-VA-SEMA`](#e-va-sema) | error | Invalid Verilog-A semantics |
+| [`E-VA-PARAM`](#e-va-param) | error | Invalid Verilog-A parameter binding |
 | [`E-VA-SYNTAX`](#e-va-syntax) | error | Invalid Verilog-A syntax |
 | [`E-VA-UNSUPPORTED`](#e-va-unsupported) | error | Unsupported Verilog-A construct |
 | [`E-VA-PREPROC`](#e-va-preproc) | error | Verilog-A preprocessing failed |
@@ -56,6 +58,18 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-API-UNKNOWN-ID`](#e-api-unknown-id) | error | Unknown circuit or job |
 | [`E-API-UNKNOWN-SIGNAL`](#e-api-unknown-signal) | error | Unknown signal |
 | [`E-API-ALTER`](#e-api-alter) | error | Cannot alter parameter |
+
+## E-VA-SEMA
+
+**Invalid Verilog-A semantics.** A name, type, assignment, branch access, or function call is invalid.
+
+- Check declarations, argument counts, types and contribution targets at the reported span.
+
+## E-VA-PARAM
+
+**Invalid Verilog-A parameter binding.** A parameter name is unknown, cannot be overridden, or violates its declared type or range.
+
+- Use a declared non-local parameter name and a finite value within its allowed ranges.
 
 ## E-VA-SYNTAX
 

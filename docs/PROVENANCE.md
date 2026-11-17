@@ -70,3 +70,22 @@ Reference simulators (ngspice) are only ever executed as external programs on ou
 - J. E. Meyer, "MOS models and circuit simulation", RCA Review 32, 1971.
 - P. Antognetti, G. Massobrio (eds.), *Semiconductor Device Modeling with SPICE*, 2nd ed.,
   McGraw-Hill, 1993.
+
+
+### Verilog-A VA-2
+
+- `spx-va/src/sema.rs` and `ir.rs`: original semantic analysis and resolved typed-tree lowering
+  from the Accellera Verilog-AMS LRM 2.4 and general compiler techniques. No external compiler
+  implementation was consulted or ported.
+- `spx-va/src/dual.rs` and `eval.rs`: original dynamic forward-mode differentiation from the
+  chain rule and general AD literature; DAE current/charge stamping from elementary modified
+  nodal analysis. Built-in derivatives are elementary analytic derivatives.
+- `spx-va/src/limit.rs`: original logarithmic junction limiter based on the published junction
+  voltage limiting idea in L. W. Nagel, *SPICE2*, ERL Memo M520 (1975). The field-effect voltage
+  step clamp is an original heuristic, not a port of another simulator's limiter.
+- `spx-va/tests/evaluator.rs`: models and test expectations authored for this change from
+  elementary resistor, exponential junction and square-law charge equations; central finite
+  differences provide independent derivative checks. No PDK files are included.
+
+VA-2 was implemented without network access, new dependencies, external source code, generated
+model code, or interface headers. There is no third-party code port requiring a NOTICE addition.
