@@ -278,7 +278,7 @@ pub(crate) fn dc_sweep(
     start: f64,
     stop: f64,
     step: f64,
-) -> Result<AnalysisResult, Diagnostic> {
+) -> Result<(AnalysisResult, crate::DcStats), Diagnostic> {
     let Some(original) = ckt.param(source, "dc") else {
         return Err(Diagnostic::error(
             "E-DC-SOURCE",
@@ -323,20 +323,29 @@ pub(crate) fn dc_sweep(
     }
     ckt.set_param(source, "dc", original);
     result?;
-    Ok(AnalysisResult {
-        kind: AnalysisKind::Dc,
-        scale: Some(Variable {
-            name: if is_current { "i-sweep" } else { "v-sweep" }.into(),
-            quantity: if is_current {
-                Quantity::Current
-            } else {
-                Quantity::Voltage
-            },
-        }),
-        scale_values: scale,
-        variables: variables(ckt),
-        data: Data::Real { columns: cols },
-    })
+    let stats = crate::DcStats {
+        source: source.to_owned(),
+        points: count,
+        iterations: ws.newton_iterations,
+        extra_solves: ws.newton_calls.saturating_sub(count),
+    };
+    Ok((
+        AnalysisResult {
+            kind: AnalysisKind::Dc,
+            scale: Some(Variable {
+                name: if is_current { "i-sweep" } else { "v-sweep" }.into(),
+                quantity: if is_current {
+                    Quantity::Current
+                } else {
+                    Quantity::Voltage
+                },
+            }),
+            scale_values: scale,
+            variables: variables(ckt),
+            data: Data::Real { columns: cols },
+        },
+        stats,
+    ))
 }
 
 fn ac_frequencies(sweep: AcSweep, points: u32, fstart: f64, fstop: f64) -> Vec<f64> {

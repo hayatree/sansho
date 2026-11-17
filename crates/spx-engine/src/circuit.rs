@@ -240,14 +240,62 @@ impl UnionFind {
 /// Include loader rooted at the HDL file; synthetic source loaders get built-ins only.
 struct HdlLoader<'a> {
     path: &'a str,
+    missing: std::cell::RefCell<Option<std::path::PathBuf>>,
+}
+impl<'a> HdlLoader<'a> {
+    fn new(path: &'a str) -> Self {
+        Self {
+            path,
+            missing: Default::default(),
+        }
+    }
+
+    fn resolve(&self, path: &str, from: Option<&str>) -> std::path::PathBuf {
+        let from = from.filter(|p| *p != "<input>").unwrap_or(self.path);
+        let base = std::path::Path::new(from)
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
+        base.join(path)
+    }
+}
+
+/// Files read by the VA preprocessor, for content-addressed black-box compilation.
+/// Built-in standard headers are supplied by each compiler. Missing user inputs
+/// return an I/O error of kind NotFound with the resolved include path.
+pub fn hdl_files(h: &spx_netlist::HdlSource) -> std::io::Result<Vec<std::path::PathBuf>> {
+    use std::{io, path::PathBuf};
+    let path = std::fs::canonicalize(&h.path)?;
+    let name = path.to_string_lossy();
+    let loader = HdlLoader::new(&name);
+    let (expanded, diagnostics) = spx_va::preproc::preprocess(&h.text, &loader);
+    if let Some(missing) = loader.missing.into_inner() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            missing.display().to_string(),
+        ));
+    }
+    if let Some(d) = diagnostics.iter().find(|d| d.is_error()) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, d.to_string()));
+    }
+    let mut files = vec![path];
+    files.extend(
+        expanded
+            .sources
+            .into_iter()
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute()),
+    );
+    files.sort();
+    files.dedup();
+    Ok(files)
 }
 impl spx_va::VaLoader for HdlLoader<'_> {
     fn load(&self, path: &str, from: Option<&str>) -> Result<(String, String), String> {
         self.standard_header(path, from)?.ok_or_else(|| {
-            format!(
-                "include {path} not found next to {}",
-                from.filter(|p| *p != "<input>").unwrap_or(self.path)
-            )
+            let full = self.resolve(path, from);
+            let error = format!("include {} not found", full.display());
+            self.missing.replace(Some(full));
+            error
         })
     }
     fn standard_header(
@@ -258,11 +306,7 @@ impl spx_va::VaLoader for HdlLoader<'_> {
         if !std::path::Path::new(self.path).is_file() {
             return Ok(None);
         }
-        let from = from.filter(|p| *p != "<input>").unwrap_or(self.path);
-        let base = std::path::Path::new(from)
-            .parent()
-            .unwrap_or(std::path::Path::new("."));
-        let full = base.join(path);
+        let full = self.resolve(path, from);
         match std::fs::read_to_string(&full) {
             Ok(text) => Ok(Some((full.display().to_string(), text))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -295,7 +339,7 @@ fn compile_hdl(
         if !seen.insert(&h.path) {
             continue;
         }
-        match spx_va::parse_va(&h.text, &HdlLoader { path: &h.path }) {
+        match spx_va::parse_va(&h.text, &HdlLoader::new(&h.path)) {
             Err(ds) => errors.extend(ds.into_iter().map(|d| hdl_diagnostic(d, h, &[]))),
             Ok(source) => {
                 for module in &source.modules {
@@ -403,7 +447,10 @@ pub(crate) fn compile_cached(
                 );
                 continue;
             };
-            let Some(module) = va_modules.get(&card.kind).or_else(|| {
+            let vbic = matches!(card.kind.as_str(), "npn" | "pnp")
+                && card.params.iter().any(|(k, v)| k == "level" && *v == 9.);
+            let module_name = if vbic { "vbic13_5t" } else { &card.kind };
+            let Some(module) = va_modules.get(module_name).or_else(|| {
                 card.kind
                     .strip_suffix("_va")
                     .and_then(|base| va_modules.get(&format!("{base}va")))
@@ -411,7 +458,7 @@ pub(crate) fn compile_cached(
                 errors.push(
                     Diagnostic::error(
                         "E-ELAB-PARAM",
-                        format!("{}: unknown Verilog-A module {}", e.name, card.kind),
+                        format!("{}: unknown Verilog-A module {module_name}", e.name),
                     )
                     .with_span(card.span),
                 );
@@ -420,8 +467,16 @@ pub(crate) fn compile_cached(
             let bound = if let Some(bound) = va_models.get(model) {
                 Arc::clone(bound)
             } else {
-                match module.bind_model(
-                    &card.params,
+                let mut values = card.params.clone();
+                if vbic {
+                    // level selects the device. The three SOA limits are ngspice checks.
+                    values.retain(|(k, _)| {
+                        !matches!(k.as_str(), "level" | "vbe_max" | "vce_max" | "vbc_max")
+                    });
+                    values.push(("type".into(), if card.kind == "pnp" { -1. } else { 1. }));
+                }
+                match module.bind_spice_model(
+                    &values,
                     spx_va::BindOptions {
                         tnom: opts.tnom,
                         gmin: opts.gmin,

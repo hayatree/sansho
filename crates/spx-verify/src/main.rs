@@ -13,6 +13,9 @@
 
 #![forbid(unsafe_code)]
 
+mod reference;
+
+use reference::Problem;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -30,8 +33,11 @@ use spx_verify::{
 struct Cli {
     /// Decks to verify (default: every `.cir` in `verify/decks`).
     decks: Vec<PathBuf>,
+    /// Add every .cir in this directory (a positional directory works too).
+    #[arg(long)]
+    dir: Option<PathBuf>,
     /// Reference simulator command.
-    #[arg(long, default_value = "tools/ngspice/ngspice.sh")]
+    #[arg(long, default_value = reference::WRAPPER)]
     reference: String,
     /// Directory for raw files.
     #[arg(long, default_value = "verify/out")]
@@ -51,6 +57,9 @@ struct Cli {
 struct Entry {
     deck: String,
     pass: bool,
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    missing: Option<String>,
     #[serde(flatten)]
     report: DeckReport,
 }
@@ -63,50 +72,46 @@ fn fail(msg: String) -> DeckReport {
     }
 }
 
-fn verify(deck: &Path, cli: &Cli) -> DeckReport {
-    let text = match std::fs::read_to_string(deck) {
-        Ok(t) => t,
-        Err(e) => return fail(format!("cannot read deck: {e}")),
-    };
+fn verify(deck: &Path, cli: &Cli) -> Result<DeckReport, Problem> {
+    let deck = deck.canonicalize()?;
+    let text = std::fs::read_to_string(&deck)?;
+    let nl = reference::parse(&deck, &text)?;
+    let prepared = reference::prepare(&deck, &text, &nl, cli)?;
     let stem = deck
         .file_stem()
         .map_or_else(|| "deck".into(), |s| s.to_string_lossy().into_owned());
     let ref_raw = cli.out.join(format!("{stem}.ref.raw"));
-    if !cli.cached {
-        let status = Command::new(&cli.reference)
-            .arg("-b")
-            .arg(deck)
-            .arg("-r")
-            .arg(&ref_raw)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(s) => return fail(format!("reference simulator exited with {s}")),
-            Err(e) => return fail(format!("cannot run `{}`: {e}", cli.reference)),
+    let reference = if cli.cached {
+        read_reference(&ref_raw)?
+    } else {
+        let path = if nl.hdl.is_empty() {
+            deck.clone()
+        } else {
+            let p = cli.out.join(format!("{stem}.ref.cir"));
+            std::fs::write(&p, &prepared)?;
+            p
+        };
+        // Only publish a cache entry after the command produces a readable plot.
+        let pending = ref_raw.with_extension(format!("{}.raw", std::process::id()));
+        std::fs::File::create(&pending)?;
+        let fresh =
+            run_reference(cli, &path, Some(&pending)).and_then(|_| read_reference(&pending));
+        if fresh.is_err() {
+            let _ = std::fs::remove_file(&pending);
         }
-    }
-    let reference = match std::fs::read_to_string(&ref_raw)
-        .map_err(|e| e.to_string())
-        .and_then(|t| spx_output::read_raw_ascii(&t).map_err(|e| e.to_string()))
-    {
-        Ok(r) => r,
-        Err(e) => return fail(format!("cannot read reference results: {e}")),
-    };
-    let nl = match spx_netlist::parse_file(deck) {
-        Ok(nl) => nl,
-        Err(d) => return fail(format!("parse failed: {}", d[0])),
+        let fresh = fresh?;
+        std::fs::rename(pending, &ref_raw)?;
+        fresh
     };
     let ours = match spx_engine::run(&nl) {
         Ok(o) => o.results,
         Err(e) => {
-            return fail(format!(
+            return Err(Problem::Failed(format!(
                 "simulation failed: {}",
                 e.diagnostics
                     .first()
                     .map_or(String::new(), ToString::to_string)
-            ));
+            )));
         }
     };
     if let Ok(f) = std::fs::File::create(cli.out.join(format!("{stem}.spx.raw"))) {
@@ -117,70 +122,145 @@ fn verify(deck: &Path, cli: &Cli) -> DeckReport {
     let tol = Tolerances::from_deck(&text);
     let mut report = compare(&reference, &ours, &tol);
     if !ours.measures.is_empty() {
-        match reference_measures(&text, &stem, cli) {
-            Ok(r) => compare_measures(&r, &ours, &tol, &mut report),
-            Err(e) => report.problems.push(e),
-        }
+        let r = reference_measures(&prepared, &stem, &nl, cli)?;
+        compare_measures(&r, &ours, &tol, &mut report);
     }
-    report
+    Ok(report)
+}
+
+fn read_reference(path: &Path) -> Result<spx_output::SimResults, Problem> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| Problem::Failed(format!("cannot read {}: {e}", path.display())))?;
+    let results = spx_output::read_raw_ascii(&text)
+        .map_err(|e| Problem::Failed(format!("{}: {e}", path.display())))?;
+    if results.analyses.is_empty() {
+        return Err(Problem::Failed(format!(
+            "{} contains no supported reference plots",
+            path.display()
+        )));
+    }
+    Ok(results)
+}
+
+fn run_reference(
+    cli: &Cli,
+    path: &Path,
+    raw: Option<&Path>,
+) -> Result<std::process::Output, Problem> {
+    let mut cmd = Command::new(&cli.reference);
+    cmd.env("SPX_VERIFY_OUT", &cli.out).arg("-b").arg(path);
+    if let Some(p) = raw {
+        cmd.arg("-r").arg(p);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| Problem::Failed(format!("cannot run {}: {e}", cli.reference)))?;
+    if !output.status.success() {
+        return Err(Problem::Failed(format!(
+            "reference simulator exited with {}: {}{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(output)
 }
 
 /// Run (or load cached) reference measurements.
-fn reference_measures(text: &str, stem: &str, cli: &Cli) -> Result<Vec<(String, f64)>, String> {
+fn reference_measures(
+    text: &str,
+    stem: &str,
+    nl: &spx_netlist::Netlist,
+    cli: &Cli,
+) -> Result<Vec<(String, f64)>, Problem> {
     let log = cli.out.join(format!("{stem}.ref.meas"));
     if !cli.cached {
-        let deck = measure_deck(text).ok_or("no .meas cards")?;
+        let deck = measure_deck(text).ok_or_else(|| Problem::Failed("no .meas cards".into()))?;
         let path = cli.out.join(format!("{stem}.meas.cir"));
-        std::fs::write(&path, deck).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-        let output = Command::new(&cli.reference)
-            .arg("-b")
-            .arg(&path)
-            .output()
-            .map_err(|e| format!("cannot run `{}`: {e}", cli.reference))?;
-        std::fs::write(&log, &output.stdout)
-            .map_err(|e| format!("cannot write {}: {e}", log.display()))?;
+        std::fs::write(&path, deck)?;
+        let output = run_reference(cli, &path, None)?;
+        std::fs::write(&log, &output.stdout)?;
     }
-    let out =
-        std::fs::read_to_string(&log).map_err(|e| format!("cannot read {}: {e}", log.display()))?;
-    let names: Vec<String> = spx_netlist::parse(text)
-        .map(|nl| nl.measures.iter().map(|m| m.name.clone()).collect())
-        .unwrap_or_default();
+    let out = std::fs::read_to_string(&log)
+        .map_err(|e| Problem::Failed(format!("cannot read {}: {e}", log.display())))?;
+    let names = nl
+        .measures
+        .iter()
+        .map(|m| m.name.clone())
+        .collect::<Vec<_>>();
     Ok(parse_measure_output(&out, &names))
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    let mut decks = cli.decks.clone();
-    if decks.is_empty() {
-        match std::fs::read_dir("verify/decks") {
-            Ok(rd) => {
-                decks = rd
-                    .filter_map(Result::ok)
-                    .map(|e| e.path())
-                    .filter(|p| p.extension().is_some_and(|e| e == "cir"))
-                    .collect();
-                decks.sort();
+    let mut cli = Cli::parse();
+    let mut inputs = cli.decks.clone();
+    inputs.extend(cli.dir.clone());
+    if inputs.is_empty() {
+        inputs.push("verify/decks".into());
+    }
+    let mut decks = Vec::new();
+    for path in inputs {
+        if path.is_dir() {
+            let listing = std::fs::read_dir(&path).and_then(|rd| {
+                rd.map(|e| e.map(|e| e.path()))
+                    .collect::<Result<Vec<_>, _>>()
+            });
+            match listing {
+                Ok(mut paths) => {
+                    paths.retain(|p| p.extension().is_some_and(|x| x == "cir"));
+                    paths.sort();
+                    decks.extend(paths);
+                }
+                Err(e) => {
+                    eprintln!("cannot list {}: {e}", path.display());
+                    return ExitCode::from(2);
+                }
             }
-            Err(e) => {
-                eprintln!("error: cannot list verify/decks: {e}");
-                return ExitCode::from(2);
-            }
+        } else {
+            decks.push(path);
         }
     }
     if let Err(e) = std::fs::create_dir_all(&cli.out) {
         eprintln!("error: cannot create {}: {e}", cli.out.display());
         return ExitCode::from(2);
     }
+    match cli.out.canonicalize() {
+        Ok(path) => cli.out = path,
+        Err(e) => {
+            eprintln!("cannot resolve output directory: {e}");
+            return ExitCode::from(2);
+        }
+    }
     let mut entries = Vec::new();
     for d in &decks {
-        let report = verify(d, &cli);
+        let (report, missing) = match verify(d, &cli) {
+            Ok(r) => (r, None),
+            Err(Problem::Failed(e)) => (fail(e), None),
+            Err(Problem::Missing(path)) => (
+                DeckReport {
+                    vars: vec![],
+                    measures: vec![],
+                    problems: vec![],
+                },
+                Some(path),
+            ),
+        };
+        let pass = missing.is_none() && report.pass();
         entries.push(Entry {
             deck: d.display().to_string(),
-            pass: report.pass(),
+            pass,
+            status: if missing.is_some() {
+                "SKIP"
+            } else if pass {
+                "PASS"
+            } else {
+                "FAIL"
+            },
+            missing,
             report,
         });
     }
-    let all = entries.iter().all(|e| e.pass);
+    let all = entries.iter().all(|e| e.pass || e.missing.is_some());
     if cli.json {
         match serde_json::to_string_pretty(&entries) {
             Ok(s) => println!("{s}"),
@@ -188,7 +268,10 @@ fn main() -> ExitCode {
         }
     } else {
         for e in &entries {
-            println!("{} {}", if e.pass { "PASS" } else { "FAIL" }, e.deck);
+            println!("{} {}", e.status, e.deck);
+            if let Some(path) = &e.missing {
+                println!("    missing input: {path}");
+            }
             for p in &e.report.problems {
                 println!("    problem: {p}");
             }
@@ -223,7 +306,11 @@ fn main() -> ExitCode {
             }
         }
         let passed = entries.iter().filter(|e| e.pass).count();
-        println!("{passed}/{} decks passed", entries.len());
+        let skipped = entries.iter().filter(|e| e.missing.is_some()).count();
+        println!(
+            "{passed}/{} decks passed, {skipped} skipped",
+            entries.len() - skipped
+        );
     }
     if all {
         ExitCode::SUCCESS

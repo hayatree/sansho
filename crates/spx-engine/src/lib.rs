@@ -15,7 +15,7 @@ mod options;
 mod parallel;
 mod solve;
 
-pub use circuit::{Circuit, compile};
+pub use circuit::{Circuit, compile, hdl_files};
 pub use options::{Method, SimOptions};
 pub use parallel::default_threads;
 
@@ -32,9 +32,24 @@ use spx_diag::Diagnostic;
 use spx_netlist::{AnalysisCard, Netlist};
 use spx_output::SimResults;
 
+/// Newton work across an entire DC sweep, including its initial operating point.
+#[derive(Debug, Clone)]
+pub struct DcStats {
+    /// Swept source.
+    pub source: String,
+    /// Number of converged bias points.
+    pub points: usize,
+    /// All Newton iterations, including unsuccessful attempts.
+    pub iterations: usize,
+    /// Additional solves beyond one Newton solve per point.
+    pub extra_solves: usize,
+}
+
 /// Successful run: results plus non-fatal diagnostics.
 #[derive(Debug, Clone)]
 pub struct RunOutput {
+    /// Statistics in DC card order.
+    pub dc_stats: Vec<DcStats>,
     /// Results of every analysis, in netlist order.
     pub results: SimResults,
     /// Warnings collected during parsing, elaboration and analysis.
@@ -120,7 +135,8 @@ fn run_analysis(
     nl: &Netlist,
     opts: &SimOptions,
     card: &AnalysisCard,
-) -> Result<spx_output::AnalysisResult, Diagnostic> {
+) -> Result<(spx_output::AnalysisResult, Option<DcStats>), Diagnostic> {
+    let mut stats = None;
     // Retained VA interpreter variables belong to an analysis, never to concurrent analyses.
     let owned = if !nl.hdl.is_empty() && !matches!(card, AnalysisCard::Dc { .. }) {
         Some(
@@ -153,7 +169,12 @@ fn run_analysis(
                     })
                 })?
                 .0;
-            analysis::dc_sweep(&mut own, opts, source, *start, *stop, *step)
+            analysis::dc_sweep(&mut own, opts, source, *start, *stop, *step).map(
+                |(analysis, dc)| {
+                    stats = Some(dc);
+                    analysis
+                },
+            )
         }
         AnalysisCard::Ac {
             sweep,
@@ -186,7 +207,7 @@ fn run_analysis(
             }
         }
     }
-    Ok(result)
+    Ok((result, stats))
 }
 
 fn card_span(card: &AnalysisCard) -> spx_diag::Span {
@@ -227,9 +248,13 @@ pub fn run_in_current_pool(nl: &Netlist) -> Result<RunOutput, RunError> {
         title: nl.title.clone(),
         analyses: Vec::new(),
     };
+    let mut dc_stats = vec![];
     for (card, r) in nl.analyses.iter().zip(outcomes) {
         match r {
-            Ok(a) => results.analyses.push(a),
+            Ok((a, stats)) => {
+                results.analyses.push(a);
+                dc_stats.extend(stats);
+            }
             Err(d) => {
                 let mut diagnostics = vec![d.with_span(card_span(card))];
                 diagnostics.extend(warnings);
@@ -249,5 +274,9 @@ pub fn run_in_current_pool(nl: &Netlist) -> Result<RunOutput, RunError> {
             ));
         }
     }
-    Ok(RunOutput { results, warnings })
+    Ok(RunOutput {
+        results,
+        warnings,
+        dc_stats,
+    })
 }

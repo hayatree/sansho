@@ -300,6 +300,13 @@ fn builtin(name: &str, a: &[f64]) -> Option<Result<f64, String>> {
         "atan2" => two(f64::atan2),
         "min" => two(f64::min),
         "max" => two(f64::max),
+        "agauss" => arity(3).and_then(|()| {
+            if a[1] == 0. || a[2] == 0. {
+                Ok(a[0])
+            } else {
+                Err("agauss with active statistical variation is unsupported".into())
+            }
+        }),
         "limit" => arity(3).map(|()| a[0].clamp(a[1].min(a[2]), a[1].max(a[2]))),
         _ => return None,
     })

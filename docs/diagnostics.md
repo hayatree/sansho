@@ -7,6 +7,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 | Code | Severity | Summary |
 |---|---|---|
+| [`E-PARSE-COND`](#e-parse-cond) | error | Invalid conditional netlist block |
 | [`E-VA-SEMA`](#e-va-sema) | error | Invalid Verilog-A semantics |
 | [`E-VA-EVAL`](#e-va-eval) | error | Verilog-A evaluation failed |
 | [`E-VA-PARAM`](#e-va-param) | error | Invalid Verilog-A parameter binding |
@@ -59,6 +60,12 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-API-UNKNOWN-ID`](#e-api-unknown-id) | error | Unknown circuit or job |
 | [`E-API-UNKNOWN-SIGNAL`](#e-api-unknown-signal) | error | Unknown signal |
 | [`E-API-ALTER`](#e-api-alter) | error | Cannot alter parameter |
+
+## E-PARSE-COND
+
+**Invalid conditional netlist block.** A conditional directive is misplaced, unbalanced or has an invalid expression.
+
+- Check the parameter scope and the nesting of .if, .elseif, .else and .endif.
 
 ## E-VA-SEMA
 

@@ -250,6 +250,15 @@ fn run(
             }
             print_diags(&out.warnings);
             summary(&out.results);
+            for dc in &out.dc_stats {
+                println!(
+                    "DC {}: {:.2} Newton iterations/point ({} iterations, {} extra solves)",
+                    dc.source,
+                    dc.iterations as f64 / dc.points as f64,
+                    dc.iterations,
+                    dc.extra_solves
+                );
+            }
             Ok(ExitCode::SUCCESS)
         }
         Err(err) => {

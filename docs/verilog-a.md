@@ -1,6 +1,6 @@
 # Verilog-A compact-model compiler (`spx-va`)
 
-VA-4a is complete. Locally supplied IHP compact models compile, bind and pass DC residual and Jacobian checks. The simulator runs compiled modules in OP, DC, AC and transient analyses.
+VA-4b runs production IHP corner circuits through DC, AC and transient analyses. Section 11 gives the circuit coverage, multiplier semantics and reference commands.
 
 ## 1. Purpose and constraints
 
@@ -129,7 +129,7 @@ N1 a k dmod                           * ngspice OSDI-style instance letter `N`
 | VA-2 (done) | Semantic analysis, IR, AD interpreter | Evaluates test models; Jacobians match finite differences |
 | VA-3 (done) | Device integration, `.hdl`, `N` instances | VA diode/resistor match built-ins; engine tests pass |
 | VA-4a (done) | Compact-model coverage, parameter kinds, per-instance collapse | IHP model smoke and Jacobian tests, PSP103 engine DC sweep |
-| VA-4b | Black-box comparison with ngspice + OpenVAF | Compare bias sweeps and small-signal results on user-supplied models |
+| VA-4b (done) | Black-box comparison with ngspice + OpenVAF | 10/10 IHP decks pass; with tight Newton tolerances PSP103 I-V matches to ~1e-14 relative |
 | VA-5 | Performance (hoisting, JIT) | Within 2× of OSDI-compiled models in ngspice |
 
 
@@ -257,8 +257,8 @@ No network, external code, interface headers or new third-party dependencies wer
 
 ## 10. VA-4a bindings and production-model tests
 
-`bind_model` accepts SPICE model-card values and the circuit's nominal temperature (°C)
-and gmin (S). A parameter with `(* type="instance" *)` belongs on the N line. A parameter
+The strict VA binding API `bind_model` accepts model values and the circuit's nominal temperature (°C)
+and gmin (S). It reserves parameters marked `(* type="instance" *)` for instance binding. The SPICE adapter also accepts model-card defaults for these parameters (§11). A parameter
 with `(* type="model" *)` belongs on the model card. Unannotated model parameters also
 accept instance overrides. Aliases inherit placement. Name lookup ignores ASCII case,
 rejects ambiguous spellings and suggests the closest declared name for unknown parameters.
@@ -290,3 +290,67 @@ trailing `_va` spelling for a loaded module ending in `va`, with exact matches t
 priority. The smoke suite also selects the source configurations declaring `PSP103_VA`
 and three-terminal `vbic13_va`. The engine test sweeps a 1 µm by 1 µm NMOS at 1.2 V
 drain bias and checks convergence and monotonic drain current.
+
+## 11. VA-4b production circuits
+
+The ten circuits in `verify/va-decks` run through the CLI and library simulation
+paths. They exercise SG13G2 NMOS and PMOS characteristics, inverter DC and delay,
+a five-stage ring, common-source AC gain, HBT collector and base currents, and a
+poly resistor at 60 °C. The decks select typical corners from the local IHP
+libraries. The bundled inputs in this directory are original test circuits and
+a two-directive wrapper selecting the five-terminal configuration of VBIC.
+
+The IHP HBT library selects ngspice's native VBIC through a five-terminal
+`Q` instance and an NPN level-9 model card. For this form spx binds the
+loaded `vbic13_5t` module, sets the transistor polarity, and connects the
+substrate and thermal terminals. The three ngspice safe-operating-area voltage
+limits are advisory and have no effect on the equations. The reference deck
+retains the library's native level-9 device. The PSP and resistor reference
+circuits use the loaded OSDI devices.
+
+### SPICE instance multiplicity
+
+For an N instance, `m` and `mult` address the module's declared multiplier
+when it declares either spelling or an alias. When both are declared, each
+spelling addresses its own declaration. The model controls the scaling in
+this case and the intrinsic `$mfactor` is one. Geometry parameters such as
+`nf` pass through to the declared VA parameter.
+
+When neither multiplier is declared, positive `m` (also spelled `mult`)
+defaults to one and supplies `$mfactor`. The simulator sums terminal
+currents and charges over that many parallel copies, including their Newton
+and small-signal Jacobians. Internal branch currents and voltages describe
+one copy. SPICE model cards may supply instance defaults, including via an
+alias. An explicit N-line value overrides the corresponding default.
+
+### Running and comparing
+
+From the checkout root, with the files listed in each deck header installed locally:
+
+```sh
+cargo run -p spx-cli -- run verify/va-decks/psp_nmos_idvg.cir
+cargo test -p spx-engine --test verilog_a ihp_corner_transfer_and_inverter_switching
+cargo run --release -p spx-verify -- verify/va-decks
+cargo run --release -p spx-verify -- --cached verify/va-decks
+```
+
+The local NMOS reaches 401 µA at 1.2 V on both gate and drain. The loaded
+inverter delay is 33.2 ps and the ring period is 557 ps. Across these typical
+corner DC decks, the existing continuation strategy took 2.00–3.06 Newton
+iterations per point on average, including the initial bias solve. Each point
+converged on its first solve. The CLI prints the counts, also available as
+`RunOutput::dc_stats`. These runs use the VA-4a limiter and gmin handling.
+
+The Docker comparison awaits reference generation. The typical-corner
+netlist evaluator supports disabled statistical variation in `agauss`.
+Active random mismatch and Monte Carlo corners remain unsupported.
+
+### 11.x Reference comparison results (2026-11-18)
+
+`cargo run --release -p spx-verify -- verify/va-decks` passes 10/10 decks against ngspice 44.2 with
+models compiled by OpenVAF-Reloaded v24.0.2mob (both run as black boxes in Docker). At the default
+tolerances (`reltol=1e-3`) the median relative drain-current difference of the PSP103 sweeps is
+below 1e-11; isolated points differ by up to 1e-3 because the two simulators stop Newton at
+different iterates. With `.option reltol=1e-7 abstol=1e-15 vntol=1e-9` on both sides the maximum
+relative difference is 2.4e-11 (Id-Vg) and 7.9e-15 (Id-Vd), i.e. the model evaluation agrees to
+rounding.

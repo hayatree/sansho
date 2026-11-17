@@ -61,6 +61,12 @@ const fn w(
 
 /// All registered codes, grouped by prefix.
 pub const CODES: &[CodeInfo] = &[
+    e(
+        "E-PARSE-COND",
+        "Invalid conditional netlist block",
+        "A conditional directive is misplaced, unbalanced or has an invalid expression.",
+        &["Check the parameter scope and the nesting of .if, .elseif, .else and .endif."],
+    ),
     // --- Verilog-A compiler ---
     e(
         "E-VA-SEMA",

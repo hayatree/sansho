@@ -221,9 +221,10 @@ fn lower(m: &ast::Module, potentials: BTreeSet<String>) -> R<CompiledModule> {
         l.branch_names.push(format!("{id}#flow"));
     }
     let mut params: Vec<ParamInfo> = Vec::new();
+    let multiplier = |s: &str| s.eq_ignore_ascii_case("m") || s.eq_ignore_ascii_case("mult");
     if !m.items.iter().any(|item| {
-        matches!(&item.kind,I::Param(p) if p.name.name.eq_ignore_ascii_case("m"))
-            || matches!(&item.kind,I::AliasParam{name,..} if name.name.eq_ignore_ascii_case("m"))
+        matches!(&item.kind,I::Param(p) if multiplier(&p.name.name))
+            || matches!(&item.kind,I::AliasParam{name,..} if multiplier(&name.name))
     }) {
         let default = ast::Expr {
             kind: A::Real(1.),
@@ -362,6 +363,14 @@ fn lower(m: &ast::Module, potentials: BTreeSet<String>) -> R<CompiledModule> {
             if *index != Some(i) {
                 *index = None;
             }
+        }
+    }
+    // The two SPICE instance spellings address the same multiplier unless both exist.
+    for (alias, declared) in [("m", "mult"), ("mult", "m")] {
+        if !param_index.contains_key(alias)
+            && let Some(index) = param_index.get(declared).copied()
+        {
+            param_index.insert(alias.into(), index);
         }
     }
     Ok(CompiledModule {

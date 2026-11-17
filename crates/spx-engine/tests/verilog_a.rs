@@ -456,3 +456,69 @@ fn integral_has_an_initial_condition_and_a_dynamic_state_equation() {
     close(ac.0, 0., 0., 1e-12);
     close(ac.1, -1. / (std::f64::consts::TAU * 100.), 1e-8, 1e-12);
 }
+
+#[test]
+fn parallel_va_instances_scale_terminal_currents_and_charges_once() {
+    struct Loader;
+    impl SourceLoader for Loader {
+        fn load(&self, _: &str, _: Option<&str>) -> Result<(String, String), String> {
+            Ok((
+                "parallel.va".into(),
+                "module plain(p,n); electrical p,n; analog I(p,n)<+V(p,n)+ddt(V(p,n)); endmodule
+                 module own(p,n); electrical p,n; parameter real MuLt=1;
+                 analog I(p,n)<+MuLt*V(p,n)+MuLt*ddt(V(p,n)); endmodule
+                 module meter(p,n); electrical p,n; analog V(p,n)<+$mfactor; endmodule"
+                    .into(),
+            ))
+        }
+    }
+    // Both the ordinary current and the capacitive susceptance triple.
+    // A voltage contribution exposes $mfactor without scaling its voltage.
+    for model in ["plain", "own"] {
+        for key in ["m", "mult"] {
+            let text = format!(
+                "copies\n.model active {model}\n.hdl parallel.va\nV1 p 0 1 AC 1\nN1 p 0 active {key}=3\n.model sense meter\nNs b 0 sense m=4\nRs b 0 1k\n.op\n.ac lin 1 1 1\n"
+            );
+            let nl = parse_with(&text, &Loader).unwrap();
+            let r = spx_engine::run(&nl).unwrap().results;
+            close(r.analyses[0].real("i(v1)").unwrap()[0], -3., 1e-12, 0.);
+            close(r.analyses[0].real("v(b)").unwrap()[0], 4., 1e-12, 0.);
+            let (g, b) = r.analyses[1].complex("i(v1)").unwrap()[0];
+            close(g, -3., 1e-12, 0.);
+            close(b, -3. * std::f64::consts::TAU, 1e-12, 0.);
+        }
+    }
+}
+
+#[test]
+fn ihp_corner_transfer_and_inverter_switching() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    if !root
+        .join("va-models/ihp/ngspice-models/cornerMOSlv.lib")
+        .try_exists()
+        .unwrap()
+        || !root
+            .join("va-models/ihp/psp103/psp103.va")
+            .try_exists()
+            .unwrap()
+    {
+        eprintln!("skipping IHP circuit tests: local SG13G2 inputs absent");
+        return;
+    }
+    let run = |name: &str| {
+        let nl = spx_netlist::parse_file(&root.join("verify/va-decks").join(name)).unwrap();
+        spx_engine::run(&nl).unwrap()
+    };
+    let dc = run("psp_nmos_idvg.cir");
+    let i = dc.results.analyses[0].real("i(vd)").unwrap();
+    assert_eq!(i.len(), 121);
+    assert!(i.windows(2).all(|x| x[1] <= x[0]));
+    assert!(i[0].abs() < 1e-8 && (1e-4..1e-3).contains(&-i[120]));
+    assert_eq!(dc.dc_stats[0].extra_solves, 0);
+    let tran = run("psp_inverter_tran.cir").results;
+    let a = &tran.analyses[0];
+    assert!(interp(a, "v(out)", 100e-12) > 1.15);
+    assert!(interp(a, "v(out)", 600e-12) < 0.05);
+    assert!(interp(a, "v(out)", 1.5e-9) > 1.15);
+    assert!((1e-12..200e-12).contains(&tran.measures[0].value.unwrap()));
+}

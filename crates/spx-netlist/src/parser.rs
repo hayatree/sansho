@@ -596,6 +596,31 @@ impl Parser {
     fn resolve_bjt_substrates(&mut self) {
         let tails = std::mem::take(&mut self.bjt_tail);
         for (idx, tail) in tails {
+            if self.has_hdl
+                && let [substrate, thermal, model] = tail.as_slice()
+                && self.models.iter().any(|m| {
+                    m.name == model.lower()
+                        && matches!(m.kind.as_str(), "npn" | "pnp")
+                        && m.params.iter().any(|(k, v)| k == "level" && *v == 9.)
+                })
+                && let Some(element) = self.elements.get_mut(idx)
+                && let ElementKind::Bjt {
+                    c, b, e, params, ..
+                } = &mut element.kind
+            {
+                element.kind = ElementKind::Va {
+                    nodes: vec![
+                        c.clone(),
+                        b.clone(),
+                        e.clone(),
+                        node_name(substrate),
+                        node_name(thermal),
+                    ],
+                    model: model.lower(),
+                    params: std::mem::take(params),
+                };
+                continue;
+            }
             let is_model = |t: &Token| self.models.iter().any(|m| m.name == t.lower());
             let (sub, model, rest) = if is_model(&tail[0]) || tail.len() == 1 {
                 (None, &tail[0], &tail[1..])
@@ -967,8 +992,16 @@ impl Parser {
                             i += 3;
                             continue;
                         }
-                        let Some(v) = self.number(vt, &name) else {
-                            return;
+                        let Some(v) = parse_number(&vt.text) else {
+                            self.diags.push(
+                                Diagnostic::warning(
+                                    "W-OPT-IGNORED",
+                                    format!("unsupported option `{name}={}` was ignored", vt.text),
+                                )
+                                .with_span(vt.span),
+                            );
+                            i += 3;
+                            continue;
                         };
                         self.options.push(OptionCard {
                             name,
@@ -1051,6 +1084,13 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_string_option_warns_and_parsing_continues() {
+        let nl = parse("options\n.option filetype=ascii reltol=0.001\nR1 a 0 1k\n.op\n").unwrap();
+        assert!(nl.warnings.iter().any(|d| d.code == "W-OPT-IGNORED"));
+        assert_eq!(nl.options[0].name, "reltol");
+    }
 
     #[test]
     fn parses_elements_and_analyses() {

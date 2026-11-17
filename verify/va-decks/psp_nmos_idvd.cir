@@ -1,0 +1,14 @@
+* NMOS output characteristic at Vgs=0.6 V
+* Requires va-models/ihp/psp103/{psp103,psp103_nqs}.va with adjacent includes,
+* and ngspice-models/cornerMOSlv.lib with sg13g2_moslv_{mod,parm}.lib.
+* .save selects reference signals. spx records all unknowns.
+* Provenance: original SG13G2 test circuit.
+.lib "../../va-models/ihp/ngspice-models/cornerMOSlv.lib" mos_tt
+.hdl "../../va-models/ihp/psp103/psp103.va"
+.hdl "../../va-models/ihp/psp103/psp103_nqs.va"
+Vd d 0 0
+Vg g 0 0.6
+Xd d g 0 0 sg13_lv_nmos w=1u l=0.13u
+.dc Vd 0 1.5 10m
+.save i(vd)
+.end

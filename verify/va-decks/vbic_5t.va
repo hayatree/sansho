@@ -1,0 +1,4 @@
+// Five-terminal VBIC entry point for level-9 Q instances.
+// Provenance: original preprocessor wrapper for a locally supplied model.
+`define fiveTerminal
+`include "../../va-models/ihp/vbic_1p3/vbic_1p3.va"

@@ -16,6 +16,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use spx_diag::{Confidence, Diagnostic, Span};
 
@@ -49,8 +50,9 @@ pub struct FsLoader {
     pub base: PathBuf,
 }
 
-impl SourceLoader for FsLoader {
-    fn load(&self, path: &str, from: Option<&str>) -> Result<(String, String), String> {
+impl FsLoader {
+    /// Resolve a netlist reference using the same directory as the parser.
+    pub fn resolve(&self, path: &str, from: Option<&str>) -> PathBuf {
         let expanded = match path.strip_prefix("~/") {
             Some(rest) => std::env::var_os("HOME")
                 .map_or_else(|| PathBuf::from(path), |h| PathBuf::from(h).join(rest)),
@@ -59,13 +61,22 @@ impl SourceLoader for FsLoader {
         let dir = from
             .and_then(|f| Path::new(f).parent().map(Path::to_path_buf))
             .unwrap_or_else(|| self.base.clone());
-        let full = if expanded.is_absolute() {
+        if expanded.is_absolute() {
             expanded
         } else {
             dir.join(expanded)
-        };
-        let text = std::fs::read_to_string(&full)
-            .map_err(|e| format!("cannot read `{}`: {e}", full.display()))?;
+        }
+    }
+}
+
+impl SourceLoader for FsLoader {
+    fn load(&self, path: &str, from: Option<&str>) -> Result<(String, String), String> {
+        let full = self.resolve(path, from);
+        let bytes =
+            std::fs::read(&full).map_err(|e| format!("cannot read `{}`: {e}", full.display()))?;
+        // Legacy SPICE libraries sometimes carry Latin-1 characters in comments.
+        let text = String::from_utf8(bytes)
+            .unwrap_or_else(|e| e.into_bytes().into_iter().map(char::from).collect());
         Ok((full.display().to_string(), text))
     }
 }
@@ -88,10 +99,8 @@ struct SubcktDef {
     ports: Vec<String>,
     /// Default parameters (`name = expr`), evaluated in the instance scope.
     defaults: Vec<(String, Expr)>,
-    /// Body lines (nested definitions removed).
+    /// Body lines for per-instance elaboration.
     body: Vec<Line>,
-    /// Model names defined in the body.
-    models: HashSet<String>,
     span: Span,
 }
 
@@ -223,7 +232,9 @@ fn head(line: &Line) -> String {
 /// Text after the first word of the raw line.
 fn raw_rest(line: &Line) -> &str {
     let r = line.raw.trim_start();
-    r.find(char::is_whitespace).map_or("", |i| r[i..].trim())
+    r.get(line.tokens[0].text.len()..)
+        .unwrap_or_default()
+        .trim()
 }
 
 fn unquote(s: &str) -> &str {
@@ -252,13 +263,13 @@ impl Pre<'_> {
             .push(Diagnostic::error(code, msg).with_span(span));
     }
 
-    /// Load and lex a file; returns its lines and resolved path.
-    fn load(&mut self, path: &str, from: Option<&str>, span: Span) -> Option<(Vec<Line>, String)> {
+    /// Load and lex a file, retaining its resolved path in the span source table.
+    fn load(&mut self, path: &str, from: Option<&str>, span: Span) -> Option<Vec<Line>> {
         match self.loader.load(path, from) {
             Ok((resolved, text)) => {
                 let idx = self.sources.len() as u32;
-                self.sources.push(resolved.clone());
-                Some((lex_source(&text, idx, false).lines, resolved))
+                self.sources.push(resolved);
+                Some(lex_source(&text, idx, false).lines)
             }
             Err(e) => {
                 self.diags.push(
@@ -275,11 +286,34 @@ impl Pre<'_> {
     }
 
     /// Expand `.include` / `.lib`, drop `.control` blocks, stop at `.end`.
-    fn expand(&mut self, lines: Vec<Line>, from: Option<&str>, depth: usize, out: &mut Vec<Line>) {
+    fn expand(&mut self, lines: Vec<Line>, depth: usize, out: &mut Vec<Line>) {
         let mut it = lines.into_iter();
         while let Some(line) = it.next() {
             let h = head(&line);
+            let file = line.span().file as usize;
+            let origin = self.sources.get(file).filter(|s| !s.is_empty()).cloned();
+            let from = origin.as_deref();
             match h.as_str() {
+                ".if" | ".subckt" => {
+                    // These bodies belong to another elaboration scope. In particular, an
+                    // include in a discarded arm must never touch the filesystem.
+                    let close = if h == ".if" { ".endif" } else { ".ends" };
+                    let mut nesting = 1;
+                    out.push(line);
+                    for child in it.by_ref() {
+                        let card = head(&child);
+                        if card == h {
+                            nesting += 1;
+                        }
+                        if card == close {
+                            nesting -= 1;
+                        }
+                        out.push(child);
+                        if nesting == 0 {
+                            break;
+                        }
+                    }
+                }
                 ".hdl" => {
                     if let Some(p) = line.tokens.get(1) {
                         match self.loader.load(unquote(&p.text), from) {
@@ -321,16 +355,16 @@ impl Pre<'_> {
                         self.error("E-PARSE-INCLUDE", "missing file name", line.span());
                         continue;
                     };
-                    if let Some((lines, path)) = self.load(unquote(&p.text), from, line.span()) {
-                        self.expand(lines, Some(&path), depth + 1, out);
+                    if let Some(lines) = self.load(unquote(&p.text), from, line.span()) {
+                        self.expand(lines, depth + 1, out);
                     }
                 }
                 ".lib" if line.tokens.len() >= 3 => {
                     let file = unquote(&line.tokens[1].text).to_string();
                     let section = line.tokens[2].lower();
-                    if let Some((lines, path)) = self.load(&file, from, line.span()) {
+                    if let Some(lines) = self.load(&file, from, line.span()) {
                         match lib_section(&lines, &section) {
-                            Some(sec) => self.expand(sec, Some(&path), depth + 1, out),
+                            Some(sec) => self.expand(sec, depth + 1, out),
                             None => self.error(
                                 "E-PARSE-INCLUDE",
                                 format!("library `{file}` has no section `{section}`"),
@@ -375,9 +409,9 @@ fn lib_section(lines: &[Line], name: &str) -> Option<Vec<Line>> {
 }
 
 /// Definitions collected from the expanded netlist.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Defs {
-    subckts: HashMap<String, SubcktDef>,
+    subckts: HashMap<String, Rc<SubcktDef>>,
     funcs: Funcs,
     globals: HashSet<String>,
     /// Every model name (top level and inside subcircuits), including binned base names.
@@ -435,8 +469,9 @@ impl Ctx<'_> {
     }
 }
 
-struct Flat<'d> {
-    defs: &'d Defs,
+struct Flat<'l> {
+    defs: Defs,
+    pre: Pre<'l>,
     out: Vec<Line>,
     diags: Vec<Diagnostic>,
 }
@@ -515,7 +550,7 @@ impl Flat<'_> {
                         // `v(node)=value` lexes as `v node = value`.
                         for i in 1..toks.len() {
                             if toks[i - 1].lower() == "v" && !toks[i].is_eq() {
-                                toks[i].text = ctx.node(self.defs, &toks[i].text);
+                                toks[i].text = ctx.node(&self.defs, &toks[i].text);
                             }
                         }
                         self.push(toks, line);
@@ -556,13 +591,22 @@ impl Flat<'_> {
                     let fourth_is_model = toks
                         .get(4)
                         .is_none_or(|t| self.defs.models.contains(&t.lower()) || t.is_eq());
-                    let k = if fourth_is_model { 4 } else { 5 };
+                    let k = if fourth_is_model {
+                        4
+                    } else if toks
+                        .get(6)
+                        .is_some_and(|t| self.defs.models.contains(&t.lower()))
+                    {
+                        6
+                    } else {
+                        5
+                    };
                     (1..k.min(n)).collect()
                 }
                 _ => Vec::new(),
             };
             for &i in &node_slots {
-                toks[i].text = ctx.node(self.defs, &toks[i].text);
+                toks[i].text = ctx.node(&self.defs, &toks[i].text);
             }
             if !ctx.prefix.is_empty() {
                 toks[0].text = ctx.element(&toks[0].text);
@@ -583,6 +627,137 @@ impl Flat<'_> {
                 }
             }
             self.push(toks, line);
+        }
+    }
+
+    /// Expand one lexical scope. Collect unconditional declarations first so forward
+    /// parameter references work. Only descend into the arm selected in this scope.
+    fn prepare(&mut self, input: Vec<Line>, scope: &mut Scope<'_>, depth: usize) -> Vec<Line> {
+        if depth >= MAX_DEPTH {
+            if let Some(line) = input.first() {
+                self.error(
+                    "E-PARSE-COND",
+                    "conditional nesting limit reached",
+                    line.span(),
+                );
+            }
+            return vec![];
+        }
+        let mut lines = Vec::new();
+        self.pre.expand(input, 0, &mut lines);
+        let mut nested = 0usize;
+        let mut temperature = None;
+        for l in &lines {
+            match head(l).as_str() {
+                ".if" | ".subckt" => nested += 1,
+                ".endif" | ".ends" => nested = nested.saturating_sub(1),
+                ".temp" if nested == 0 && scope.parent.is_none() => temperature = l.tokens.get(1),
+                ".option" | ".options" | ".opts" | ".opt"
+                    if nested == 0 && scope.parent.is_none() =>
+                {
+                    for kv in l.tokens.windows(3) {
+                        if kv[0].text.eq_ignore_ascii_case("temp") && kv[1].is_eq() {
+                            temperature = Some(&kv[2]);
+                        }
+                    }
+                }
+                ".param" if nested == 0 => {
+                    let parsed = split_assignments(raw_rest(l)).and_then(|pairs| {
+                        for (name, value) in pairs {
+                            scope.defs.insert(name, parse_expr(&value)?);
+                        }
+                        Ok(())
+                    });
+                    if let Err(e) = parsed {
+                        self.error("E-PARSE-EXPR", e, l.span());
+                    }
+                }
+                ".func" if nested == 0 => match parse_func(raw_rest(l)) {
+                    Ok((n, f)) => {
+                        self.defs.funcs.insert(n, f);
+                    }
+                    Err(e) => self.error("E-PARSE-EXPR", e, l.span()),
+                },
+                _ => {}
+            }
+        }
+        scope.cache.get_mut().clear();
+        if let Some(t) = temperature
+            && let Ok(v) = scope.eval_text(&t.text, &self.defs.funcs)
+        {
+            scope.fixed.insert("temper".into(), v);
+            scope.cache.get_mut().clear();
+        }
+        let mut selected = Vec::new();
+        let mut it = lines.into_iter();
+        while let Some(line) = it.next() {
+            let h = head(&line);
+            if h == ".subckt" {
+                let mut level = 1;
+                selected.push(line);
+                for l in it.by_ref() {
+                    match head(&l).as_str() {
+                        ".subckt" => level += 1,
+                        ".ends" => level -= 1,
+                        _ => {}
+                    }
+                    selected.push(l);
+                    if level == 0 {
+                        break;
+                    }
+                }
+            } else if h == ".if" {
+                let span = line.span();
+                let mut active = self.condition(&line, scope);
+                let mut taken = active;
+                let mut saw_else = false;
+                let mut level = 1;
+                let mut arm = Vec::new();
+                for l in it.by_ref() {
+                    let card = head(&l);
+                    match card.as_str() {
+                        ".if" => level += 1,
+                        ".endif" => {
+                            level -= 1;
+                            if level == 0 {
+                                break;
+                            }
+                        }
+                        ".elseif" | ".else" if level == 1 => {
+                            if saw_else {
+                                self.error("E-PARSE-COND", "branch after .else", l.span());
+                            }
+                            saw_else = card == ".else";
+                            active = !taken && (saw_else || self.condition(&l, scope));
+                            taken |= active;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    if active {
+                        arm.push(l);
+                    }
+                }
+                if level > 0 {
+                    self.error("E-PARSE-COND", "missing .endif", span);
+                }
+                selected.extend(self.prepare(arm, scope, depth + 1));
+            } else if matches!(h.as_str(), ".else" | ".elseif" | ".endif") {
+                self.error("E-PARSE-COND", format!("unexpected {h}"), line.span());
+            } else {
+                selected.push(line);
+            }
+        }
+        selected
+    }
+
+    fn condition(&mut self, line: &Line, scope: &Scope<'_>) -> bool {
+        match scope.eval_text(raw_rest(line), &self.defs.funcs) {
+            Ok(v) => v != 0.,
+            Err(e) => {
+                self.error("E-PARSE-COND", e, line.span());
+                false
+            }
         }
     }
 
@@ -621,7 +796,7 @@ impl Flat<'_> {
         }
         let sub = t[end - 1].lower();
         let nodes = &t[1..end - 1];
-        let Some(def) = self.defs.subckts.get(&sub) else {
+        let Some(def) = self.defs.subckts.get(&sub).cloned() else {
             self.error(
                 "E-PARSE-SUBCKT",
                 format!("`{name}` references undefined subcircuit `{sub}`"),
@@ -666,17 +841,6 @@ impl Flat<'_> {
                 let key = t[i].lower();
                 match scope.eval_text(&v.text, &self.defs.funcs) {
                     Ok(x) => {
-                        if !def.defaults.iter().any(|(k, _)| *k == key) {
-                            self.diags.push(
-                                Diagnostic::warning(
-                                    "W-PARSE-IGNORED",
-                                    format!(
-                                        "`{name}`: subcircuit `{sub}` has no parameter `{key}`"
-                                    ),
-                                )
-                                .with_span(t[i].span),
-                            );
-                        }
                         inst.fixed.insert(key, x);
                     }
                     Err(e) => self.error("E-PARSE-EXPR", format!("`{key}`: {e}"), v.span),
@@ -694,27 +858,6 @@ impl Flat<'_> {
         for (k, e) in &def.defaults {
             inst.defs.insert(k.clone(), e.clone());
         }
-        for l in &def.body {
-            if head(l) == ".param" {
-                match split_assignments(raw_rest(l)) {
-                    Ok(list) => {
-                        for (k, text) in list {
-                            match parse_expr(&text) {
-                                Ok(e) => {
-                                    if !inst.fixed.contains_key(&k) {
-                                        inst.defs.insert(k, e);
-                                    }
-                                }
-                                Err(e) => {
-                                    self.error("E-PARSE-EXPR", format!("`{k}`: {e}"), l.span());
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => self.error("E-PARSE-EXPR", e, l.span()),
-                }
-            }
-        }
         let prefix = if ctx.prefix.is_empty() {
             name
         } else {
@@ -724,15 +867,33 @@ impl Flat<'_> {
             .ports
             .iter()
             .zip(nodes)
-            .map(|(p, n)| (p.clone(), ctx.node(self.defs, &n.text)))
+            .map(|(p, n)| (p.clone(), ctx.node(&self.defs, &n.text)))
             .collect();
+        let outer = self.defs.clone();
+        let lines = self.prepare(def.body.clone(), &mut inst, 0);
+        for (index, tok) in t.iter().enumerate().skip(end) {
+            if t.get(index + 1).is_some_and(Token::is_eq) && !inst.defs.contains_key(&tok.lower()) {
+                self.diags.push(
+                    Diagnostic::warning(
+                        "W-PARSE-IGNORED",
+                        format!(
+                            "`{}`: subcircuit `{sub}` has no parameter `{}`",
+                            t[0].text, tok.text
+                        ),
+                    )
+                    .with_span(tok.span),
+                );
+            }
+        }
+        let mut models = HashSet::new();
+        let body = collect(lines, &mut self.defs, &mut models, &mut self.diags);
         let inner = Ctx {
             prefix,
             ports,
-            local_models: &def.models,
+            local_models: &models,
         };
-        let body = def.body.clone();
         self.run(&body, &inner, &inst, depth + 1);
+        self.defs = outer;
     }
 }
 
@@ -744,14 +905,33 @@ fn global_of<'a>(s: &'a Scope<'a>) -> &'a Scope<'a> {
     cur
 }
 
-/// Collect `.subckt` definitions (nested ones become global), `.func`, `.global` and model
+/// Collect `.subckt` definitions, `.global` and model
 /// names; returns the top-level lines.
-fn collect(lines: Vec<Line>, defs: &mut Defs, diags: &mut Vec<Diagnostic>) -> Vec<Line> {
+fn collect(
+    lines: Vec<Line>,
+    defs: &mut Defs,
+    local_models: &mut HashSet<String>,
+    diags: &mut Vec<Diagnostic>,
+) -> Vec<Line> {
     let mut top = Vec::new();
-    // Stack of definitions being collected: (name, def).
+    // Unconditional nested definitions keep the existing global visibility. A
+    // conditional definition belongs to the instance that selects its arm.
     let mut stack: Vec<(String, SubcktDef)> = Vec::new();
+    let mut conditional = 0usize;
     for line in lines {
         let h = head(&line);
+        if let Some((_, def)) = stack.last_mut() {
+            if h == ".if" {
+                conditional += 1;
+            }
+            if conditional > 0 {
+                if h == ".endif" {
+                    conditional -= 1;
+                }
+                def.body.push(line);
+                continue;
+            }
+        }
         match h.as_str() {
             ".subckt" => {
                 let t = &line.tokens;
@@ -796,7 +976,6 @@ fn collect(lines: Vec<Line>, defs: &mut Defs, diags: &mut Vec<Diagnostic>) -> Ve
                         ports,
                         defaults,
                         body: Vec::new(),
-                        models: HashSet::new(),
                         span: line.span(),
                     },
                 ));
@@ -812,7 +991,7 @@ fn collect(lines: Vec<Line>, defs: &mut Defs, diags: &mut Vec<Diagnostic>) -> Ve
                             .with_span(def.span),
                         );
                     }
-                    defs.subckts.insert(name, def);
+                    defs.subckts.insert(name, Rc::new(def));
                 }
                 None => diags.push(
                     Diagnostic::warning("W-PARSE-IGNORED", "`.ends` without `.subckt`")
@@ -820,31 +999,18 @@ fn collect(lines: Vec<Line>, defs: &mut Defs, diags: &mut Vec<Diagnostic>) -> Ve
                 ),
             },
             _ => {
-                if h == ".func" {
-                    match parse_func(raw_rest(&line)) {
-                        Ok((n, f)) => {
-                            defs.funcs.insert(n, f);
-                        }
-                        Err(e) => diags.push(
-                            Diagnostic::error("E-PARSE-EXPR", format!(".func: {e}"))
-                                .with_span(line.span()),
-                        ),
-                    }
-                    continue;
-                }
                 if h == ".global" {
                     for t in &line.tokens[1..] {
                         defs.globals.insert(t.lower());
                     }
                     continue;
                 }
-                if h == ".model"
+                if stack.is_empty()
+                    && h == ".model"
                     && let Some(n) = line.tokens.get(1)
                 {
                     model_names(&n.lower(), &mut defs.models);
-                    if let Some((_, def)) = stack.last_mut() {
-                        model_names(&n.lower(), &mut def.models);
-                    }
+                    model_names(&n.lower(), local_models);
                 }
                 match stack.last_mut() {
                     Some((_, def)) => def.body.push(line),
@@ -868,45 +1034,27 @@ fn collect(lines: Vec<Line>, defs: &mut Defs, diags: &mut Vec<Diagnostic>) -> Ve
 /// Preprocess a netlist: includes, libraries, parameters, functions and subcircuits.
 pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
     let lexed = lex_source(text, 0, true);
-    let mut pre = Pre {
-        loader,
-        hdl: Vec::new(),
-        sources: vec![String::new()],
-        diags: Vec::new(),
+    let mut flat = Flat {
+        defs: Defs::default(),
+        pre: Pre {
+            loader,
+            hdl: Vec::new(),
+            sources: vec![String::new()],
+            diags: vec![],
+        },
+        out: vec![],
+        diags: vec![],
     };
-    let mut lines = Vec::new();
-    pre.expand(lexed.lines, None, 0, &mut lines);
-    let mut defs = Defs::default();
-    let mut diags = pre.diags;
-    let top = collect(lines, &mut defs, &mut diags);
-    // Global parameters.
     let mut global = Scope::new(None);
-    for l in &top {
-        if head(l) == ".param" {
-            match split_assignments(raw_rest(l)) {
-                Ok(list) => {
-                    for (k, text) in list {
-                        match parse_expr(&text) {
-                            Ok(e) => {
-                                global.defs.insert(k, e);
-                            }
-                            Err(e) => diags.push(
-                                Diagnostic::error("E-PARSE-EXPR", format!("`{k}`: {e}"))
-                                    .with_span(l.span()),
-                            ),
-                        }
-                    }
-                }
-                Err(e) => diags.push(Diagnostic::error("E-PARSE-EXPR", e).with_span(l.span())),
-            }
-        }
-    }
+    global.fixed.insert("temper".into(), 27.);
+    let lines = flat.prepare(lexed.lines, &mut global, 0);
+    let top = collect(lines, &mut flat.defs, &mut HashSet::new(), &mut flat.diags);
     // Report unresolvable global parameters once, at their definition.
     let mut names: Vec<&String> = global.defs.keys().collect();
     names.sort();
     for k in names {
-        if let Err(e) = global.get(k, &defs.funcs) {
-            diags.push(Diagnostic::error(
+        if let Err(e) = global.get(k, &flat.defs.funcs) {
+            flat.diags.push(Diagnostic::error(
                 "E-PARSE-EXPR",
                 format!("parameter `{k}`: {e}"),
             ));
@@ -918,19 +1066,14 @@ pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
         ports: HashMap::new(),
         local_models: &empty,
     };
-    let mut flat = Flat {
-        defs: &defs,
-        out: Vec::new(),
-        diags: Vec::new(),
-    };
     flat.run(&top, &ctx, &global, 0);
-    diags.extend(flat.diags);
+    flat.diags.extend(flat.pre.diags);
     Expanded {
-        hdl: pre.hdl,
+        hdl: flat.pre.hdl,
         title: lexed.title,
         lines: flat.out,
-        sources: pre.sources,
-        diags,
+        sources: flat.pre.sources,
+        diags: flat.diags,
     }
 }
 
@@ -971,6 +1114,61 @@ mod tests {
             "V1 vdd 0 1.8e0",
         ];
         assert_eq!(out, want);
+    }
+
+    #[test]
+    fn selects_library_arms_and_instance_local_definitions() {
+        struct Library;
+        impl SourceLoader for Library {
+            fn load(&self, path: &str, from: Option<&str>) -> Result<(String, String), String> {
+                match (from,path) {
+                    (None,"corners.lib") => Ok(("models/corners.lib".into(),
+                         ".lib typ\n.if (corner)\n.include cell.inc\n.else\n.hdl absent.va\n.endif\n.endl\n".into())),
+                    (Some("models/corners.lib"),"cell.inc") => Ok(("models/cell.inc".into(),
+                        ".subckt cell a k=0\n.if(k < 1)\n.param r=2k\n.elseif (k == 1)\n.if (k)\n.param r=5k\n.endif\n.else\n.param r=8k\n.endif\nR1 a 0 'r'\n.ends\n".into())),
+                    _ => Err(format!("unexpected input {path}"))
+                }
+            }
+        }
+        let e = preprocess(
+            "t\n.lib corners.lib typ\n.param corner=floor(max(0,1.5))\nX1 a cell\nX2 b cell k='corner'\nX3 c cell k=2\n.if (0)\nXbad a missing\n.param bad=missing+1\n.elseif (corner)\nRtop a b 3\n.elseif (undefined)\n.include absent\n.endif\n",
+            &Library,
+        );
+        assert!(e.diags.is_empty(), "{:#?}", e.diags);
+        let cards = e.lines.iter().map(|l| l.raw.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            cards,
+            [
+                "r.x1.r1 a 0 2e3",
+                "r.x2.r1 b 0 5e3",
+                "r.x3.r1 c 0 8e3",
+                "Rtop a b 3"
+            ]
+        );
+    }
+
+    #[test]
+    fn conditional_errors_have_spans() {
+        for body in [
+            ".else",
+            ".elseif (1)",
+            ".endif",
+            ".if (1)",
+            ".if (missing)\n.endif",
+            ".if (0)\n.else\n.elseif (1)\n.endif",
+        ] {
+            let e = preprocess(&format!("t\n{body}\n"), &NoFiles);
+            assert!(
+                e.diags
+                    .iter()
+                    .any(|d| d.code == "E-PARSE-COND" && d.span.is_some()),
+                "{body}"
+            );
+        }
+        assert_eq!(
+            flat("t\n.if (temper == 60)\nR1 a 0 1\n.endif\n.option temp=60\n"),
+            ["R1 a 0 1", ".option temp=60"]
+        );
     }
 
     #[test]

@@ -213,6 +213,24 @@ impl CompiledModule {
     ) -> Result<Bound, Vec<Diagnostic>> {
         self.bind_overrides(None, values, options, true, self.ports.len())
     }
+    /// SPICE model cards may supply defaults for tagged instance parameters.
+    pub fn bind_spice_model(
+        &self,
+        values: &[(String, f64)],
+        options: BindOptions,
+    ) -> Result<Bound, Vec<Diagnostic>> {
+        self.bind_overrides(None, values, options, false, self.ports.len())
+    }
+
+    /// Number of identical parallel copies for simulator terminal stamping.
+    pub fn parallel_copies(&self, bound: &Bound) -> f64 {
+        if self.implicit_m {
+            self.param(bound, "m").unwrap_or(1.)
+        } else {
+            1.
+        }
+    }
+
     /// Apply instance overrides to a model binding. Explicit-supply flags are preserved.
     pub fn bind_instance(
         &self,

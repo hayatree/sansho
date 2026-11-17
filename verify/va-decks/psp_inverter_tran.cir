@@ -1,0 +1,17 @@
+* Loaded CMOS inverter propagation delay
+* Requires va-models/ihp/psp103/{psp103,psp103_nqs}.va with adjacent includes,
+* and ngspice-models/cornerMOSlv.lib with sg13g2_moslv_{mod,parm}.lib.
+* .save selects reference signals. spx records all unknowns.
+* Provenance: original SG13G2 test circuit.
+.lib "../../va-models/ihp/ngspice-models/cornerMOSlv.lib" mos_tt
+.hdl "../../va-models/ihp/psp103/psp103.va"
+.hdl "../../va-models/ihp/psp103/psp103_nqs.va"
+Vdd vdd 0 1.2
+Vin in 0 pulse(0 1.2 200p 30p 30p 700p 2n)
+Xn out in 0 0 sg13_lv_nmos w=1u l=0.13u
+Xp out in vdd vdd sg13_lv_pmos w=2u l=0.13u
+Cl out 0 10f
+.tran 10p 2n
+.measure tran tpd trig v(in) val=0.6 rise=1 targ v(out) val=0.6 fall=1
+.save v(in) v(out)
+.end

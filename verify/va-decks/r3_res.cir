@@ -1,0 +1,13 @@
+* Poly resistor DC characteristic at 60 C
+* Requires va-models/ihp/r3_cmc/r3_cmc.va with adjacent includes,
+* and ngspice-models/cornerRES.lib with resistors_mod.lib.
+* .save selects reference signals. spx records all unknowns.
+* Provenance: original SG13G2 test circuit.
+.lib "../../va-models/ihp/ngspice-models/cornerRES.lib" res_typ
+.hdl "../../va-models/ihp/r3_cmc/r3_cmc.va"
+Vt p 0 0
+Xr p 0 0 rppd w=1u l=10u
+.temp 60
+.dc Vt -1 1 50m
+.save i(vt)
+.end

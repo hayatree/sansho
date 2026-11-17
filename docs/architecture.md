@@ -397,12 +397,23 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
     ngspice, binning also works for level-1 models.
   - `.ic` (nodes held through 1e10 S during the transient operating point), `.nodeset` (held, then
     released), `.tran … uic`.
-  - Not yet: `.if`/`.else`, `.option scale`, `B` sources, `K` coupling, switches, `.temp` scaling,
+  - Nested `.if`, `.elseif`, `.else` and `.endif` select branches during flattening. The
+    expression sees global parameters or the current subcircuit instance's overrides and
+    defaults. Only the selected body loads includes and elaborates definitions and devices.
+    Conditions also work inside `.lib` sections. Paths resolve from the containing file.
+  - `temper` in a parameter expression is the circuit temperature in °C. Typical-corner
+    `agauss(nominal, variation, sigma)` returns nominal when variation or sigma is zero.
+    Active random variation reports a diagnostic. Unknown simulator options produce warnings.
+  - `.hdl` loads VA modules independently of model-card order. An `N` instance matches the
+    module type case-insensitively and accepts numeric and quoted parameter expressions.
+    The simulator scales parallel copies at the terminals when it supplies an implicit
+    multiplier. See the binding rules in [Verilog-A §11](verilog-a.md#11-va-4b-production-circuits).
+  - Not yet: `.option scale`, `B` sources, `K` coupling, switches, `.temp` scaling,
     instance `ic=`.
 - **Output**: ngspice raw format (readable by Xschem and other existing tools).
 - **Models**: built-ins start at Level 1. BSIM4 is ported from the Berkeley distribution into a
-  separate crate (`spx-model-bsim4`, under its original license; see §11). Everything else is loaded
-  via OSDI. PDKs are not bundled.
+  separate crate (`spx-model-bsim4`, under its original license; see §11). Production Verilog-A models are compiled by spx-va. Verification loads
+  OSDI models into the external reference simulator. PDKs are not bundled.
 
 ---
 

@@ -202,6 +202,24 @@ impl DeviceGroup for VaGroup {
                 ));
                 return;
             }
+            // Branch currents and internal equations describe one copy. External KCL
+            // sums its terminal flows, including displacement current, over all copies.
+            let copies = m.parallel_copies(&i.bound);
+            if copies != 1. {
+                let n = i.nodes.len();
+                for (row, &rep) in i.bound.layout().representatives().iter().enumerate() {
+                    if rep < i.port_count {
+                        result.f[row] *= copies;
+                        result.q[row] *= copies;
+                        for x in result.df[row * n..(row + 1) * n]
+                            .iter_mut()
+                            .chain(&mut result.dq[row * n..(row + 1) * n])
+                        {
+                            *x *= copies;
+                        }
+                    }
+                }
+            }
             out.noncon |= result.noncon;
             out.core_dyn(&mut at, &result.f, &result.q, &result.df, &result.dq);
         }

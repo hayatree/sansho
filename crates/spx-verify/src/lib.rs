@@ -159,6 +159,7 @@ fn compare_analysis(
     tol: &Tolerances,
     out: &mut DeckReport,
 ) {
+    let start = out.vars.len();
     let tran = reference.kind == AnalysisKind::Tran;
     for (vi, var) in reference.variables.iter().enumerate() {
         let rtol = match (tran, var.quantity) {
@@ -226,6 +227,13 @@ fn compare_analysis(
                 continue;
             }
         };
+        if diffs.is_empty() || diffs.iter().any(|v| !v.is_finite()) {
+            out.problems.push(format!(
+                "{:?} {}: empty or non-finite comparison",
+                reference.kind, var.name
+            ));
+            continue;
+        }
         let (k, max_abs) = diffs
             .iter()
             .copied()
@@ -242,6 +250,12 @@ fn compare_analysis(
             at: reference.scale_values.get(k).copied().unwrap_or(f64::NAN),
             score: max_abs / (rtol * scale + atol),
         });
+    }
+    if out.vars.len() == start {
+        out.problems.push(format!(
+            "{:?}: no common variables to compare",
+            reference.kind
+        ));
     }
 }
 
@@ -267,6 +281,17 @@ pub fn compare(reference: &SimResults, ours: &SimResults, tol: &Tolerances) -> D
             None => out
                 .problems
                 .push(format!("missing {:?} analysis in our results", r.kind)),
+        }
+    }
+    if reference.analyses.is_empty() {
+        out.problems.push("no reference analyses".into());
+    }
+    for (i, analysis) in ours.analyses.iter().enumerate() {
+        if !used[i] {
+            out.problems.push(format!(
+                "missing {:?} analysis in reference results",
+                analysis.kind
+            ));
         }
     }
     out
@@ -328,26 +353,58 @@ pub fn parse_measure_output(text: &str, names: &[String]) -> Vec<(String, f64)> 
 pub fn measure_deck(text: &str) -> Option<String> {
     let mut body = Vec::new();
     let mut cmds = Vec::new();
-    for line in text.lines() {
-        let l = line.trim_start().to_ascii_lowercase();
-        if l.starts_with(".meas") {
-            if let Some(kind) = l.split_whitespace().nth(1) {
-                cmds.push(format!("setplot {kind}1"));
-            }
-            cmds.push(line.trim_start()[1..].to_string());
-        } else if l == ".end" {
-            continue;
-        } else {
+    let mut control = None;
+    let mut ran = false;
+    let mut in_control = false;
+    let mut quit = None;
+    for (i, line) in text.lines().enumerate() {
+        let mut fields = line.split_whitespace();
+        let card = fields.next().unwrap_or("").to_ascii_lowercase();
+        if i == 0 {
             body.push(line.to_string());
+            continue;
         }
+        if matches!(card.as_str(), ".meas" | ".measure") && !in_control {
+            if let Some(kind) = fields.next() {
+                cmds.push(format!("setplot {}1", kind.to_ascii_lowercase()));
+                cmds.push(format!(
+                    "meas {kind} {}",
+                    fields.collect::<Vec<_>>().join(" ")
+                ));
+            }
+            continue;
+        }
+        match card.as_str() {
+            ".control" => in_control = true,
+            ".endc" => {
+                in_control = false;
+                control = Some(body.len());
+            }
+            "run" if in_control => ran = true,
+            "quit" if in_control => {
+                quit.get_or_insert(body.len());
+            }
+            ".end" => continue,
+            _ => {}
+        }
+        body.push(line.to_string());
     }
     if cmds.is_empty() {
         return None;
     }
-    body.push(".control".into());
-    body.push("run".into());
-    body.extend(cmds);
-    body.push(".endc".into());
+    if !ran {
+        cmds.insert(0, "run".into());
+    }
+    if quit.is_none() {
+        cmds.push("quit".into());
+    }
+    if let Some(i) = quit.or(control) {
+        body.splice(i..i, cmds);
+    } else {
+        body.push(".control".into());
+        body.extend(cmds);
+        body.push(".endc".into());
+    }
     body.push(".end".into());
     Some(body.join("\n") + "\n")
 }
@@ -404,7 +461,9 @@ mod tests {
             vec![("period".into(), 1.560173e-9), ("x".into(), -2.5)]
         );
         let d = measure_deck("t\nR1 a 0 1\n.tran 1n 1u\n.meas tran p MAX v(a)\n.end\n").unwrap();
-        assert!(d.contains(".control\nrun\nsetplot tran1\nmeas tran p MAX v(a)\n.endc\n.end\n"));
+        assert!(
+            d.contains(".control\nrun\nsetplot tran1\nmeas tran p MAX v(a)\nquit\n.endc\n.end\n")
+        );
     }
 
     #[test]

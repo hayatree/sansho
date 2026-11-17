@@ -49,6 +49,8 @@ pub(crate) struct Assembled {
 /// Reusable per-job workspace.
 #[derive(Debug)]
 pub(crate) struct Workspace {
+    pub newton_calls: usize,
+    pub newton_iterations: usize,
     pub slots: Vec<Slots>,
     pub asm: Assembled,
     jac: Vec<f64>,
@@ -73,6 +75,8 @@ impl Workspace {
         let n = ckt.dim();
         let nnz = ckt.pattern.nnz();
         Self {
+            newton_calls: 0,
+            newton_iterations: 0,
             slots: ckt.new_slots(),
             asm: Assembled {
                 g: vec![0.0; nnz],
@@ -275,6 +279,7 @@ pub(crate) fn newton(
     gshunt: f64,
 ) -> Result<usize, NewtonError> {
     let n = ckt.dim();
+    ws.newton_calls += 1;
     if !ws.analyzed {
         ws.lu.analyze(&ckt.pattern).map_err(NewtonError::Solver)?;
         ws.analyzed = true;
@@ -283,6 +288,7 @@ pub(crate) fn newton(
     let kinds = ckt.unknowns.kinds();
     let mut ctx = *ctx;
     for iter in 1..=max_iter {
+        ws.newton_iterations += 1;
         if iter > 1 {
             ctx.init_junctions = false;
         }
