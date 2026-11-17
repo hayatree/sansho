@@ -50,6 +50,33 @@ pub(crate) fn solve_op(
     code: &'static str,
     analysis: &str,
 ) -> Result<(), Diagnostic> {
+    // `.nodeset`: solve with the nodes held at their values, then release them.
+    if !ckt.nodesets.is_empty() && ws.clamp.is_empty() {
+        ws.clamp = ckt.nodesets.clone();
+        let held = solve_op_chain(ckt, ctx, x, ws, opts, code, analysis);
+        ws.clamp.clear();
+        if held.is_ok() {
+            let integ = Integration::dc(ckt.dim());
+            if newton(ckt, ctx, &integ, x, ws, opts, opts.itl1, 0.0).is_ok() {
+                ws.commit();
+                return Ok(());
+            }
+        }
+        x.iter_mut().for_each(|v| *v = 0.0);
+    }
+    solve_op_chain(ckt, ctx, x, ws, opts, code, analysis)
+}
+
+/// The fallback chain of [`solve_op`] (Newton, gmin stepping, source stepping).
+fn solve_op_chain(
+    ckt: &Circuit,
+    ctx: &EvalCtx,
+    x: &mut [f64],
+    ws: &mut Workspace,
+    opts: &SimOptions,
+    code: &'static str,
+    analysis: &str,
+) -> Result<(), Diagnostic> {
     let integ = Integration::dc(ckt.dim());
     let mut init = *ctx;
     init.init_junctions = true;
@@ -528,21 +555,34 @@ pub(crate) fn tran(
     tstop: f64,
     tstart: f64,
     tmax: Option<f64>,
+    uic: bool,
 ) -> Result<AnalysisResult, Diagnostic> {
     let n = ckt.dim();
     let tp = TranParams { tstep, tstop };
     let mut ctx = make_ctx(opts, Mode::Tran, tp);
     let mut ws = Workspace::new(ckt);
     let mut x = vec![0.0; n];
-    solve_op(
-        ckt,
-        &ctx,
-        &mut x,
-        &mut ws,
-        opts,
-        "E-CONV-OP",
-        "transient initial operating point",
-    )?;
+    if uic {
+        // Skip the operating point: `.ic` nodes start at their value, all others at zero.
+        for &(i, v) in &ckt.ics {
+            x[i] = v;
+        }
+        ws.clear_state();
+    } else {
+        // `.ic` holds nodes at their value while the operating point is solved.
+        ws.clamp = ckt.ics.clone();
+        let r = solve_op(
+            ckt,
+            &ctx,
+            &mut x,
+            &mut ws,
+            opts,
+            "E-CONV-OP",
+            "transient initial operating point",
+        );
+        ws.clamp.clear();
+        r?;
+    }
 
     // Default maximum step as in SPICE: min(tstep, (tstop - tstart) / 50).
     let hmax = tmax
@@ -567,6 +607,9 @@ pub(crate) fn tran(
     eval_ctx.limit = false;
     ws.restore();
     assemble(ckt, &eval_ctx, &x, &mut ws, opts, 0.0);
+    if uic {
+        ws.commit();
+    }
     let mut hist = History::default();
     hist.push(0.0, &ws.asm.q);
     let mut qdot = vec![0.0; n];

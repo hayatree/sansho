@@ -138,6 +138,15 @@ fn write_raw(path: &PathBuf, results: &SimResults) -> Result<(), ExitCode> {
         })
 }
 
+/// Resolves `.include` / `.lib` relative to the netlist's directory.
+fn loader(path: &std::path::Path) -> spx_netlist::FsLoader {
+    spx_netlist::FsLoader {
+        base: path
+            .parent()
+            .map_or_else(PathBuf::new, std::path::Path::to_path_buf),
+    }
+}
+
 fn read(path: &PathBuf) -> Result<String, ExitCode> {
     std::fs::read_to_string(path).map_err(|e| {
         eprintln!("error: cannot read {}: {e}", path.display());
@@ -161,7 +170,8 @@ struct BatchLine<'a> {
 fn batch(netlists: &[PathBuf], jobs: Option<usize>) -> Result<ExitCode, ExitCode> {
     let mut parsed = Vec::with_capacity(netlists.len());
     for p in netlists {
-        parsed.push(spx_netlist::parse(&read(p)?));
+        let text = read(p)?;
+        parsed.push(spx_netlist::parse_with(&text, &loader(p)));
     }
     let good: Vec<spx_netlist::Netlist> = parsed
         .iter()
@@ -213,7 +223,7 @@ fn run(
     jobs: Option<usize>,
 ) -> Result<ExitCode, ExitCode> {
     let text = read(netlist)?;
-    let nl = match spx_netlist::parse(&text) {
+    let nl = match spx_netlist::parse_with(&text, &loader(netlist)) {
         Ok(nl) => nl,
         Err(diags) => {
             if json {
@@ -263,8 +273,8 @@ fn run(
 
 fn check(netlist: &PathBuf, json: bool) -> Result<ExitCode, ExitCode> {
     let text = read(netlist)?;
-    let result =
-        spx_netlist::parse(&text).and_then(|nl| spx_engine::check(&nl).map(|c| c.warnings));
+    let result = spx_netlist::parse_with(&text, &loader(netlist))
+        .and_then(|nl| spx_engine::check(&nl).map(|c| c.warnings));
     let (diags, ok) = match result {
         Ok(w) => (w, true),
         Err(d) => (d, false),

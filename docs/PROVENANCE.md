@@ -35,6 +35,8 @@ that introduces the code.
 | `.meas` evaluation | `spx-netlist/src/meas.rs`, `spx-engine/src/measure.rs` | Original; card syntax as commonly documented for SPICE-family simulators |
 | Parallel jobs (L0), chunked device evaluation (L1), ordered gather assembly (L2) | `spx-engine/src/parallel.rs`, `circuit.rs`, `solve.rs` | Original design (`docs/architecture.md` D4); `rayon` crate (MIT/Apache-2.0) as a library dependency |
 | Diagnostic code registry, lint checks, "did you mean" (Levenshtein distance) | `spx-diag/src/codes.rs`, `spx-engine/src/lint.rs`, `spx-netlist/src/parser.rs` | Original; edit distance as in V. I. Levenshtein (1966), textbook dynamic programming |
+| Parameter expressions, `.param`, `.func` | `spx-netlist/src/expr.rs` | Original recursive-descent parser; operator set and functions as commonly documented for SPICE parameter expressions (ngspice user manual, used as documentation only) |
+| `.include`/`.lib`, subcircuit flattening, model binning, `.ic`/`.nodeset`/UIC | `spx-netlist/src/preproc.rs`, `parser.rs`, `spx-engine/src/analysis.rs` | Nagel (1975) input format; hierarchical naming and library sections as documented in the ngspice user manual; node clamping is a standard Norton-equivalent technique |
 | Netlist writer | `spx-netlist/src/writer.rs` | Original; SPICE input format (Nagel 1975) |
 | Session / job API, summaries, alterations | `spx-api` | Original |
 | Input / result hashes | `spx-api/src/hash.rs` | FNV-1a by G. Fowler, L. C. Noll, K.-P. Vo (public domain; IETF draft-eastlake-fnv) |

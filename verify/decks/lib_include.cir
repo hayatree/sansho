@@ -1,0 +1,10 @@
+Library sections, includes and corner parameters
+* The ff corner shifts the threshold through a library parameter.
+.lib 'lib/models.lib' ff
+.include lib/cells.inc
+VDD vdd 0 1.8
+VIN in 0 0
+XS in outs vdd rinv l=0.5u
+XL in outl vdd rinv l=2u w=8u
+.dc VIN 0 1.8 0.01
+.end

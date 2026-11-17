@@ -10,9 +10,12 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-PARSE-ARITY`](#e-parse-arity) | error | Wrong number of fields |
 | [`E-PARSE-DUPLICATE`](#e-parse-duplicate) | error | Duplicate name |
 | [`E-PARSE-ELEMENT`](#e-parse-element) | error | Unsupported element type |
+| [`E-PARSE-EXPR`](#e-parse-expr) | error | Invalid parameter expression |
+| [`E-PARSE-INCLUDE`](#e-parse-include) | error | Cannot include file |
 | [`E-PARSE-MEAS`](#e-parse-meas) | error | Invalid `.meas` card |
 | [`E-PARSE-MODEL`](#e-parse-model) | error | Invalid or missing model |
 | [`E-PARSE-NUMBER`](#e-parse-number) | error | Invalid number |
+| [`E-PARSE-SUBCKT`](#e-parse-subckt) | error | Invalid subcircuit |
 | [`E-PARSE-UNEXPECTED`](#e-parse-unexpected) | error | Unexpected token |
 | [`E-PARSE-VALUE`](#e-parse-value) | error | Invalid value |
 | [`W-PARSE-CONTROL`](#w-parse-control) | warning | `.control` block skipped |
@@ -27,6 +30,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-ELAB-PARAM`](#e-elab-param) | error | Invalid instance parameter |
 | [`W-ELAB-DANGLING`](#w-elab-dangling) | warning | Dangling node |
 | [`W-ELAB-NODC`](#w-elab-nodc) | warning | No DC path to ground |
+| [`W-ELAB-NODE`](#w-elab-node) | warning | Unknown node in `.ic` / `.nodeset` |
 | [`W-ELAB-VLOOP`](#w-elab-vloop) | warning | Loop of voltage sources or inductors |
 | [`W-MODEL-IGNORED`](#w-model-ignored) | warning | Model parameter ignored |
 | [`W-MODEL-TEMP`](#w-model-temp) | warning | Temperature not applied |
@@ -67,6 +71,18 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 - Check the element letter; subcircuits (`X`) and some sources are not supported yet.
 
+## E-PARSE-EXPR
+
+**Invalid parameter expression.** A `{...}` / `'...'` expression, `.param` or `.func` could not be parsed or evaluated (syntax error, unknown parameter or function, or a parameter that depends on itself).
+
+- Check the expression and that every parameter it uses is defined with `.param` or as a subcircuit parameter.
+
+## E-PARSE-INCLUDE
+
+**Cannot include file.** An `.include` or `.lib` file could not be read, or the library has no such section. Netlists passed as text (e.g. over MCP) cannot include files unless loaded from a path.
+
+- Check the path; relative paths are resolved from the including file.
+
 ## E-PARSE-MEAS
 
 **Invalid `.meas` card.** A `.meas` card could not be parsed.
@@ -84,6 +100,12 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Invalid number.** A token that must be a number could not be parsed (SPICE scale suffixes such as `k`, `meg`, `u`, `n`, `p` are accepted).
 
 - Write the value as a plain number with an optional SPICE suffix.
+
+## E-PARSE-SUBCKT
+
+**Invalid subcircuit.** A `.subckt` definition is malformed (e.g. missing `.ends`), or an `X` instance references an undefined subcircuit, connects the wrong number of nodes, or nests recursively.
+
+- Compare the `X` line with the `.subckt` port list shown in the note.
 
 ## E-PARSE-UNEXPECTED
 
@@ -168,6 +190,12 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **No DC path to ground.** Some nodes have no DC path to ground (e.g. only capacitors or gates attach to them); the DC matrix may be singular.
 
 - Add a large resistor to ground, or set `.options rshunt=1e12`.
+
+## W-ELAB-NODE
+
+**Unknown node in `.ic` / `.nodeset`.** An initial condition or node set names a node that does not exist; it is ignored.
+
+- Check the node name (nodes inside subcircuits are named `x1.node`).
 
 ## W-ELAB-VLOOP
 

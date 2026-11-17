@@ -317,6 +317,15 @@ pub fn write(nl: &Netlist) -> String {
         }
         let _ = writeln!(out, "{l}");
     }
+    for (card, list) in [(".ic", &nl.initial_conditions), (".nodeset", &nl.nodesets)] {
+        if !list.is_empty() {
+            let items: Vec<String> = list
+                .iter()
+                .map(|v| format!("v({})={}", v.node, num(v.value)))
+                .collect();
+            let _ = writeln!(out, "{card} {}", items.join(" "));
+        }
+    }
     for a in &nl.analyses {
         let _ = writeln!(out, "{}", write_analysis(a));
     }
@@ -348,7 +357,7 @@ mod tests {
                    R2 e 0 1\nR3 g 0 1\nR4 f 0 1\nR5 h 0 1\nR6 x 0 1\nR7 y 0 1\n\
                    D1 out 0 dm 2\nQ1 out in 0 qn off\nM1 out in 0 0 nm l=1u w=2u\n\
                    .model dm d (is=1e-14 n=1.5)\n.model qn npn bf=100\n.model nm nmos vto=0.5\n\
-                   .options reltol=1e-4 gear\n.op\n.dc v1 0 1 0.1\n.ac dec 10 1 1g\n\
+                   .options reltol=1e-4 gear\n.ic v(out)=0.5 v(x)=-1\n.nodeset v(in)=1\n.op\n.dc v1 0 1 0.1\n.ac dec 10 1 1g\n\
                    .tran 1n 100n 0 1n uic\n\
                    .meas tran tr trig v(out) val=0.1 rise=1 targ v(out) val=0.9 rise=last td=1n\n\
                    .meas tran tw when v(out)=0.5 cross=2\n.meas tran pd pp v(out,in)\n\
@@ -362,6 +371,8 @@ mod tests {
         for (a, b) in nl.elements.iter().zip(&nl2.elements) {
             assert_eq!(a.kind, b.kind);
         }
+        assert_eq!(nl.initial_conditions.len(), 2);
+        assert_eq!(nl2.nodesets[0].node, "in");
         for (a, b) in nl.measures.iter().zip(&nl2.measures) {
             assert_eq!(a.kind, b.kind);
         }

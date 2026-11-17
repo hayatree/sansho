@@ -384,6 +384,21 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 - **Netlists**: ngspice dialect first (PDKs depend on it), then the main parts of the HSPICE dialect;
   Spectre dialect later. The dialect is chosen via `LoadOpts`; after elaboration everything is the
   common IR.
+- **Implemented ngspice dialect (M4, part 1)** — `spx-netlist/src/preproc.rs`, `expr.rs`:
+  - `.include` / `.inc`, `.lib file section` with `.lib name` … `.endl` sections, resolved
+    relative to the including file through a `SourceLoader` (`FsLoader` for files; `NoFiles` for
+    text-only input such as MCP `netlist`, where includes are rejected with `E-PARSE-INCLUDE`).
+  - `.param` (lazy, order-independent, cycle detection), `{expr}` / `'expr'` values, bare
+    expressions after `=`, `.func`, built-in math functions, ternary and logical operators.
+  - `.subckt name ports [params:] k=v` / `.ends`, `X` instances with parameter overrides, nesting,
+    local models, `.global`. Flattened names follow SPICE3 conventions: node `x1.n`, element
+    `m.x1.m1`, branch `i(v.x1.v1)`.
+  - Model binning (`nch.1`, `nch.2`, … selected by `lmin <= l < lmax`, `wmin <= w < wmax`). Unlike
+    ngspice, binning also works for level-1 models.
+  - `.ic` (nodes held through 1e10 S during the transient operating point), `.nodeset` (held, then
+    released), `.tran … uic`.
+  - Not yet: `.if`/`.else`, `.option scale`, `B` sources, `K` coupling, switches, `.temp` scaling,
+    instance `ic=`.
 - **Output**: ngspice raw format (readable by Xschem and other existing tools).
 - **Models**: built-ins start at Level 1. BSIM4 is ported from the Berkeley distribution into a
   separate crate (`spx-model-bsim4`, under its original license; see §11). Everything else is loaded
@@ -412,7 +427,7 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 | M1 | Linear circuits: basic parser, elaboration, MNA, OP/DC/AC/TRAN (trapezoidal), faer LU, raw output | RC/RLC match analytic solutions and ngspice |
 | M2 | Nonlinear: diode, BJT (GP), MOS1, Newton + limiting, gmin/source stepping, BDF2, LTE step control, `.meas`, L0 parallelism, JSON output | Small-circuit benchmarks within RMS error ≤ 1 vs ngspice (done: `verify/decks`) |
 | M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP (done: `spx-mcp/tests/stdio.rs`) |
-| M4 | OSDI loader and PDKs: IHP SG13G2 (PSP103, ...), SKY130 (ported BSIM4 or OSDI), broader ngspice dialect | PDK testbenches match ngspice |
+| M4 | OSDI loader and PDKs: IHP SG13G2 (PSP103, ...), SKY130 (ported BSIM4 or OSDI), broader ngspice dialect | PDK testbenches match ngspice (dialect part done: `verify/decks/{subckt_ring,lib_include,nodeset_latch,uic_rlc}`) |
 | M5 | Performance: own KLU-style solver, bypass, parallel LU, GPU batch (G1) | ≥ 1.x× ngspice on C6288 single-core; further gains multi-core |
 | M6 | Extensions: noise, sensitivity, PSS/HB, HSPICE dialect, Python | — |
 

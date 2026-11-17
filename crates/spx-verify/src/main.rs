@@ -94,7 +94,7 @@ fn verify(deck: &Path, cli: &Cli) -> DeckReport {
         Ok(r) => r,
         Err(e) => return fail(format!("cannot read reference results: {e}")),
     };
-    let nl = match spx_netlist::parse(&text) {
+    let nl = match spx_netlist::parse_file(deck) {
         Ok(nl) => nl,
         Err(d) => return fail(format!("parse failed: {}", d[0])),
     };

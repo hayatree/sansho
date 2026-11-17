@@ -99,7 +99,8 @@ impl Mos1Model {
             ld: p.get("ld", 0.0),
             cox,
         };
-        p.accept(&["level", "kf", "af", "tnom"]);
+        // Binning ranges are used when the model is selected (`spx-netlist`).
+        p.accept(&["level", "kf", "af", "tnom", "lmin", "lmax", "wmin", "wmax"]);
         (m, p.unused())
     }
 }

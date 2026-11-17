@@ -2,7 +2,8 @@
 //!
 //! Rules (SPICE conventions): the first line is the title; lines starting with `*` are comments;
 //! lines starting with `+` continue the previous line; `;`, `$ ` and `//` start inline comments.
-//! Whitespace, `,`, `(` and `)` separate tokens; `=` is its own token.
+//! Whitespace, `,`, `(` and `)` separate tokens; `=` is its own token. `{...}` and `'...'`
+//! (parameter expressions) are single tokens including their delimiters.
 //!
 //! Provenance: original work based on the SPICE input format described in Nagel (1975).
 //! See `docs/PROVENANCE.md`.
@@ -35,6 +36,8 @@ impl Token {
 pub struct Line {
     /// Tokens; never empty.
     pub tokens: Vec<Token>,
+    /// Text of the logical line (continuations joined with a space, comments removed).
+    pub raw: String,
 }
 
 impl Line {
@@ -87,9 +90,33 @@ fn tokenize(text: &str, line_no: u32, col_offset: u32, out: &mut Vec<Token>) {
             });
         }
     };
+    let mut close: Option<char> = None;
+    let mut depth = 0u32;
     for (i, ch) in text.char_indices() {
         let col = col_offset + i as u32 + 1;
+        if let Some(end) = close {
+            // Inside an expression: keep everything up to the matching delimiter.
+            cur.push(ch);
+            if ch == '{' && end == '}' {
+                depth += 1;
+            } else if ch == end {
+                if depth == 0 {
+                    close = None;
+                } else {
+                    depth -= 1;
+                }
+            }
+            continue;
+        }
         match ch {
+            '{' | '\'' => {
+                if cur.is_empty() {
+                    cur_col = col;
+                }
+                cur.push(ch);
+                close = Some(if ch == '{' { '}' } else { '\'' });
+                depth = 0;
+            }
             c if c.is_whitespace() || c == ',' || c == '(' || c == ')' => {
                 flush(&mut cur, cur_col, out);
             }
@@ -111,13 +138,31 @@ fn tokenize(text: &str, line_no: u32, col_offset: u32, out: &mut Vec<Token>) {
     flush(&mut cur, cur_col, out);
 }
 
-/// Lex netlist text.
+fn set_file(toks: &mut [Token], file: u32) {
+    if file != 0 {
+        for t in toks {
+            t.span = t.span.in_file(file);
+        }
+    }
+}
+
+/// Lex netlist text (the first line is the title).
 pub fn lex(text: &str) -> Lexed {
+    lex_source(text, 0, true)
+}
+
+/// Lex the text of source file `file`; included files have no title line.
+pub fn lex_source(text: &str, file: u32, has_title: bool) -> Lexed {
     let mut physical = text.lines();
-    let title = physical.next().unwrap_or("").trim_end().to_string();
+    let title = if has_title {
+        physical.next().unwrap_or("").trim_end().to_string()
+    } else {
+        String::new()
+    };
+    let first = if has_title { 2 } else { 1 };
     let mut lines: Vec<Line> = Vec::new();
     for (idx, raw) in physical.enumerate() {
-        let line_no = idx as u32 + 2;
+        let line_no = idx as u32 + first;
         let trimmed = raw.trim_start();
         let lead = (raw.len() - trimmed.len()) as u32;
         if trimmed.is_empty() || trimmed.starts_with('*') {
@@ -127,18 +172,28 @@ pub fn lex(text: &str) -> Lexed {
             let body = strip_inline_comment(rest);
             let mut toks = Vec::new();
             tokenize(body, line_no, lead + 1, &mut toks);
+            set_file(&mut toks, file);
             if let Some(last) = lines.last_mut() {
                 last.tokens.extend(toks);
+                last.raw.push(' ');
+                last.raw.push_str(body.trim());
             } else if !toks.is_empty() {
-                lines.push(Line { tokens: toks });
+                lines.push(Line {
+                    tokens: toks,
+                    raw: body.trim().to_string(),
+                });
             }
             continue;
         }
         let body = strip_inline_comment(trimmed);
         let mut toks = Vec::new();
         tokenize(body, line_no, lead, &mut toks);
+        set_file(&mut toks, file);
         if !toks.is_empty() {
-            lines.push(Line { tokens: toks });
+            lines.push(Line {
+                tokens: toks,
+                raw: body.trim().to_string(),
+            });
         }
     }
     Lexed { title, lines }
@@ -165,6 +220,17 @@ mod tests {
         );
         assert_eq!(lx.lines[1].tokens[3].span, Span::new(6, 3));
         assert_eq!(texts(&lx.lines[2]), [".end"]);
+    }
+
+    #[test]
+    fn expressions_are_single_tokens() {
+        let lx = lex("t\nR1 a b {r0 * (1 + k)} m={2*f(a, b)}\n.param x = 'a + b'\n");
+        assert_eq!(
+            texts(&lx.lines[0]),
+            ["R1", "a", "b", "{r0 * (1 + k)}", "m", "=", "{2*f(a, b)}"]
+        );
+        assert_eq!(texts(&lx.lines[1]), [".param", "x", "=", "'a + b'"]);
+        assert_eq!(lx.lines[1].raw, ".param x = 'a + b'");
     }
 
     #[test]

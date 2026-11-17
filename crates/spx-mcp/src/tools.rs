@@ -22,6 +22,8 @@ struct Tool {
 }
 
 const NETLIST: &str = "SPICE netlist text (ngspice syntax; the first line is the title)";
+const PATH: &str = "path of a netlist file on the server's machine (use instead of `netlist` \
+                    when the deck uses .include / .lib)";
 
 const TOOLS: &[Tool] = &[
     Tool {
@@ -33,8 +35,8 @@ const TOOLS: &[Tool] = &[
                       unknown .meas signals). Fast; use before simulate.",
         read_only: true,
         schema: || {
-            json!({"type":"object","properties":{"netlist":{"type":"string","description":NETLIST}},
-                   "required":["netlist"]})
+            json!({"type":"object","properties":{"netlist":{"type":"string","description":NETLIST},
+                   "path":{"type":"string","description":PATH}}})
         },
     },
     Tool {
@@ -44,8 +46,8 @@ const TOOLS: &[Tool] = &[
                       alter_and_rerun, sweep and export_deck.",
         read_only: false,
         schema: || {
-            json!({"type":"object","properties":{"netlist":{"type":"string","description":NETLIST}},
-                   "required":["netlist"]})
+            json!({"type":"object","properties":{"netlist":{"type":"string","description":NETLIST},
+                   "path":{"type":"string","description":PATH}}})
         },
     },
     Tool {
@@ -73,6 +75,7 @@ const TOOLS: &[Tool] = &[
             json!({"type":"object","properties":{
                 "circuit_id":{"type":"string"},
                 "netlist":{"type":"string","description":NETLIST},
+                "path":{"type":"string","description":PATH},
                 "analyses":{"type":"array","items":{"type":"string"},
                             "description":"analysis cards replacing those in the netlist"}}})
         },
@@ -247,15 +250,31 @@ fn circuit(s: &mut Session, a: &Value) -> Result<(String, Option<Value>), ApiErr
     if let Some(id) = a.get("circuit_id").and_then(Value::as_str) {
         return Ok((id.to_string(), None));
     }
-    let text = str_arg(a, "netlist").map_err(|_| bad("give `circuit_id` or `netlist`"))?;
-    let rep = s.load(text)?;
+    let rep = load(s, a).map_err(|e| {
+        if a.get("netlist").is_none() && a.get("path").is_none() {
+            bad("give `circuit_id`, `netlist` or `path`")
+        } else {
+            e
+        }
+    })?;
     Ok((rep.circuit_id.clone(), Some(to_json(&rep)?)))
+}
+
+/// Load from `path` or `netlist`.
+fn load(s: &mut Session, a: &Value) -> Result<spx_api::LoadReport, ApiError> {
+    match a.get("path").and_then(Value::as_str) {
+        Some(p) => s.load_file(std::path::Path::new(p)),
+        None => s.load(str_arg(a, "netlist")?),
+    }
 }
 
 pub(crate) fn call(s: &mut Session, name: &str, a: &Value) -> Result<Value, ApiError> {
     match name {
-        "validate_netlist" => to_json(&s.validate(str_arg(a, "netlist")?)),
-        "load_netlist" => to_json(&s.load(str_arg(a, "netlist")?)?),
+        "validate_netlist" => match a.get("path").and_then(Value::as_str) {
+            Some(p) => to_json(&s.validate_file(std::path::Path::new(p))),
+            None => to_json(&s.validate(str_arg(a, "netlist")?)),
+        },
+        "load_netlist" => to_json(&load(s, a)?),
         "estimate_cost" => to_json(&s.estimate(str_arg(a, "circuit_id")?)?),
         "simulate" => {
             let (id, loaded) = circuit(s, a)?;

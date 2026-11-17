@@ -258,7 +258,16 @@ impl Session {
 
     /// Parse, elaborate and lint a netlist without storing it.
     pub fn validate(&self, text: &str) -> Validation {
-        match spx_netlist::parse(text) {
+        self.validate_parsed(spx_netlist::parse(text))
+    }
+
+    /// Like [`Session::validate`] for a file (`.include` / `.lib` resolve relative to it).
+    pub fn validate_file(&self, path: &std::path::Path) -> Validation {
+        self.validate_parsed(spx_netlist::parse_file(path))
+    }
+
+    fn validate_parsed(&self, parsed: Result<Netlist, Vec<Diagnostic>>) -> Validation {
+        match parsed {
             Err(diagnostics) => Validation {
                 ok: false,
                 stats: None,
@@ -279,9 +288,22 @@ impl Session {
         }
     }
 
-    /// Load a netlist into the session.
+    /// Load a netlist into the session (file includes are not available; see
+    /// [`Session::load_file`]).
     pub fn load(&mut self, text: &str) -> Result<LoadReport, ApiError> {
-        let nl = spx_netlist::parse(text).map_err(|d| ApiError {
+        self.load_parsed(spx_netlist::parse(text))
+    }
+
+    /// Load a netlist file; `.include` / `.lib` resolve relative to it.
+    pub fn load_file(&mut self, path: &std::path::Path) -> Result<LoadReport, ApiError> {
+        self.load_parsed(spx_netlist::parse_file(path))
+    }
+
+    fn load_parsed(
+        &mut self,
+        parsed: Result<Netlist, Vec<Diagnostic>>,
+    ) -> Result<LoadReport, ApiError> {
+        let nl = parsed.map_err(|d| ApiError {
             diagnostics: sorted(d),
         })?;
         let checked = spx_engine::check(&nl).map_err(|d| ApiError {

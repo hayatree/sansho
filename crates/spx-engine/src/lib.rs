@@ -152,8 +152,9 @@ fn run_analysis(
             tstop,
             tstart,
             tmax,
+            uic,
             ..
-        } => analysis::tran(ckt, opts, *tstep, *tstop, *tstart, *tmax),
+        } => analysis::tran(ckt, opts, *tstep, *tstop, *tstart, *tmax, *uic),
     }
 }
 

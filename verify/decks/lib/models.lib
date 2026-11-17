@@ -1,0 +1,9 @@
+* Toy level-1 model library with corners and length bins (for spx verification only).
+.lib tt
+.param dvt=0
+.include bins.inc
+.endl
+.lib ff
+.param dvt=-0.05
+.include bins.inc
+.endl

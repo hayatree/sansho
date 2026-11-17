@@ -5,10 +5,12 @@
 
 use spx_diag::{Confidence, Diagnostic, Span};
 
-use crate::lexer::{Line, Token, lex};
+use crate::lexer::{Line, Token};
 use crate::number::{parse_number, scale_suffix};
+use crate::preproc::{NoFiles, SourceLoader, preprocess};
 use crate::{
-    AcSweep, AnalysisCard, Element, ElementKind, ModelCard, Netlist, OptionCard, SourceSpec, TranFn,
+    AcSweep, AnalysisCard, Element, ElementKind, ModelCard, Netlist, NodeValue, OptionCard,
+    SourceSpec, TranFn,
 };
 
 /// Model types accepted on `.model` cards.
@@ -19,31 +21,18 @@ const MODEL_TYPES: &[&str] = &["d", "npn", "pnp", "nmos", "pmos"];
 /// On success the returned netlist carries any warnings. On failure, all diagnostics (errors and
 /// warnings) found in the whole input are returned.
 pub fn parse(text: &str) -> Result<Netlist, Vec<Diagnostic>> {
-    let lexed = lex(text);
-    let mut p = Parser::default();
-    let mut in_control = false;
-    for line in &lexed.lines {
+    parse_with(text, &NoFiles)
+}
+
+/// Parse netlist text, loading `.include` / `.lib` files through `loader`.
+pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<Diagnostic>> {
+    let pre = preprocess(text, loader);
+    let mut p = Parser {
+        diags: pre.diags,
+        ..Parser::default()
+    };
+    for line in &pre.lines {
         let head = line.tokens[0].lower();
-        if in_control {
-            if head == ".endc" {
-                in_control = false;
-            }
-            continue;
-        }
-        if head == ".end" {
-            break;
-        }
-        if head == ".control" {
-            in_control = true;
-            p.diags.push(
-                Diagnostic::warning(
-                    "W-PARSE-CONTROL",
-                    ".control blocks are not supported and were skipped",
-                )
-                .with_span(line.span()),
-            );
-            continue;
-        }
         if head.starts_with('.') {
             p.dot_card(&head, line);
         } else {
@@ -51,12 +40,16 @@ pub fn parse(text: &str) -> Result<Netlist, Vec<Diagnostic>> {
         }
     }
     p.resolve_bjt_substrates();
+    p.resolve_bins();
     p.check_models();
     if p.diags.iter().any(Diagnostic::is_error) {
         return Err(p.diags);
     }
     Ok(Netlist {
-        title: lexed.title,
+        title: pre.title,
+        sources: pre.sources,
+        initial_conditions: p.ics,
+        nodesets: p.nodesets,
         elements: p.elements,
         analyses: p.analyses,
         options: p.options,
@@ -73,6 +66,8 @@ struct Parser {
     options: Vec<OptionCard>,
     models: Vec<ModelCard>,
     measures: Vec<crate::MeasureCard>,
+    ics: Vec<NodeValue>,
+    nodesets: Vec<NodeValue>,
     diags: Vec<Diagnostic>,
     /// BJTs whose 4th/5th positional fields are ambiguous until all models are known:
     /// (element index, positional tokens after the three terminals).
@@ -619,6 +614,74 @@ impl Parser {
     }
 
     /// Report instances that reference undefined models or models of the wrong type.
+    /// Resolve references to binned models (`nch` → `nch.1`, `nch.2`, ...) by the instance
+    /// geometry: the bin with `lmin <= l < lmax` and `wmin <= w < wmax` is chosen.
+    fn resolve_bins(&mut self) {
+        let mut errs = Vec::new();
+        for e in &mut self.elements {
+            let ElementKind::Mosfet { model, params, .. } = &mut e.kind else {
+                continue;
+            };
+            if self.models.iter().any(|m| m.name == *model) {
+                continue;
+            }
+            let prefix = format!("{model}.");
+            let bins: Vec<&ModelCard> = self
+                .models
+                .iter()
+                .filter(|m| {
+                    m.name
+                        .strip_prefix(&prefix)
+                        .is_some_and(|b| !b.is_empty() && b.bytes().all(|c| c.is_ascii_digit()))
+                })
+                .collect();
+            if bins.is_empty() {
+                continue;
+            }
+            let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|p| p.1);
+            let (Some(l), Some(w)) = (get("l"), get("w")) else {
+                errs.push(
+                    Diagnostic::error(
+                        "E-PARSE-MODEL",
+                        format!(
+                            "`{}`: binned model `{model}` needs explicit l= and w=",
+                            e.name
+                        ),
+                    )
+                    .with_span(e.span),
+                );
+                continue;
+            };
+            let p = |m: &ModelCard, k: &str, d: f64| {
+                m.params.iter().find(|(n, _)| n == k).map_or(d, |p| p.1)
+            };
+            // Relative tolerance for geometry exactly on a bin boundary.
+            let tol = 1e-9;
+            let fits = |m: &&ModelCard| {
+                let (lmin, lmax) = (p(m, "lmin", 0.0), p(m, "lmax", f64::INFINITY));
+                let (wmin, wmax) = (p(m, "wmin", 0.0), p(m, "wmax", f64::INFINITY));
+                l >= lmin * (1.0 - tol)
+                    && l < lmax * (1.0 - tol)
+                    && w >= wmin * (1.0 - tol)
+                    && w < wmax * (1.0 - tol)
+            };
+            match bins.iter().find(|m| fits(m)) {
+                Some(m) => *model = m.name.clone(),
+                None => errs.push(
+                    Diagnostic::error(
+                        "E-PARSE-MODEL",
+                        format!(
+                            "`{}`: no bin of model `{model}` covers l = {l:e}, w = {w:e}",
+                            e.name
+                        ),
+                    )
+                    .with_span(e.span),
+                ),
+            }
+        }
+        self.diags.extend(errs);
+    }
+
     fn check_models(&mut self) {
         let mut errs = Vec::new();
         for e in &self.elements {
@@ -839,15 +902,6 @@ impl Parser {
                     );
                     return;
                 }
-                if uic {
-                    self.diags.push(
-                        Diagnostic::warning(
-                            "W-PARSE-IGNORED",
-                            "UIC is not supported yet; the initial operating point is computed",
-                        )
-                        .with_span(span),
-                    );
-                }
                 self.analyses.push(AnalysisCard::Tran {
                     span,
                     tstep,
@@ -917,6 +971,39 @@ impl Parser {
                 }
             }
             ".title" => {}
+            ".ic" | ".nodeset" => {
+                // `v(node)=value` lexes as `v node = value`.
+                let mut out = Vec::new();
+                let mut i = 1;
+                while i < t.len() {
+                    if t[i].lower() == "v"
+                        && t.get(i + 2).is_some_and(Token::is_eq)
+                        && let Some(vt) = t.get(i + 3)
+                    {
+                        let Some(v) = self.number(vt, "the node value") else {
+                            return;
+                        };
+                        out.push(NodeValue {
+                            node: node_name(&t[i + 1]),
+                            value: v,
+                            span: t[i].span,
+                        });
+                        i += 4;
+                    } else {
+                        self.err(
+                            "E-PARSE-UNEXPECTED",
+                            format!("expected `v(node)=value`, found `{}`", t[i].text),
+                            t[i].span,
+                        );
+                        return;
+                    }
+                }
+                if head == ".ic" {
+                    self.ics.extend(out);
+                } else {
+                    self.nodesets.extend(out);
+                }
+            }
             _ => self.diags.push(
                 Diagnostic::warning(
                     "W-PARSE-UNSUPPORTED",

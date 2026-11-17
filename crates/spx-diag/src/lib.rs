@@ -20,18 +20,35 @@ pub struct Span {
     pub line: u32,
     /// 1-based column number.
     pub col: u32,
+    /// Source file index: 0 is the main netlist, others index the netlist's `sources`
+    /// (`.include` / `.lib` files).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub file: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 impl Span {
-    /// Create a span.
+    /// Create a span in the main netlist.
     pub fn new(line: u32, col: u32) -> Self {
-        Self { line, col }
+        Self { line, col, file: 0 }
+    }
+
+    /// The same position in source file `file`.
+    pub fn in_file(self, file: u32) -> Self {
+        Self { file, ..self }
     }
 }
 
 impl std::fmt::Display for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.line, self.col)
+        if self.file == 0 {
+            write!(f, "{}:{}", self.line, self.col)
+        } else {
+            write!(f, "file#{}:{}:{}", self.file, self.line, self.col)
+        }
     }
 }
 

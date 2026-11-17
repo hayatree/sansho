@@ -44,6 +44,10 @@ pub struct Circuit {
     pub(crate) parallel: bool,
     /// Per external node: names of the attached elements, nonlinear devices first.
     pub(crate) node_elements: Vec<Vec<String>>,
+    /// `.ic` values as (unknown index, voltage).
+    pub(crate) ics: Vec<(usize, f64)>,
+    /// `.nodeset` values as (unknown index, voltage).
+    pub(crate) nodesets: Vec<(usize, f64)>,
 }
 
 /// A source of one assembled value: `(group, slot)`.
@@ -303,6 +307,27 @@ pub fn compile(
             node_index.get(name).copied()
         }
     };
+
+    // --- Initial conditions and node sets ---
+    let mut node_values = |list: &[spx_netlist::NodeValue], what: &str| -> Vec<(usize, f64)> {
+        let mut out = Vec::new();
+        for v in list {
+            match node_index.get(v.node.as_str()) {
+                Some(&i) => out.push((i, v.value)),
+                None if v.node == GROUND => {}
+                None => diags.push(
+                    Diagnostic::warning(
+                        "W-ELAB-NODE",
+                        format!("{what} refers to unknown node `{}`; ignored", v.node),
+                    )
+                    .with_span(v.span),
+                ),
+            }
+        }
+        out
+    };
+    let ics = node_values(&nl.initial_conditions, ".ic");
+    let nodesets = node_values(&nl.nodesets, ".nodeset");
 
     // --- Topology checks: DC path to ground, loops of voltage-defined branches ---
     let nn = node_names.len();
@@ -618,6 +643,8 @@ pub fn compile(
             gather,
             parallel: nonlinear_count >= PARALLEL_MIN_NONLINEAR,
             node_elements,
+            ics,
+            nodesets,
         },
         diags,
     ))

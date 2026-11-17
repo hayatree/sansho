@@ -4,7 +4,8 @@ A fast, agent-native SPICE circuit simulator written in Rust.
 
 > **Status:** pre-alpha. R, C, L, V, I, E, F, G, H, diodes, BJTs (Gummel–Poon) and level-1
 > MOSFETs; `.op`, `.dc`, `.ac`, `.tran` (trapezoidal or BDF2 with LTE control), `.meas`, `.model`,
-> `.options`. Results are checked against ngspice (`verify/`). Session API and MCP server for
+> `.options`, `.param`/expressions/`.func`, `.subckt`, `.include`/`.lib`, model binning, `.ic`,
+> `.nodeset`, UIC. Results are checked against ngspice (`verify/`). Session API and MCP server for
 > AI agents; pre-run lint and structured diagnostics ([`docs/diagnostics.md`](docs/diagnostics.md));
 > bit-deterministic multithreading. See [`docs/architecture.md`](docs/architecture.md).
 

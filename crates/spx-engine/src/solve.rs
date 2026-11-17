@@ -61,7 +61,12 @@ pub(crate) struct Workspace {
     pub accepted: Vec<Vec<f64>>,
     /// Whether any device limited its controlling voltages in the last assembly.
     pub noncon: bool,
+    /// Nodes held at a voltage through [`CLAMP_G`] (`.ic` / `.nodeset`): (unknown, volts).
+    pub clamp: Vec<(usize, f64)>,
 }
+
+/// Conductance that holds `.ic` / `.nodeset` nodes at their value (S).
+pub(crate) const CLAMP_G: f64 = 1e10;
 
 impl Workspace {
     pub(crate) fn new(ckt: &Circuit) -> Self {
@@ -83,6 +88,7 @@ impl Workspace {
             state: ckt.state_len.iter().map(|&n| vec![0.0; n]).collect(),
             accepted: ckt.state_len.iter().map(|&n| vec![0.0; n]).collect(),
             noncon: false,
+            clamp: Vec::new(),
         }
     }
 
@@ -170,6 +176,13 @@ pub(crate) fn assemble(
     gather(&mut a.f, &gm.f, slots, |s| &s.f, par);
     gather(&mut a.q, &gm.q, slots, |s| &s.q, par);
     gather(&mut a.b, &gm.b, slots, |s| &s.b, par);
+    for &(i, v) in &ws.clamp {
+        let d = ckt.node_diag[i];
+        if d != DISCARD {
+            a.g[d] += CLAMP_G;
+            a.f[i] += CLAMP_G * (x[i] - v);
+        }
+    }
     let g = opts.rshunt.map_or(0.0, |r| 1.0 / r) + gshunt;
     if g > 0.0 {
         for (i, &d) in ckt.node_diag.iter().enumerate() {

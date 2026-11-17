@@ -1,0 +1,11 @@
+Cross-coupled inverter latch: .nodeset selects the state
+VDD vdd 0 1.8
+MP1 q qb vdd vdd pch l=1u w=2u
+MN1 q qb 0 0 nch l=1u w=1u
+MP2 qb q vdd vdd pch l=1u w=2u
+MN2 qb q 0 0 nch l=1u w=1u
+.nodeset v(q)=1.8 v(qb)=0
+.model nch nmos vto=0.5 kp=100u lambda=0.02
+.model pch pmos vto=-0.5 kp=40u lambda=0.02
+.op
+.end

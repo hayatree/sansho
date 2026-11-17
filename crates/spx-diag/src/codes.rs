@@ -81,6 +81,24 @@ pub const CODES: &[CodeInfo] = &[
         &["Check the element letter; subcircuits (`X`) and some sources are not supported yet."],
     ),
     e(
+        "E-PARSE-EXPR",
+        "Invalid parameter expression",
+        "A `{...}` / `'...'` expression, `.param` or `.func` could not be parsed or evaluated \
+         (syntax error, unknown parameter or function, or a parameter that depends on itself).",
+        &[
+            "Check the expression and that every parameter it uses is defined with `.param` \
+           or as a subcircuit parameter.",
+        ],
+    ),
+    e(
+        "E-PARSE-INCLUDE",
+        "Cannot include file",
+        "An `.include` or `.lib` file could not be read, or the library has no such section. \
+         Netlists passed as text (e.g. over MCP) cannot include files unless loaded from a \
+         path.",
+        &["Check the path; relative paths are resolved from the including file."],
+    ),
+    e(
         "E-PARSE-MEAS",
         "Invalid `.meas` card",
         "A `.meas` card could not be parsed.",
@@ -99,6 +117,14 @@ pub const CODES: &[CodeInfo] = &[
         "A token that must be a number could not be parsed (SPICE scale suffixes such as \
          `k`, `meg`, `u`, `n`, `p` are accepted).",
         &["Write the value as a plain number with an optional SPICE suffix."],
+    ),
+    e(
+        "E-PARSE-SUBCKT",
+        "Invalid subcircuit",
+        "A `.subckt` definition is malformed (e.g. missing `.ends`), or an `X` instance \
+         references an undefined subcircuit, connects the wrong number of nodes, or nests \
+         recursively.",
+        &["Compare the `X` line with the `.subckt` port list shown in the note."],
     ),
     e(
         "E-PARSE-UNEXPECTED",
@@ -185,6 +211,12 @@ pub const CODES: &[CodeInfo] = &[
         "Some nodes have no DC path to ground (e.g. only capacitors or gates attach to them); \
          the DC matrix may be singular.",
         &["Add a large resistor to ground, or set `.options rshunt=1e12`."],
+    ),
+    w(
+        "W-ELAB-NODE",
+        "Unknown node in `.ic` / `.nodeset`",
+        "An initial condition or node set names a node that does not exist; it is ignored.",
+        &["Check the node name (nodes inside subcircuits are named `x1.node`)."],
     ),
     w(
         "W-ELAB-VLOOP",

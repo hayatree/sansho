@@ -8,19 +8,43 @@
 
 #![forbid(unsafe_code)]
 
+mod expr;
 mod lexer;
 mod meas;
 mod number;
 mod parser;
+mod preproc;
 mod writer;
 
-pub use lexer::{Lexed, Line, Token, lex};
+pub use expr::{Expr, eval_const, parse_expr};
+pub use lexer::{Lexed, Line, Token, lex, lex_source};
 pub use number::parse_number;
-pub use parser::parse;
+pub use parser::{parse, parse_with};
+pub use preproc::{FsLoader, NoFiles, SourceLoader};
 pub use spx_diag::{Diagnostic, Severity, Span};
 pub use writer::{write, write_analysis, write_measure};
 
 use serde::Serialize;
+
+/// Parse a netlist file; `.include` / `.lib` paths resolve relative to the including file.
+///
+/// I/O errors on the main file are reported as `E-PARSE-INCLUDE`.
+pub fn parse_file(path: &std::path::Path) -> Result<Netlist, Vec<Diagnostic>> {
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        vec![Diagnostic::error(
+            "E-PARSE-INCLUDE",
+            format!("cannot read `{}`: {e}", path.display()),
+        )]
+    })?;
+    let base = path
+        .parent()
+        .map_or_else(std::path::PathBuf::new, std::path::Path::to_path_buf);
+    let mut nl = parse_with(&text, &FsLoader { base })?;
+    if let Some(main) = nl.sources.first_mut() {
+        *main = path.display().to_string();
+    }
+    Ok(nl)
+}
 
 /// Name of the ground node after normalization.
 pub const GROUND: &str = "0";
@@ -40,8 +64,26 @@ pub struct Netlist {
     pub models: Vec<ModelCard>,
     /// `.meas` cards in source order.
     pub measures: Vec<MeasureCard>,
+    /// `.ic` node voltages.
+    pub initial_conditions: Vec<NodeValue>,
+    /// `.nodeset` node voltages (initial guesses for the operating point).
+    pub nodesets: Vec<NodeValue>,
+    /// Source files: index 0 is the main netlist (empty name), others are included files
+    /// (referenced by `Span::file`).
+    pub sources: Vec<String>,
     /// Non-fatal diagnostics (warnings).
     pub warnings: Vec<Diagnostic>,
+}
+
+/// A node voltage from `.ic` or `.nodeset`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NodeValue {
+    /// Node name (lower-cased).
+    pub node: String,
+    /// Voltage.
+    pub value: f64,
+    /// Location.
+    pub span: Span,
 }
 
 /// A circuit element instance.
