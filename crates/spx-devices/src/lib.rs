@@ -357,6 +357,8 @@ pub struct AcSlots {
 pub enum Mode {
     /// DC operating point / DC sweep: sources use their DC value.
     Dc,
+    /// AC small-signal linearization at the DC operating point.
+    Ac,
     /// Transient (including its initial operating point): sources use their waveform at `time`.
     Tran,
 }
@@ -391,6 +393,8 @@ pub struct EvalCtx {
     /// First iteration of a fresh DC solve: nonlinear devices ignore `x` and linearize around
     /// their built-in initial junction voltages.
     pub init_junctions: bool,
+    /// Last evaluation point of the current analysis.
+    pub final_step: bool,
 }
 
 impl EvalCtx {
@@ -408,6 +412,7 @@ impl EvalCtx {
             temp: REFTEMP,
             limit: true,
             init_junctions: false,
+            final_step: false,
         }
     }
 }

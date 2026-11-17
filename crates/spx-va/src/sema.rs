@@ -12,17 +12,29 @@ enum Symbol {
     Param(usize, Ty),
     Var(usize, Ty),
 }
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum BranchKey {
+    Named(String),
+    Nodes(Option<usize>, Option<usize>),
+}
 struct Lower {
+    potentials: BTreeSet<String>,
+    function_writes: BTreeSet<usize>,
+    branch_ids: BTreeMap<BranchKey, usize>,
     symbols: BTreeMap<String, Symbol>,
     nodes: BTreeMap<String, Option<usize>>,
-    port_names: BTreeSet<String>,
+    probes: BTreeMap<String, usize>,
+    port_names: BTreeMap<String, usize>,
+    optional_ports: Vec<bool>,
     named: BTreeMap<String, Vec<ast::Expr>>,
     branches: Vec<Branch>,
     branch_names: Vec<String>,
     functions: BTreeMap<String, usize>,
+    signatures: Vec<Vec<(String, Ty)>>,
     definitions: Vec<ast::AnalogFunction>,
     slots: usize,
     states: usize,
+    integral_count: usize,
     in_function: bool,
     arrays: BTreeSet<usize>,
     depth: usize,
@@ -47,20 +59,58 @@ pub fn compile_module(
     let Some(m) = module else {
         return Err(vec![error(src.span, "module not found")]);
     };
-    lower(m).map_err(|e| vec![e])
+    let access: BTreeMap<_, _> = src
+        .natures
+        .iter()
+        .filter_map(|n| {
+            n.properties.iter().find_map(|(key, v)| {
+                if key.name == "access"
+                    && let A::Ident(id) = &v.kind
+                {
+                    Some((&n.name.name, &id.name))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+    let mut potentials = BTreeSet::from(["V".into(), "Temp".into()]);
+    for d in &src.disciplines {
+        for (role, v) in &d.properties {
+            if role.name == "potential"
+                && let A::Ident(nature) = &v.kind
+                && let Some(name) = access.get(&nature.name)
+            {
+                potentials.insert((*name).clone());
+            }
+        }
+    }
+    lower(m, potentials).map_err(|e| vec![e])
 }
-fn lower(m: &ast::Module) -> R<CompiledModule> {
+fn lower(m: &ast::Module, potentials: BTreeSet<String>) -> R<CompiledModule> {
     let mut l = Lower {
+        potentials,
+        function_writes: BTreeSet::new(),
+        branch_ids: BTreeMap::new(),
         symbols: BTreeMap::new(),
         nodes: BTreeMap::new(),
-        port_names: m.ports.iter().map(|p| p.name.clone()).collect(),
+        probes: BTreeMap::new(),
+        port_names: m
+            .ports
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.name.clone(), i))
+            .collect(),
+        optional_ports: vec![false; m.ports.len()],
         named: BTreeMap::new(),
         branches: vec![],
         branch_names: vec![],
         functions: BTreeMap::new(),
+        signatures: vec![],
         definitions: vec![],
         slots: 0,
         states: 0,
+        integral_count: 0,
         in_function: false,
         arrays: BTreeSet::new(),
         depth: 0,
@@ -76,6 +126,7 @@ fn lower(m: &ast::Module) -> R<CompiledModule> {
     l.nodes.insert("0".into(), None);
     let mut grounds = BTreeSet::new();
     let mut nets = Vec::new();
+    let mut seen_nets = BTreeSet::new();
     for item in &m.items {
         match &item.kind {
             I::Ground(names) => {
@@ -85,7 +136,7 @@ fn lower(m: &ast::Module) -> R<CompiledModule> {
             }
             I::NetDecl { names, .. } => {
                 for n in names {
-                    if !ports.contains(&n.name) && !nets.contains(&n.name) {
+                    if !l.port_names.contains_key(&n.name) && seen_nets.insert(n.name.clone()) {
                         nets.push(n.name.clone());
                     }
                 }
@@ -102,13 +153,14 @@ fn lower(m: &ast::Module) -> R<CompiledModule> {
                 if l.functions.insert(f.name.name.clone(), i).is_some() {
                     return Err(error(f.span, "duplicate function"));
                 }
+                l.signatures.push(signature(f));
                 l.definitions.push(f.clone());
             }
             _ => {}
         }
     }
     // Only allocate nets actually referenced in analog expressions, including named branches.
-    let mut used = BTreeSet::new();
+    let mut used = Uses::default();
     for item in &m.items {
         if let I::Analog(s) = &item.kind {
             collect_stmt(s, &mut used);
@@ -121,29 +173,21 @@ fn lower(m: &ast::Module) -> R<CompiledModule> {
             collect_expr(e, &mut used);
         }
     }
-    loop {
-        let before = used.len();
-        for f in &l.definitions {
-            if used.contains(&f.name.name) {
-                for s in &f.body {
-                    collect_stmt(s, &mut used);
-                }
+    while let Some(name) = used.pending.pop() {
+        if let Some(&i) = l.functions.get(&name) {
+            for s in &l.definitions[i].body {
+                collect_stmt(s, &mut used);
             }
         }
-        for (name, nodes) in &l.named {
-            if used.contains(name) {
-                for n in nodes {
-                    collect_expr(n, &mut used);
-                }
+        if let Some(nodes) = l.named.get(&name) {
+            for n in nodes {
+                collect_expr(n, &mut used);
             }
-        }
-        if before == used.len() {
-            break;
         }
     }
-    let internal_nodes: Vec<_> = nets
+    let mut internal_nodes: Vec<_> = nets
         .into_iter()
-        .filter(|n| used.contains(n) && !grounds.contains(n))
+        .filter(|n| used.names.contains(n) && !grounds.contains(n))
         .collect();
     for (i, n) in internal_nodes.iter().enumerate() {
         l.nodes.insert(n.clone(), Some(ports.len() + i));
@@ -151,7 +195,62 @@ fn lower(m: &ast::Module) -> R<CompiledModule> {
     for n in grounds {
         l.nodes.insert(n, None);
     }
+    for id in used.probes {
+        let Some(Some(port)) = l
+            .nodes
+            .get(&id)
+            .copied()
+            .filter(|_| l.port_names.contains_key(&id))
+        else {
+            return Err(error(
+                m.span,
+                format!("port current requires a non-ground module port: {id}"),
+            ));
+        };
+        let inner = ports.len() + internal_nodes.len();
+        internal_nodes.push(format!("{id}#sense"));
+        l.nodes.insert(id.clone(), Some(inner));
+        l.probes.insert(id.clone(), l.branches.len());
+        l.branches.push(Branch {
+            a: Some(port),
+            b: Some(inner),
+            current: Some(0),
+            observed: true,
+            contributed: false,
+        });
+        l.branch_names.push(format!("{id}#flow"));
+    }
     let mut params: Vec<ParamInfo> = Vec::new();
+    if !m.items.iter().any(|item| {
+        matches!(&item.kind,I::Param(p) if p.name.name.eq_ignore_ascii_case("m"))
+            || matches!(&item.kind,I::AliasParam{name,..} if name.name.eq_ignore_ascii_case("m"))
+    }) {
+        let default = ast::Expr {
+            kind: A::Real(1.),
+            span: m.span,
+        };
+        params.push(ParamInfo {
+            name: "m".into(),
+            ty: "real".into(),
+            value: l.expr(&default)?,
+            default,
+            ranges: vec![],
+            aliases: vec![],
+            local: false,
+            placement: Some(ast::ParamKind::Instance),
+            limits: vec![],
+        });
+        // A source-level declaration can shadow the implicit multiplier.
+        if !m
+            .items
+            .iter()
+            .any(|d| matches!(&d.kind,I::Var(v) if v.name.name=="m"))
+            && !l.nodes.contains_key("m")
+        {
+            l.symbols.insert("m".into(), Symbol::Param(0, Ty::Real));
+        }
+    }
+    let implicit_m = !params.is_empty();
     let mut variables = Vec::new();
     for item in &m.items {
         match &item.kind {
@@ -185,6 +284,7 @@ fn lower(m: &ast::Module) -> R<CompiledModule> {
                     ranges: p.ranges.clone(),
                     aliases: vec![],
                     local: p.local,
+                    placement: p.placement,
                     value,
                     limits,
                 });
@@ -212,6 +312,39 @@ fn lower(m: &ast::Module) -> R<CompiledModule> {
             l.discover(s)?;
         }
     }
+    l.calls = vec![BTreeSet::new(); l.definitions.len()];
+    let mut functions = vec![];
+    for i in 0..l.definitions.len() {
+        functions.push(l.function(i)?);
+    }
+    // Remove roots in topological order. Remaining edges imply recursion.
+    let mut incoming = vec![0usize; l.calls.len()];
+    for callee in l.calls.iter().flatten() {
+        incoming[*callee] += 1;
+    }
+    let mut roots: Vec<_> = (0..incoming.len()).filter(|&i| incoming[i] == 0).collect();
+    while let Some(i) = roots.pop() {
+        for &j in &l.calls[i] {
+            incoming[j] -= 1;
+            if incoming[j] == 0 {
+                roots.push(j);
+            }
+        }
+    }
+    if let Some(i) = incoming.iter().position(|&n| n != 0) {
+        return Err(unsupported(
+            l.definitions[i].span,
+            "recursive analog functions are unsupported",
+        ));
+    }
+    let mut body = vec![];
+    for item in &m.items {
+        if let I::Analog(s) = &item.kind {
+            body.push(l.stmt(s)?);
+        }
+    }
+    let first_integral = ports.len() + internal_nodes.len();
+    internal_nodes.extend((0..l.integral_count).map(|i| format!("#idt{i}")));
     let n = ports.len() + internal_nodes.len();
     let mut branch_unknowns = vec![];
     for (i, b) in l.branches.iter_mut().enumerate() {
@@ -220,34 +353,20 @@ fn lower(m: &ast::Module) -> R<CompiledModule> {
             branch_unknowns.push(l.branch_names[i].clone());
         }
     }
-    l.calls = vec![BTreeSet::new(); l.definitions.len()];
-    let mut functions = vec![];
-    for i in 0..l.definitions.len() {
-        functions.push(l.function(i)?);
-    }
-    // Detect every cycle, including indirect recursion, without recursive graph traversal.
-    for start in 0..l.calls.len() {
-        let mut work: Vec<_> = l.calls[start].iter().copied().collect();
-        let mut seen = BTreeSet::new();
-        while let Some(i) = work.pop() {
-            if i == start {
-                return Err(unsupported(
-                    l.definitions[start].span,
-                    "recursive analog functions are unsupported",
-                ));
-            }
-            if seen.insert(i) {
-                work.extend(l.calls[i].iter().copied());
+    let mut param_index = BTreeMap::new();
+    for (i, p) in params.iter().enumerate() {
+        for name in std::iter::once(&p.name).chain(&p.aliases) {
+            let index = param_index
+                .entry(name.to_ascii_lowercase())
+                .or_insert(Some(i));
+            if *index != Some(i) {
+                *index = None;
             }
         }
     }
-    let mut body = vec![];
-    for item in &m.items {
-        if let I::Analog(s) = &item.kind {
-            body.push(l.stmt(s)?);
-        }
-    }
-    let mut module = CompiledModule {
+    Ok(CompiledModule {
+        optional_ports: l.optional_ports,
+        param_index,
         name: m.name.name.clone(),
         ports,
         internal_nodes,
@@ -258,14 +377,12 @@ fn lower(m: &ast::Module) -> R<CompiledModule> {
         functions,
         body,
         slots: l.slots,
+        function_writes: l.function_writes,
         states: l.states,
-        identity: 0,
-    };
-    use std::hash::{Hash, Hasher};
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    format!("{module:?}").hash(&mut hash);
-    module.identity = hash.finish();
-    Ok(module)
+        integrals: first_integral..n,
+        identity: std::sync::Arc::new(()),
+        implicit_m,
+    })
 }
 fn check_conversion(a: Ty, b: Ty, s: Span) -> R<()> {
     if (a == Ty::String) != (b == Ty::String) {
@@ -337,6 +454,31 @@ impl Lower {
             .copied()
             .ok_or_else(|| error(e.span, format!("unknown net {name}")))
     }
+    fn port_probe(&self, args: &[ast::Expr], direct: bool) -> Option<usize> {
+        let [
+            ast::Expr {
+                kind: A::Ident(id), ..
+            },
+        ] = args
+        else {
+            return None;
+        };
+        if direct {
+            self.probes.get(&id.name).copied()
+        } else if let Some(
+            [
+                ast::Expr {
+                    kind: A::Port(port),
+                    ..
+                },
+            ],
+        ) = self.named.get(&id.name).map(Vec::as_slice)
+        {
+            self.probes.get(&port.name).copied()
+        } else {
+            None
+        }
+    }
     fn endpoints(&self, args: &[ast::Expr], span: Span) -> R<(Option<usize>, Option<usize>)> {
         let args = if args.len() == 1
             && let A::Ident(i) = &args[0].kind
@@ -354,21 +496,31 @@ impl Lower {
     }
     fn branch(&mut self, args: &[ast::Expr], span: Span, voltage: bool) -> R<usize> {
         let (a, b) = self.endpoints(args, span)?;
-        if let Some(i) = self
-            .branches
-            .iter()
-            .position(|v| (v.a == a && v.b == b) || (v.a == b && v.b == a))
+        let key = if let [
+            ast::Expr {
+                kind: A::Ident(id), ..
+            },
+        ] = args
+            && self.named.contains_key(&id.name)
         {
+            BranchKey::Named(id.name.clone())
+        } else {
+            BranchKey::Nodes(a.min(b), a.max(b))
+        };
+        if let Some(&i) = self.branch_ids.get(&key) {
             if voltage {
                 self.branches[i].current = Some(0);
             }
             return Ok(i);
         }
         let i = self.branches.len();
+        self.branch_ids.insert(key, i);
         self.branches.push(Branch {
             a,
             b,
             current: voltage.then_some(0),
+            observed: false,
+            contributed: false,
         });
         let name = if args.len() == 1 {
             if let A::Ident(n) = &args[0].kind {
@@ -391,10 +543,12 @@ impl Lower {
                     port_flow,
                 } = &access.kind
                 {
-                    if *port_flow {
-                        return Err(unsupported(access.span, "port flows unsupported"));
+                    if *port_flow || self.port_probe(args, false).is_some() {
+                        return Err(unsupported(access.span, "port branches are read-only"));
                     }
-                    self.branch(args, access.span, nature.name == "V")?;
+                    let i =
+                        self.branch(args, access.span, self.potentials.contains(&nature.name))?;
+                    self.branches[i].contributed = true;
                 } else {
                     return Err(error(access.span, "contribution target must be V or I"));
                 }
@@ -429,7 +583,24 @@ impl Lower {
     }
     fn function(&mut self, i: usize) -> R<Function> {
         let f = self.definitions[i].clone();
-        let saved = self.symbols.clone();
+        let mut saved = BTreeMap::new();
+        let mut shadow = |name: &str| {
+            saved
+                .entry(name.to_owned())
+                .or_insert_with(|| self.symbols.remove(name));
+        };
+        shadow(&f.name.name);
+        for d in &f.declarations {
+            match &d.kind {
+                I::Var(v) => shadow(&v.name.name),
+                I::PortDecl { names, .. } => {
+                    for n in names {
+                        shadow(&n.name);
+                    }
+                }
+                _ => {}
+            }
+        }
         self.in_function = true;
         self.caller = Some(i);
         let result = self.slots;
@@ -451,16 +622,18 @@ impl Lower {
             } = &d.kind
             {
                 for n in names {
-                    if args.iter().any(|(slot,_)| matches!(self.symbols.get(&n.name),Some(Symbol::Var(i,_)) if i==slot)) { return Err(error(n.span,"duplicate function argument")); }
+                    if self.symbols.contains_key(&n.name) {
+                        return Err(error(n.span, "duplicate function argument"));
+                    }
+                    let ty = self.signatures[i][args.len()].1;
                     let slot = self.slots;
                     self.slots += 1;
-                    self.symbols
-                        .insert(n.name.clone(), Symbol::Var(slot, Ty::Real));
+                    self.symbols.insert(n.name.clone(), Symbol::Var(slot, ty));
                     args.push((slot, direction.clone()));
                     locals.push((
                         slot,
                         Variable {
-                            ty: Ty::Real,
+                            ty,
                             dimensions: vec![],
                             init: None,
                         },
@@ -471,7 +644,8 @@ impl Lower {
         for d in &f.declarations {
             if let I::Var(v) = &d.kind {
                 if let Some(Symbol::Var(slot, _)) = self.symbols.get(&v.name.name).copied()
-                    && let Some((_, decl)) = locals.iter_mut().find(|(s, _)| *s == slot)
+                    && let Some((_, decl)) =
+                        slot.checked_sub(result).and_then(|k| locals.get_mut(k))
                 {
                     if !v.dimensions.is_empty() || v.value.is_some() {
                         return Err(unsupported(
@@ -489,7 +663,12 @@ impl Lower {
             }
         }
         let body = f.body.iter().map(|s| self.stmt(s)).collect::<R<Vec<_>>>()?;
-        self.symbols = saved;
+        for (name, old) in saved {
+            self.symbols.remove(&name);
+            if let Some(sym) = old {
+                self.symbols.insert(name, sym);
+            }
+        }
         self.in_function = false;
         self.caller = None;
         Ok(Function {
@@ -531,7 +710,7 @@ impl Lower {
                 statements,
                 ..
             } => {
-                let saved = self.symbols.clone();
+                let mut saved = Vec::new();
                 let mut vars = vec![];
                 let mut declared = BTreeSet::new();
                 for d in declarations {
@@ -540,7 +719,7 @@ impl Lower {
                             if !declared.insert(&v.name.name) {
                                 return Err(error(v.span, "duplicate block variable"));
                             }
-                            self.symbols.remove(&v.name.name);
+                            saved.push((v.name.name.clone(), self.symbols.remove(&v.name.name)));
                             vars.push(self.variable(v)?);
                         }
                         _ => return Err(unsupported(d.span, "block parameters are unsupported")),
@@ -550,11 +729,21 @@ impl Lower {
                     .iter()
                     .map(|s| self.stmt(s))
                     .collect::<R<Vec<_>>>()?;
-                self.symbols = saved;
+                for (name, old) in saved {
+                    self.symbols.remove(&name);
+                    if let Some(sym) = old {
+                        self.symbols.insert(name, sym);
+                    }
+                }
                 Stmt::Block(vars, body)
             }
             S::Assign { lhs, rhs } => {
                 let a = self.lvalue(lhs)?;
+                if self.in_function
+                    && let E::Var(i) = a.kind
+                {
+                    self.function_writes.insert(i);
+                }
                 let b = self.plain(rhs)?;
                 check_conversion(a.ty, b.ty, s.span)?;
                 Stmt::Assign(a, b)
@@ -570,11 +759,7 @@ impl Lower {
                     return Err(error(s.span, "invalid contribution"));
                 };
                 let (a, b) = self.endpoints(args, access.span)?;
-                let i = self
-                    .branches
-                    .iter()
-                    .position(|v| (v.a == a && v.b == b) || (v.a == b && v.b == a))
-                    .ok_or_else(|| error(s.span, "unresolved branch"))?;
+                let i = self.branch(args, access.span, false)?;
                 let e = self.expr(rhs)?;
                 if e.ty == Ty::String {
                     return Err(error(rhs.span, "numeric contribution required"));
@@ -584,7 +769,7 @@ impl Lower {
                 } else {
                     -1.
                 };
-                Stmt::Contrib(i, nature.name == "V", sign, e)
+                Stmt::Contrib(i, self.potentials.contains(&nature.name), sign, e)
             }
             S::If {
                 condition,
@@ -630,23 +815,44 @@ impl Lower {
                 Stmt::Repeat(self.condition(count)?, Box::new(self.stmt(body)?))
             }
             S::Event { events, body } => {
+                let mut initial = false;
+                let mut startup = false;
+                let mut last = false;
                 for e in events {
                     let n = match &e.kind {
                         A::Ident(n) => &n.name,
                         A::Call { name, args } if args.is_empty() => &name.name,
-                        _ => return Err(unsupported(e.span, "only initial events are supported")),
+                        _ => return Err(unsupported(e.span, "unsupported analog event")),
                     };
-                    if !["initial_step", "initial_model", "initial_instance"].contains(&n.as_str())
-                    {
-                        return Err(unsupported(e.span, "only initial events are supported"));
+                    if n == "final_step" {
+                        last = true;
+                    } else if matches!(n.as_str(), "initial_instance" | "initial_model") {
+                        startup = true;
+                    } else if n == "initial_step" {
+                        initial = true;
+                    } else {
+                        return Err(unsupported(e.span, "unsupported analog event"));
                     }
                 }
-                Stmt::Event(Box::new(self.stmt(body)?))
+                Stmt::Event {
+                    initial,
+                    startup,
+                    last,
+                    body: Box::new(self.stmt(body)?),
+                }
             }
             S::SysTask { name, args } => {
                 if ![
-                    "$strobe", "$display", "$write", "$debug", "$warning", "$error", "$finish",
+                    "$strobe",
+                    "$display",
+                    "$write",
+                    "$debug",
+                    "$warning",
+                    "$error",
+                    "$finish",
                     "$fatal",
+                    "$bound_step",
+                    "$discontinuity",
                 ]
                 .contains(&name.name.as_str())
                 {
@@ -676,6 +882,13 @@ impl Lower {
         let mut parameter = true;
         let mut reactive = false;
         let kind = match &e.kind {
+            A::List(_) => return Err(unsupported(e.span, "array literals require a noise table")),
+            A::Port(_) => {
+                return Err(error(
+                    e.span,
+                    "port branch terminal outside branch declaration",
+                ));
+            }
             A::Int(v) => {
                 ty = Ty::Integer;
                 E::Num(*v as f64)
@@ -813,25 +1026,29 @@ impl Lower {
                 args,
                 port_flow,
             } => {
+                if let Some(i) = self.port_probe(args, *port_flow) {
+                    if nature.name != "I" {
+                        return Err(unsupported(e.span, "port probes require flow access"));
+                    }
+                    return Ok(Expr {
+                        kind: E::Current(i),
+                        ty: Ty::Real,
+                        parameter: false,
+                        reactive: false,
+                    });
+                }
                 if *port_flow {
-                    return Err(unsupported(e.span, "port flows are unsupported"));
+                    return Err(error(e.span, "port current requires a module port"));
                 }
                 let (a, b) = self.endpoints(args, e.span)?;
                 parameter = false;
-                if nature.name == "V" {
+                if self.potentials.contains(&nature.name) {
                     E::Voltage(a, b)
                 } else {
-                    let branch = self
-                        .branches
-                        .iter()
-                        .find(|v| (v.a == a && v.b == b) || (v.a == b && v.b == a));
-                    let current = branch.and_then(|v| v.current).ok_or_else(|| {
-                        unsupported(
-                            e.span,
-                            "current read requires a voltage contribution on this branch",
-                        )
-                    })?;
-                    if branch.is_some_and(|v| v.a == a && v.b == b) {
+                    let current = self.branch(args, e.span, true)?;
+                    let branch = &mut self.branches[current];
+                    branch.observed = true;
+                    if branch.a == a && branch.b == b {
                         E::Current(current)
                     } else {
                         E::Unary(
@@ -848,7 +1065,7 @@ impl Lower {
             }
             A::Call { name, args } | A::SysCall { name, args } => {
                 let n = name.name.as_str();
-                if n == "$param_given" {
+                if matches!(n, "$param_given" | "$given") {
                     if args.len() != 1 {
                         return Err(error(e.span, "$param_given requires a parameter"));
                     }
@@ -857,7 +1074,6 @@ impl Lower {
                         return Err(error(e.span, "$param_given requires a parameter"));
                     };
                     ty = Ty::Integer;
-                    parameter = false;
                     E::Given(i)
                 } else if n == "$port_connected" {
                     if args.len() != 1 {
@@ -866,11 +1082,13 @@ impl Lower {
                     let A::Ident(port) = &args[0].kind else {
                         return Err(error(e.span, "$port_connected requires a port"));
                     };
-                    if !self.port_names.contains(&port.name) {
-                        return Err(error(e.span, "$port_connected requires a port"));
-                    }
+                    let i = *self
+                        .port_names
+                        .get(&port.name)
+                        .ok_or_else(|| error(e.span, "$port_connected requires a port"))?;
+                    self.optional_ports[i] = true;
                     ty = Ty::Integer;
-                    E::Connected
+                    E::Connected(i)
                 } else if n == "ddx" {
                     if args.len() != 2 {
                         return Err(error(e.span, "ddx requires two arguments"));
@@ -884,7 +1102,7 @@ impl Lower {
                     else {
                         return Err(unsupported(e.span, "ddx requires V(node)"));
                     };
-                    if nature.name != "V" || a.len() != 1 {
+                    if !self.potentials.contains(&nature.name) || a.len() != 1 {
                         return Err(unsupported(e.span, "ddx requires single-node V(node)"));
                     }
                     let i = self
@@ -905,7 +1123,7 @@ impl Lower {
                     let A::Access { nature, .. } = &args[0].kind else {
                         return Err(error(e.span, "$limit requires a voltage access"));
                     };
-                    if nature.name != "V" {
+                    if !self.potentials.contains(&nature.name) {
                         return Err(error(e.span, "$limit requires V access"));
                     }
                     let A::Str(method) = &args[1].kind else {
@@ -913,7 +1131,8 @@ impl Lower {
                     };
                     let f = self.functions.get(method).copied();
                     let required = match method.as_str() {
-                        "pnjlim" => Some(4),
+                        "pnjlim" | "dummy" => Some(4),
+                        "typedpnjlim_new" => Some(5),
                         "fetlim" => Some(3),
                         _ => None,
                     };
@@ -925,7 +1144,7 @@ impl Lower {
                             ));
                         }
                     } else if let Some(i) = f {
-                        if function_args(&self.definitions[i]).len() != args.len() {
+                        if self.signatures[i].len() != args.len() {
                             return Err(error(
                                 e.span,
                                 "user limiter requires (vnew, vold, args...)",
@@ -946,22 +1165,23 @@ impl Lower {
                     parameter = false;
                     E::Limit(slot, method.clone(), a, f)
                 } else if let Some(i) = self.functions.get(n).copied() {
-                    let formal = function_args(&self.definitions[i])
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect::<Vec<_>>();
+                    let formal = self.signatures[i].clone();
                     if formal.len() != args.len() {
                         return Err(error(e.span, "function argument count mismatch"));
                     }
                     let mut a = vec![];
-                    let types = function_types(&self.definitions[i]);
-                    for ((v, dir), t) in args.iter().zip(formal).zip(types) {
+                    for (v, (dir, t)) in args.iter().zip(formal) {
                         let actual = self.plain(v)?;
                         check_conversion(t, actual.ty, v.span)?;
                         if (dir == "output" || dir == "inout")
                             && !matches!(actual.kind, E::Var(_) | E::Index(..))
                         {
                             return Err(error(v.span, "output/inout arguments must be variables"));
+                        }
+                        if dir != "input"
+                            && let E::Var(i) = actual.kind
+                        {
+                            self.function_writes.insert(i);
                         }
                         a.push(actual);
                     }
@@ -983,15 +1203,39 @@ impl Lower {
                         "white_noise" => 1..=2,
                         "flicker_noise" => 2..=3,
                         "noise_table" => 1..=usize::MAX,
+                        "idt" if args.len() == 2 => 2..=2,
                         "idt" | "cross" | "timer" => {
                             return Err(unsupported(e.span, format!("{n} is unsupported")));
                         }
-                        _ => return Err(error(e.span, format!("unknown function {n}"))),
+                        n if n.starts_with("$rdist_") => 1..=usize::MAX,
+                        _ => return Err(unsupported(e.span, format!("unknown function {n}"))),
                     };
                     if !arity.contains(&args.len()) {
                         return Err(error(e.span, format!("wrong argument count for {n}")));
                     }
-                    let a = args.iter().map(|e| self.plain(e)).collect::<R<Vec<_>>>()?;
+                    let mut a = Vec::new();
+                    for arg in args {
+                        if n == "noise_table"
+                            && let A::List(values) = &arg.kind
+                        {
+                            for value in values {
+                                a.push(self.plain(value)?);
+                            }
+                        } else if n == "noise_table"
+                            && let A::Ident(id) = &arg.kind
+                            && let Some(&Symbol::Var(i, ty)) = self.symbols.get(&id.name)
+                            && self.arrays.contains(&i)
+                        {
+                            a.push(Expr {
+                                kind: E::Var(i),
+                                ty,
+                                parameter: false,
+                                reactive: false,
+                            });
+                        } else {
+                            a.push(self.plain(arg)?);
+                        }
+                    }
                     if n == "analysis" || n == "$simparam" {
                         if a.first().is_none_or(|v| v.ty != Ty::String) {
                             return Err(error(e.span, "first argument must be a string"));
@@ -999,12 +1243,15 @@ impl Lower {
                         if n == "$simparam" && a.get(1).is_some_and(|v| v.ty == Ty::String) {
                             return Err(error(e.span, "numeric default required"));
                         }
-                    } else if !n.contains("noise") && a.iter().any(|v| v.ty == Ty::String) {
+                    } else if !n.contains("noise")
+                        && !n.starts_with("$rdist_")
+                        && a.iter().any(|v| v.ty == Ty::String)
+                    {
                         return Err(error(e.span, "numeric arguments required"));
                     }
                     parameter = a.iter().all(|v| v.parameter)
-                        && !n.starts_with('$')
-                        && n != "analysis"
+                        && (!n.starts_with('$') || n == "$simparam")
+                        && !matches!(n, "analysis" | "idt")
                         && !n.contains("noise");
                     reactive = n == "ddt";
                     if reactive {
@@ -1013,7 +1260,28 @@ impl Lower {
                     if n == "analysis" {
                         ty = Ty::Integer;
                     }
-                    E::Call(n.into(), a)
+                    if n.starts_with("$rdist_") {
+                        E::Unsupported(n.into(), e.span)
+                    } else if n == "idt" {
+                        let mut args = a.into_iter();
+                        let input = args
+                            .next()
+                            .ok_or_else(|| error(e.span, "missing integrand"))?;
+                        let ic = args
+                            .next()
+                            .ok_or_else(|| error(e.span, "missing initial condition"))?;
+                        if self.in_function {
+                            return Err(unsupported(
+                                e.span,
+                                "idt in analog functions is unsupported",
+                            ));
+                        }
+                        let slot = self.integral_count;
+                        self.integral_count += 1;
+                        E::Integral(slot, Box::new(input), Box::new(ic), e.span)
+                    } else {
+                        E::Call(n.into(), a)
+                    }
                 }
             }
         };
@@ -1025,43 +1293,50 @@ impl Lower {
         })
     }
 }
-fn function_args(f: &ast::AnalogFunction) -> Vec<&str> {
-    let mut v = vec![];
+fn signature(f: &ast::AnalogFunction) -> Vec<(String, Ty)> {
+    let types: BTreeMap<_, _> = f
+        .declarations
+        .iter()
+        .filter_map(|d| match &d.kind {
+            I::Var(v) => Some((&v.name.name, Ty::parse(&v.ty))),
+            _ => None,
+        })
+        .collect();
+    let mut args = Vec::new();
     for d in &f.declarations {
         if let I::PortDecl {
-            direction, names, ..
+            direction,
+            discipline,
+            names,
         } = &d.kind
         {
-            v.extend(std::iter::repeat_n(direction.as_str(), names.len()));
-        }
-    }
-    v
-}
-fn function_types(f: &ast::AnalogFunction) -> Vec<Ty> {
-    let mut types = vec![];
-    for d in &f.declarations {
-        if let I::PortDecl { names, .. } = &d.kind {
+            let ty = discipline.as_ref().map_or(Ty::Real, |d| Ty::parse(&d.name));
             for n in names {
-                types.push(
-                    f.declarations
-                        .iter()
-                        .find_map(|d| match &d.kind {
-                            I::Var(v) if v.name.name == n.name => Some(Ty::parse(&v.ty)),
-                            _ => None,
-                        })
-                        .unwrap_or(Ty::Real),
-                );
+                args.push((direction.clone(), types.get(&n.name).copied().unwrap_or(ty)));
             }
         }
     }
-    types
+    args
 }
-fn collect_expr(e: &ast::Expr, n: &mut BTreeSet<String>) {
+#[derive(Default)]
+struct Uses {
+    pending: Vec<String>,
+    names: BTreeSet<String>,
+    probes: BTreeSet<String>,
+}
+impl Uses {
+    fn visit(&mut self, name: &str) {
+        if self.names.insert(name.into()) {
+            self.pending.push(name.into());
+        }
+    }
+}
+fn collect_expr(e: &ast::Expr, n: &mut Uses) {
     let mut work = vec![e];
     while let Some(e) = work.pop() {
         match &e.kind {
             A::Ident(i) => {
-                n.insert(i.name.clone());
+                n.visit(&i.name);
             }
             A::Index(a, b)
             | A::Binary {
@@ -1077,7 +1352,26 @@ fn collect_expr(e: &ast::Expr, n: &mut BTreeSet<String>) {
                 work.push(no);
             }
             A::Call { name, args } => {
-                n.insert(name.name.clone());
+                n.visit(&name.name);
+                work.extend(args);
+            }
+            A::List(values) => work.extend(values),
+            A::Port(p) => {
+                n.probes.insert(p.name.clone());
+            }
+            A::Access {
+                args,
+                port_flow: true,
+                ..
+            } => {
+                if let [
+                    ast::Expr {
+                        kind: A::Ident(id), ..
+                    },
+                ] = args.as_slice()
+                {
+                    n.probes.insert(id.name.clone());
+                }
                 work.extend(args);
             }
             A::SysCall { args, .. } | A::Access { args, .. } => work.extend(args),
@@ -1085,7 +1379,7 @@ fn collect_expr(e: &ast::Expr, n: &mut BTreeSet<String>) {
         }
     }
 }
-fn collect_stmt(s: &ast::Stmt, n: &mut BTreeSet<String>) {
+fn collect_stmt(s: &ast::Stmt, n: &mut Uses) {
     match &s.kind {
         S::Block {
             statements,

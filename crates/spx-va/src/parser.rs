@@ -7,6 +7,7 @@ use crate::{
 use spx_diag::{Diagnostic, Span};
 type PResult<T> = Result<T, Diagnostic>;
 struct Parser {
+    access: std::collections::BTreeSet<String>,
     tokens: Vec<Token>,
     pos: usize,
     errors: Vec<Diagnostic>,
@@ -14,6 +15,10 @@ struct Parser {
 }
 pub fn parse(tokens: Vec<Token>, sources: Vec<String>) -> (SourceFile, Vec<Diagnostic>) {
     let mut p = Parser {
+        access: ["V", "I", "Temp", "Pwr"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
         tokens,
         pos: 0,
         errors: Vec::new(),
@@ -34,6 +39,13 @@ pub fn parse(tokens: Vec<Token>, sources: Vec<String>) -> (SourceFile, Vec<Diagn
             let nature = p.at("nature");
             p.definition().map(|d| {
                 if nature {
+                    for (property, value) in &d.properties {
+                        if property.name == "access"
+                            && let ExprKind::Ident(access) = &value.kind
+                        {
+                            p.access.insert(access.name.clone());
+                        }
+                    }
                     source.natures.push(d);
                 } else {
                     source.disciplines.push(d);
@@ -134,7 +146,7 @@ impl Parser {
         } else {
             None
         };
-        self.need(";")?;
+        self.eat(";");
         let mut properties = Vec::new();
         let end = if nature { "endnature" } else { "enddiscipline" };
         while !self.at(end) && !self.eof() {
@@ -232,7 +244,17 @@ impl Parser {
             ItemKind::AliasParam { name, target }
         } else if self.eat("branch") {
             self.need("(")?;
-            let nodes = self.arguments(")")?;
+            let nodes = if self.eat("<") {
+                let port = self.ident()?;
+                self.need(">")?;
+                self.need(")")?;
+                vec![Expr {
+                    span: port.span,
+                    kind: ExprKind::Port(port),
+                }]
+            } else {
+                self.arguments(")")?
+            };
             let names = self.names()?;
             self.need(";")?;
             ItemKind::Branch { nodes, names }
@@ -275,10 +297,12 @@ impl Parser {
     }
     fn parameters(&mut self) -> PResult<Vec<ModuleItem>> {
         let span = self.span();
+        let mut placement = self.token().placement;
         let local = self.eat("localparam");
         if !local {
             self.need("parameter")?;
         }
+        placement = self.token().placement.or(placement);
         let ty = if ["real", "integer", "string"].iter().any(|s| self.at(s)) {
             self.ident()?.name
         } else {
@@ -286,6 +310,7 @@ impl Parser {
         };
         let mut items = Vec::new();
         loop {
+            let name_placement = self.token().placement;
             let name = self.ident()?;
             self.need("=")?;
             let value = self.expr(0)?;
@@ -332,6 +357,7 @@ impl Parser {
                 kind: ItemKind::Param(ParamDecl {
                     name,
                     ty: ty.clone(),
+                    placement: name_placement.or(placement),
                     local,
                     value,
                     ranges,
@@ -616,7 +642,7 @@ impl Parser {
                 let called = self.eat("(");
                 let mut port_flow = false;
                 let args = if called {
-                    if (id.name == "V" || id.name == "I") && self.eat("<") {
+                    if self.access.contains(&id.name) && self.eat("<") {
                         port_flow = true;
                         let net = self.ident()?;
                         self.need(">")?;
@@ -633,7 +659,7 @@ impl Parser {
                 };
                 let kind = if system {
                     ExprKind::SysCall { name: id, args }
-                } else if called && (id.name == "V" || id.name == "I") {
+                } else if called && self.access.contains(&id.name) {
                     ExprKind::Access {
                         nature: id,
                         args,
@@ -646,6 +672,10 @@ impl Parser {
                 };
                 Expr { span, kind }
             }
+            TokenKind::Symbol(op) if op == "{" => Expr {
+                span,
+                kind: ExprKind::List(self.arguments("}")?),
+            },
             TokenKind::Symbol(op) if op == "(" => {
                 let e = self.expr(0)?;
                 self.need(")")?;
@@ -665,7 +695,13 @@ impl Parser {
                 return Err(Diagnostic::error("E-VA-SYNTAX", "expected expression").with_span(span));
             }
         };
+        // Limit the accumulated left subtree as well as recursive right operands.
+        let mut links = 0;
         loop {
+            if links >= 128 {
+                return Err(self.unsupported("expression nesting exceeds 128"));
+            }
+            links += 1;
             if self.eat("[") {
                 let index = self.expr(0)?;
                 self.need("]")?;

@@ -4,7 +4,7 @@
 //! branches) are standard MNA well-posedness conditions; see Ho, Ruehli & Brennan (1975).
 //! See `docs/PROVENANCE.md`.
 
-use spx_devices::va::{VaGroup, parameter_names};
+use spx_devices::va::VaGroup;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -29,6 +29,7 @@ pub(crate) const DISCARD: usize = usize::MAX;
 pub struct Circuit {
     pub(crate) va_modules: BTreeMap<String, Arc<spx_va::CompiledModule>>,
     pub(crate) unknowns: Unknowns,
+    pub(crate) aliases: Vec<(String, Node)>,
     pub(crate) num_nodes: usize,
     pub(crate) groups: Vec<Box<dyn DeviceGroup>>,
     pub(crate) layouts: Vec<StampLayout>,
@@ -242,20 +243,31 @@ struct HdlLoader<'a> {
 }
 impl spx_va::VaLoader for HdlLoader<'_> {
     fn load(&self, path: &str, from: Option<&str>) -> Result<(String, String), String> {
+        self.standard_header(path, from)?.ok_or_else(|| {
+            format!(
+                "include {path} not found next to {}",
+                from.filter(|p| *p != "<input>").unwrap_or(self.path)
+            )
+        })
+    }
+    fn standard_header(
+        &self,
+        path: &str,
+        from: Option<&str>,
+    ) -> Result<Option<(String, String)>, String> {
         if !std::path::Path::new(self.path).is_file() {
-            return Err(format!(
-                "external VA includes unavailable for {}",
-                self.path
-            ));
+            return Ok(None);
         }
         let from = from.filter(|p| *p != "<input>").unwrap_or(self.path);
         let base = std::path::Path::new(from)
             .parent()
             .unwrap_or(std::path::Path::new("."));
         let full = base.join(path);
-        let text =
-            std::fs::read_to_string(&full).map_err(|e| format!("{}: {e}", full.display()))?;
-        Ok((full.display().to_string(), text))
+        match std::fs::read_to_string(&full) {
+            Ok(text) => Ok(Some((full.display().to_string(), text))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("{}: {e}", full.display())),
+        }
     }
 }
 
@@ -363,6 +375,141 @@ pub(crate) fn compile_cached(
             "E-ELAB-EMPTY",
             "the netlist has no elements",
         )]);
+    }
+    let mut va: BTreeMap<String, Chunked<VaGroup>> = BTreeMap::new();
+    let swept: HashSet<_> = nl
+        .analyses
+        .iter()
+        .filter_map(|card| match card {
+            spx_netlist::AnalysisCard::Dc { source, .. } => Some(source.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut va_models: HashMap<String, Arc<spx_va::Bound>> = HashMap::new();
+    let mut nonlinear_count = 0usize;
+
+    let mut errors = Vec::new();
+    for e in &nl.elements {
+        if let ElementKind::Va {
+            nodes,
+            model,
+            params,
+        } = &e.kind
+        {
+            let Some(card) = nl.models.iter().find(|m| m.name == *model) else {
+                errors.push(
+                    Diagnostic::error("E-ELAB-PARAM", format!("{}: unknown model {model}", e.name))
+                        .with_span(e.span),
+                );
+                continue;
+            };
+            let Some(module) = va_modules.get(&card.kind).or_else(|| {
+                card.kind
+                    .strip_suffix("_va")
+                    .and_then(|base| va_modules.get(&format!("{base}va")))
+            }) else {
+                errors.push(
+                    Diagnostic::error(
+                        "E-ELAB-PARAM",
+                        format!("{}: unknown Verilog-A module {}", e.name, card.kind),
+                    )
+                    .with_span(card.span),
+                );
+                continue;
+            };
+            let bound = if let Some(bound) = va_models.get(model) {
+                Arc::clone(bound)
+            } else {
+                match module.bind_model(
+                    &card.params,
+                    spx_va::BindOptions {
+                        tnom: opts.tnom,
+                        gmin: opts.gmin,
+                    },
+                ) {
+                    Ok(bound) => {
+                        let bound = Arc::new(bound);
+                        va_models.insert(model.clone(), Arc::clone(&bound));
+                        bound
+                    }
+                    Err(ds) => {
+                        errors.extend(ds.into_iter().map(|d| d.with_span(card.span)));
+                        continue;
+                    }
+                }
+            };
+            let group = va
+                .entry(card.kind.clone())
+                .or_insert_with(|| Chunked::new(CHUNK_NONLINEAR));
+            let chunk = group.cur();
+            match chunk.push(
+                Arc::clone(module),
+                &e.name,
+                nodes.iter().map(|n| node_index.get(n).copied()).collect(),
+                bound,
+                params,
+            ) {
+                Ok(()) => {
+                    nonlinear_count += 1;
+                    if swept.contains(e.name.as_str()) {
+                        chunk.prepare_sweep(&e.name);
+                    }
+                }
+                Err(ds) => errors.extend(ds.into_iter().map(|d| d.with_span(e.span))),
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let mut aliases = Vec::new();
+    if !va.is_empty() {
+        let ground = node_names.len();
+        let mut sets = UnionFind::new(ground + 1);
+        for group in va
+            .values()
+            .flat_map(|chunks| chunks.done.iter().chain([&chunks.cur]))
+        {
+            for (a, b) in group.terminal_shorts() {
+                grounded |= a.is_none() || b.is_none();
+                sets.union(a.unwrap_or(ground), b.unwrap_or(ground));
+            }
+        }
+        let ground_root = sets.find(ground);
+        let mut new_names = Vec::new();
+        let mut counts = Vec::new();
+        let mut roots = HashMap::new();
+        let mut indices = Vec::new();
+        for (i, name) in node_names.iter().enumerate() {
+            let root = sets.find(i);
+            let index = if root == ground_root {
+                None
+            } else {
+                Some(*roots.entry(root).or_insert_with(|| {
+                    new_names.push(name.clone());
+                    counts.push(0);
+                    new_names.len() - 1
+                }))
+            };
+            indices.push(index);
+            if let Some(k) = index {
+                counts[k] += touches[i];
+                node_index.insert(name.clone(), k);
+            } else {
+                node_index.remove(name);
+            }
+            if index.is_none_or(|k| new_names[k] != *name) {
+                aliases.push((format!("v({name})"), index));
+            }
+        }
+        for group in va
+            .values_mut()
+            .flat_map(|chunks| chunks.done.iter_mut().chain([&mut chunks.cur]))
+        {
+            group.remap_ports(&indices).map_err(|d| vec![d])?;
+        }
+        node_names = new_names;
+        touches = counts;
     }
     if !grounded {
         return Err(vec![
@@ -522,73 +669,10 @@ pub(crate) fn compile_cached(
     let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
     let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
     let mut mos1 = Chunked::<Mos1s>::new(CHUNK_NONLINEAR);
-    let mut va: BTreeMap<String, Chunked<VaGroup>> = BTreeMap::new();
-    let mut va_models: HashMap<String, Arc<spx_va::Bound>> = HashMap::new();
-    let mut nonlinear_count = 0usize;
     let mut model_cache = ModelCache::new(&nl.models, opts);
-    let mut errors = Vec::new();
     for e in &nl.elements {
         match &e.kind {
-            ElementKind::Va {
-                nodes,
-                model,
-                params,
-            } => {
-                let Some(card) = nl.models.iter().find(|m| m.name == *model) else {
-                    errors.push(
-                        Diagnostic::error(
-                            "E-ELAB-PARAM",
-                            format!("{}: unknown model {model}", e.name),
-                        )
-                        .with_span(e.span),
-                    );
-                    continue;
-                };
-                let Some(module) = va_modules.get(&card.kind) else {
-                    errors.push(
-                        Diagnostic::error(
-                            "E-ELAB-PARAM",
-                            format!("{}: unknown Verilog-A module {}", e.name, card.kind),
-                        )
-                        .with_span(card.span),
-                    );
-                    continue;
-                };
-                let bound = if let Some(bound) = va_models.get(model) {
-                    Arc::clone(bound)
-                } else {
-                    match module.bind(&parameter_names(module, &card.params)) {
-                        Ok(bound) => {
-                            let bound = Arc::new(bound);
-                            va_models.insert(model.clone(), Arc::clone(&bound));
-                            bound
-                        }
-                        Err(ds) => {
-                            errors.extend(ds.into_iter().map(|d| {
-                                Diagnostic::error("E-ELAB-PARAM", d.message).with_span(card.span)
-                            }));
-                            continue;
-                        }
-                    }
-                };
-                let group = va
-                    .entry(card.kind.clone())
-                    .or_insert_with(|| Chunked::new(CHUNK_NONLINEAR));
-                match group.cur().push(
-                    Arc::clone(module),
-                    &e.name,
-                    nodes.iter().map(|n| node(n)).collect(),
-                    bound,
-                    params,
-                ) {
-                    Ok(()) => nonlinear_count += 1,
-                    Err(ds) => {
-                        errors.extend(ds.into_iter().map(|d| {
-                            Diagnostic::error("E-ELAB-PARAM", d.message).with_span(e.span)
-                        }))
-                    }
-                }
-            }
+            ElementKind::Va { .. } => {}
             ElementKind::Resistor { p, n, value } => {
                 res.cur().push(&e.name, node(p), node(n), *value)
             }
@@ -807,6 +891,7 @@ pub(crate) fn compile_cached(
         Circuit {
             va_modules: va_modules.clone(),
             unknowns,
+            aliases,
             num_nodes: nn,
             groups,
             layouts,

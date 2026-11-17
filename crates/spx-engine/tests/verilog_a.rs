@@ -250,7 +250,14 @@ V1 a 0 1
 "
         ));
         let ds = spx_engine::check(&nl).unwrap_err();
-        assert_eq!(ds[0].code, "E-ELAB-PARAM");
+        assert_eq!(
+            ds[0].code,
+            if model.contains('=') || instance.contains('=') {
+                "E-VA-PARAM"
+            } else {
+                "E-ELAB-PARAM"
+            }
+        );
         assert!(ds[0].span.is_some());
     }
     let nl = deck(
@@ -364,4 +371,88 @@ fn multiple_modules_and_va_diagnostic_locations() {
     let d = spx_engine::check(&duplicate).unwrap_err();
     assert_eq!(d[0].code, "E-VA-SEMA");
     assert!(d[0].message.contains("duplicate"));
+}
+
+#[test]
+fn psp103_dc_transfer() {
+    let root = std::env::var_os("SPX_VA_MODELS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../va-models/ihp")
+        });
+    let file = root.join("psp103/psp103.va");
+    if !file.try_exists().unwrap() {
+        eprintln!("skipping missing {}", file.display());
+        return;
+    }
+    let text = format!(
+        "PSP transfer\n.hdl \"{}\"\n.model nmod psp103_va type=1\nN1 d g 0 0 nmod l=1u w=1u\nVD d 0 1.2\nVG g 0 0\n.dc vg 0 1.2 0.1\n",
+        file.canonicalize().unwrap().display()
+    );
+    let nl = parse_with(&text, &spx_netlist::FsLoader { base: root }).unwrap();
+    let output = spx_engine::run(&nl).unwrap();
+    let dc = &output.results.analyses[0];
+    let id = dc.real("i(vd)").unwrap();
+    assert_eq!(id.len(), 13);
+    assert!(id.iter().all(|v| v.is_finite()));
+    assert!(
+        id.windows(2).all(|w| w[0] >= w[1]) && id[12] < id[0],
+        "{id:?}"
+    );
+}
+
+#[test]
+fn mixed_instance_layouts_and_external_port_shorts() {
+    struct Loader;
+    impl SourceLoader for Loader {
+        fn load(&self, path: &str, _: Option<&str>) -> Result<(String, String), String> {
+            Ok((
+                path.into(),
+                format!(
+                    "{}\nmodule strap(a,b); electrical a,b; analog V(a,b)<+0; endmodule",
+                    include_str!("../../spx-va/tests/models/collapse.va")
+                ),
+            ))
+        }
+    }
+    let nl=parse_with("shorts\n.hdl devices.va\n.model d series_junction\n.model link strap\nVD p 0 0.45\nNlink p a link\nNshort a 0 d\nNseries a q d rs=0.0001\nNreturn q 0 link\n.op\n",&Loader).unwrap();
+    let checked = spx_engine::check(&nl).unwrap();
+    assert_eq!(checked.circuit.dim(), 3); // supply voltage, supply current, one junction
+    let r = spx_engine::run(&nl).unwrap().results;
+    let op = &r.analyses[0];
+    assert_eq!(op.real("v(a)"), op.real("v(p)"));
+    assert_eq!(op.real("v(q)").unwrap(), &[0.]);
+    let expected = 1e-12 * ((0.45_f64 / 0.026).exp() - 1.);
+    close(-op.real("i(vd)").unwrap()[0], 2. * expected, 1e-6, 1e-12);
+    assert!(op.real("v(nseries#junction)").is_some());
+    assert!(op.real("v(nshort#junction)").is_none());
+}
+
+#[test]
+fn integral_has_an_initial_condition_and_a_dynamic_state_equation() {
+    struct Loader;
+    impl SourceLoader for Loader {
+        fn load(&self, _: &str, _: Option<&str>) -> Result<(String, String), String> {
+            Ok((
+                "integral.va".into(),
+                "module integral(p,u); electrical p,u; analog V(p)<+idt(V(u),0.25); endmodule"
+                    .into(),
+            ))
+        }
+    }
+    let nl=parse_with("integral\n.hdl integral.va\n.model int integral\nVu u 0 2 AC 1\nN1 p u int\nRp p 0 1k\n.op\n.tran 0.01 0.2\n.ac lin 1 100 100\n",&Loader).unwrap();
+    let results = spx_engine::run(&nl).unwrap().results;
+    close(
+        results.analyses[0].real("v(p)").unwrap()[0],
+        0.25,
+        1e-12,
+        1e-12,
+    );
+    let tran = &results.analyses[1];
+    for (&t, &v) in tran.scale_values.iter().zip(tran.real("v(p)").unwrap()) {
+        close(v, 0.25 + 2. * t, 1e-8, 1e-12);
+    }
+    let ac = results.analyses[2].complex("v(p)").unwrap()[0];
+    close(ac.0, 0., 0., 1e-12);
+    close(ac.1, -1. / (std::f64::consts::TAU * 100.), 1e-8, 1e-12);
 }

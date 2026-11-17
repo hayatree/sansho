@@ -36,9 +36,11 @@ pub(crate) enum E {
     Voltage(Option<usize>, Option<usize>),
     Current(usize),
     Call(String, Vec<Expr>),
+    Integral(usize, Box<Expr>, Box<Expr>, spx_diag::Span),
+    Unsupported(String, spx_diag::Span),
     Function(usize, Vec<Expr>),
     Given(usize),
-    Connected,
+    Connected(usize),
     Ddx(Box<Expr>, usize),
     Limit(usize, String, Vec<Expr>, Option<usize>),
 }
@@ -58,7 +60,12 @@ pub(crate) enum Stmt {
     For(Box<Stmt>, Expr, Box<Stmt>, Box<Stmt>),
     While(Expr, Box<Stmt>),
     Repeat(Expr, Box<Stmt>),
-    Event(Box<Stmt>),
+    Event {
+        initial: bool,
+        startup: bool,
+        last: bool,
+        body: Box<Stmt>,
+    },
     Task(String, Vec<Expr>),
     Empty,
 }
@@ -67,6 +74,8 @@ pub(crate) struct Branch {
     pub a: Option<usize>,
     pub b: Option<usize>,
     pub current: Option<usize>,
+    pub observed: bool,
+    pub contributed: bool,
 }
 #[derive(Debug, Clone)]
 pub(crate) struct Function {
@@ -90,6 +99,8 @@ pub struct ParamInfo {
     pub aliases: Vec<String>,
     /// Local parameters cannot be supplied externally.
     pub local: bool,
+    /// Explicit model or instance placement attribute.
+    pub placement: Option<ast::ParamKind>,
     pub(crate) value: Expr,
     pub(crate) limits: Vec<(bool, Expr, Option<Expr>, bool, bool)>,
 }
@@ -111,11 +122,16 @@ pub struct CompiledModule {
     pub(crate) functions: Vec<Function>,
     pub(crate) body: Vec<Stmt>,
     pub(crate) slots: usize,
+    pub(crate) function_writes: std::collections::BTreeSet<usize>,
     pub(crate) states: usize,
-    pub(crate) identity: u64,
+    pub(crate) integrals: std::ops::Range<usize>,
+    pub(crate) identity: std::sync::Arc<()>,
+    pub(crate) implicit_m: bool,
+    pub(crate) param_index: std::collections::BTreeMap<String, Option<usize>>,
+    pub(crate) optional_ports: Vec<bool>,
 }
 impl CompiledModule {
-    /// Number of instance unknowns.
+    /// Unknown count before binding-time collapse. Use the bound layout for evaluation.
     pub fn unknown_len(&self) -> usize {
         self.ports.len() + self.internal_nodes.len() + self.branch_unknowns.len()
     }

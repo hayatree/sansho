@@ -73,7 +73,13 @@ fn default_geometry(nl: &Netlist, opts: &SimOptions, out: &mut Vec<Diagnostic>) 
 }
 
 fn meas_signals(nl: &Netlist, ckt: &Circuit, out: &mut Vec<Diagnostic>) {
-    let names: HashSet<&str> = ckt.unknowns.names().iter().map(String::as_str).collect();
+    let names: HashSet<&str> = ckt
+        .unknowns
+        .names()
+        .iter()
+        .map(String::as_str)
+        .chain(ckt.aliases.iter().map(|(name, _)| name.as_str()))
+        .collect();
     let node_ok = |n: &str| n == GROUND || names.contains(format!("v({n})").as_str());
     let missing = |s: &Signal| -> Option<String> {
         if s.current {

@@ -12,8 +12,11 @@ use std::sync::Arc;
 struct Instance {
     name: String,
     nodes: Vec<Node>,
+    ports: Vec<Node>,
     model: Arc<Bound>,
     bound: Bound,
+    port_count: usize,
+    swept: bool,
     params: Vec<(String, f64)>,
 }
 
@@ -29,18 +32,43 @@ pub fn parameter_names(module: &CompiledModule, params: &[(String, f64)]) -> Vec
     params
         .iter()
         .map(|(name, value)| {
-            let declared = module
-                .params
-                .iter()
-                .flat_map(|p| std::iter::once(&p.name).chain(p.aliases.iter()))
-                .find(|p| p.eq_ignore_ascii_case(name))
-                .unwrap_or(name);
+            let declared = module.parameter_info(name).map_or(name, |p| &p.name);
             (declared.clone(), *value)
         })
         .collect()
 }
 
 impl VaGroup {
+    /// Reserve every possible branch equation for an in-place DC parameter sweep.
+    pub fn prepare_sweep(&mut self, name: &str) {
+        if let Some(i) = self.instances.iter_mut().find(|i| i.name == name) {
+            i.swept = true;
+            i.bound.retain_sweep_layout();
+        }
+    }
+    /// Report connections between external nets implied by binding-time branch collapse.
+    pub fn terminal_shorts(&self) -> impl Iterator<Item = (Node, Node)> + '_ {
+        self.instances.iter().flat_map(|i| {
+            i.ports.iter().enumerate().filter_map(|(k, &node)| {
+                let layout = i.bound.layout();
+                let representative = layout.index(k).map(|j| layout.representatives()[j]);
+                (representative != Some(k)).then(|| (node, representative.and_then(|j| i.ports[j])))
+            })
+        })
+    }
+    /// Apply the circuit-wide net equivalences before internal unknown allocation.
+    pub fn remap_ports(&mut self, indices: &[Node]) -> Result<(), Diagnostic> {
+        for i in &mut self.instances {
+            for n in &mut i.ports {
+                if let Some(k) = *n {
+                    *n = *indices.get(k).ok_or_else(|| {
+                        Diagnostic::error("E-ELAB-INTERNAL", "invalid VA terminal index")
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
     /// Bind an instance; the model binding supplies defaults overridden by instance parameters.
     pub fn push(
         &mut self,
@@ -50,17 +78,6 @@ impl VaGroup {
         model: Arc<Bound>,
         params: &[(String, f64)],
     ) -> Result<(), Vec<Diagnostic>> {
-        if nodes.len() != module.ports.len() {
-            return Err(vec![Diagnostic::error(
-                "E-ELAB-PARAM",
-                format!(
-                    "{name}: module {} needs {} ports, found {}",
-                    module.name,
-                    module.ports.len(),
-                    nodes.len()
-                ),
-            )]);
-        }
         if self
             .module
             .as_ref()
@@ -72,13 +89,17 @@ impl VaGroup {
             )]);
         }
         let params = parameter_names(&module, params);
-        let bound = module.bind_instance(&model, &params)?;
+        let port_count = nodes.len();
+        let bound = module.bind_connected_instance(&model, &params, port_count)?;
         self.module = Some(module);
         self.instances.push(Instance {
             name: name.into(),
-            nodes,
+            ports: nodes,
+            nodes: vec![],
             model,
             bound,
+            port_count,
+            swept: false,
             params,
         });
         Ok(())
@@ -103,13 +124,28 @@ impl DeviceGroup for VaGroup {
     fn alloc_unknowns(&mut self, u: &mut Unknowns) {
         let Some(m) = &self.module else { return };
         for i in &mut self.instances {
-            for name in &m.internal_nodes {
-                i.nodes.push(Some(u.alloc_internal_node(&i.name, name)));
-            }
-            for name in &m.branch_unknowns {
-                i.nodes
-                    .push(Some(u.alloc_branch(&format!("{}#{name}", i.name))));
-            }
+            let ports = &i.ports;
+            i.nodes = i
+                .bound
+                .layout()
+                .representatives()
+                .iter()
+                .map(|&k| {
+                    if k < ports.len() {
+                        ports[k]
+                    } else if let Some(name) = m.ports.get(k) {
+                        Some(u.alloc_internal_node(&i.name, name))
+                    } else if let Some(name) = m.internal_nodes.get(k - m.ports.len()) {
+                        Some(u.alloc_internal_node(&i.name, name))
+                    } else {
+                        Some(u.alloc_branch(&format!(
+                            "{}#{}",
+                            i.name,
+                            m.branch_unknowns[k - m.ports.len() - m.internal_nodes.len()]
+                        )))
+                    }
+                })
+                .collect();
         }
     }
     fn setup(&mut self, b: &mut StampBuilder<'_>) -> Result<(), Diagnostic> {
@@ -133,8 +169,10 @@ impl DeviceGroup for VaGroup {
                 temperature: ctx.temp,
                 analysis: match ctx.mode {
                     Mode::Dc => Analysis::Dc,
+                    Mode::Ac => Analysis::Ac,
                     Mode::Tran => Analysis::Tran,
                 },
+                final_step: ctx.final_step,
                 initial_step: ctx.init_junctions || (ctx.mode == Mode::Tran && ctx.time == 0.),
                 abstime: ctx.time,
                 gmin: ctx.gmin,
@@ -153,6 +191,10 @@ impl DeviceGroup for VaGroup {
                 },
                 &mut result,
             );
+            if let Some(d) = result.diagnostic.take() {
+                out.error = Some(d.with_note(format!("VA instance {}", i.name)));
+                return;
+            }
             if let Some(error) = &result.error {
                 out.error = Some(Diagnostic::error(
                     "E-VA-EVAL",
@@ -177,13 +219,16 @@ impl DeviceGroup for VaGroup {
                 params.push((name, value));
             }
         }
-        match m.bind_instance(&i.model, &params) {
-            Ok(bound) => {
+        match m.bind_connected_instance(&i.model, &params, i.port_count) {
+            Ok(mut bound) if i.swept || bound.layout() == i.bound.layout() => {
+                if i.swept {
+                    bound.retain_sweep_layout();
+                }
                 i.bound = bound;
                 i.params = params;
                 true
             }
-            Err(_) => false,
+            _ => false,
         }
     }
     fn param(&self, instance: &str, param: &str) -> Option<f64> {

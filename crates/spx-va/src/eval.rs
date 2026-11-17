@@ -1,8 +1,10 @@
 //! Analog tree interpreter and public evaluation API.
 //! Provenance: original implementation from Accellera LRM 2.4 and forward-mode AD literature.
+mod topology;
 use crate::{dual::Dual, ir::*, limit};
 use spx_diag::Diagnostic;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+pub use topology::Layout;
 const ITERATION_CAP: usize = 100_000;
 const K_OVER_Q: f64 = 8.617333262145179e-5;
 /// Analysis mode visible to the model.
@@ -27,6 +29,8 @@ pub struct EvalInput<'a> {
     pub analysis: Analysis,
     /// Execute initialization event blocks.
     pub initial_step: bool,
+    /// Execute final-step event blocks at the last analysis point.
+    pub final_step: bool,
     /// Simulation time in seconds.
     pub abstime: f64,
     /// Simulator minimum conductance, also available as `$simparam("gmin")`.
@@ -69,6 +73,8 @@ pub struct EvalOutput {
     pub noncon: bool,
     /// Runtime failure, including model error tasks or iteration exhaustion.
     pub error: Option<String>,
+    /// Source diagnostic for an unsupported operation reached during evaluation.
+    pub diagnostic: Option<Diagnostic>,
 }
 #[derive(Debug, Clone)]
 struct Value {
@@ -128,24 +134,84 @@ pub struct Scratch {
     slots: Vec<Slot>,
     initialized: bool,
     steps: usize,
-    binding_key: u64,
+    binding_key: Option<Arc<()>>,
+    width: usize,
 }
 /// Validated parameter values and explicit-supply flags.
 /// The convenience evaluator owns one instance workspace here; use `eval_with_scratch`
 /// for separate instances sharing these parameters.
 #[derive(Debug)]
 pub struct Bound {
+    sim: BindOptions,
+    layout: Layout,
+    connected_ports: usize,
     values: Vec<Value>,
     given: Vec<bool>,
     scratch: Mutex<Scratch>,
-    identity: u64,
-    workspace_key: u64,
+    identity: Arc<()>,
+    workspace_key: Arc<()>,
+}
+impl Bound {
+    /// Keep the module-wide unknown set when parameters will change within one matrix factorization pattern.
+    pub fn retain_sweep_layout(&mut self) {
+        self.layout.retain_all();
+    }
+
+    /// Unknown layout specialized for these model and instance parameters.
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+}
+/// Simulator settings available while evaluating parameter defaults.
+#[derive(Debug, Clone, Copy)]
+pub struct BindOptions {
+    /// Nominal temperature in degrees Celsius.
+    pub tnom: f64,
+    /// Junction conductance in siemens.
+    pub gmin: f64,
+}
+impl Default for BindOptions {
+    fn default() -> Self {
+        Self {
+            tnom: 27.,
+            gmin: 1e-12,
+        }
+    }
+}
+fn distance(a: &str, b: &str) -> usize {
+    let mut row: Vec<_> = (0..=b.len()).collect();
+    for (i, x) in a.bytes().enumerate() {
+        let mut diag = row[0];
+        row[0] = i + 1;
+        for (j, y) in b.bytes().enumerate() {
+            let old = row[j + 1];
+            row[j + 1] = (diag + usize::from(!x.eq_ignore_ascii_case(&y)))
+                .min(old + 1)
+                .min(row[j] + 1);
+            diag = old;
+        }
+    }
+    row[b.len()]
 }
 impl CompiledModule {
     /// Validate external numeric overrides and evaluate defaults in declaration order.
     /// Integer parameter overrides round to the nearest integer, ties away from zero.
     pub fn bind(&self, values: &[(String, f64)]) -> Result<Bound, Vec<Diagnostic>> {
-        self.bind_overrides(None, values)
+        self.bind_overrides(
+            None,
+            values,
+            BindOptions::default(),
+            false,
+            self.ports.len(),
+        )
+    }
+    /// Bind a SPICE model card, checking the model/instance parameter boundary.
+    pub fn bind_model(
+        &self,
+        values: &[(String, f64)],
+        options: BindOptions,
+    ) -> Result<Bound, Vec<Diagnostic>> {
+        self.bind_overrides(None, values, options, true, self.ports.len())
     }
     /// Apply instance overrides to a model binding. Explicit-supply flags are preserved.
     pub fn bind_instance(
@@ -153,17 +219,51 @@ impl CompiledModule {
         model: &Bound,
         values: &[(String, f64)],
     ) -> Result<Bound, Vec<Diagnostic>> {
-        self.bind_overrides(Some(model), values)
+        self.bind_overrides(Some(model), values, model.sim, false, self.ports.len())
+    }
+    /// Bind an instance whose trailing optional terminals may be left unconnected.
+    pub fn bind_connected_instance(
+        &self,
+        model: &Bound,
+        values: &[(String, f64)],
+        ports: usize,
+    ) -> Result<Bound, Vec<Diagnostic>> {
+        if ports > self.ports.len()
+            || self.optional_ports[ports..]
+                .iter()
+                .any(|optional| !*optional)
+        {
+            return Err(vec![Diagnostic::error(
+                "E-ELAB-PARAM",
+                format!(
+                    "module {} declares {} ports, found {ports}",
+                    self.name,
+                    self.ports.len()
+                ),
+            )]);
+        }
+        self.bind_overrides(Some(model), values, model.sim, false, ports)
+    }
+    /// Resolve a unique SPICE spelling or alias to the parameter declaration.
+    pub fn parameter_info(&self, name: &str) -> Option<&ParamInfo> {
+        self.param_index
+            .get(&name.to_ascii_lowercase())
+            .copied()
+            .flatten()
+            .map(|i| &self.params[i])
     }
     fn bind_overrides(
         &self,
         model: Option<&Bound>,
         values: &[(String, f64)],
+        sim: BindOptions,
+        model_card: bool,
+        connected_ports: usize,
     ) -> Result<Bound, Vec<Diagnostic>> {
         let mut diagnostics = vec![];
         let mut overrides = vec![None; self.params.len()];
         if let Some(m) = model
-            && m.identity != self.identity()
+            && !Arc::ptr_eq(&m.identity, &self.identity)
         {
             return Err(vec![Diagnostic::error(
                 "E-VA-PARAM",
@@ -171,13 +271,31 @@ impl CompiledModule {
             )]);
         }
         for (name, value) in values {
-            if let Some(i) = self
-                .params
-                .iter()
-                .position(|p| p.name == *name || p.aliases.contains(name))
-            {
+            if let Some(entry) = self.param_index.get(&name.to_ascii_lowercase()) {
+                let Some(&i) = entry.as_ref() else {
+                    diagnostics.push(Diagnostic::error(
+                        "E-VA-PARAM",
+                        format!("ambiguous parameter {name}"),
+                    ));
+                    continue;
+                };
                 let p = &self.params[i];
-                if p.local || p.ty == "string" || !value.is_finite() {
+                if model_card && p.placement == Some(crate::ParamKind::Instance) {
+                    diagnostics.push(
+                        Diagnostic::error("E-VA-PARAM", format!("{name} is an instance parameter"))
+                            .with_span(p.default.span),
+                    );
+                } else if model.is_some() && p.placement == Some(crate::ParamKind::Model) {
+                    diagnostics.push(
+                        Diagnostic::error("E-VA-PARAM", format!("{name} is a model parameter"))
+                            .with_span(p.default.span),
+                    );
+                } else if self.implicit_m && i == 0 && *value <= 0. {
+                    diagnostics.push(
+                        Diagnostic::error("E-VA-PARAM", "instance multiplier must be positive")
+                            .with_span(p.default.span),
+                    );
+                } else if p.local || p.ty == "string" || !value.is_finite() {
                     diagnostics.push(
                         Diagnostic::error("E-VA-PARAM", format!("invalid override for {name}"))
                             .with_span(p.default.span),
@@ -186,18 +304,29 @@ impl CompiledModule {
                     overrides[i] = Some(*value);
                 }
             } else {
+                let suggestion = self
+                    .params
+                    .iter()
+                    .filter(|p| !p.local)
+                    .flat_map(|p| std::iter::once(&p.name).chain(&p.aliases))
+                    .min_by_key(|s| distance(name, s))
+                    .map(|s| format!(", did you mean {s}?"))
+                    .unwrap_or_default();
                 diagnostics.push(Diagnostic::error(
                     "E-VA-PARAM",
-                    format!("unknown parameter {name}"),
+                    format!("unknown parameter {name}{suggestion}"),
                 ));
             }
         }
         let mut bound = Bound {
+            connected_ports,
+            layout: Layout::default(),
+            sim,
             values: vec![],
             given: vec![],
             scratch: Mutex::new(Scratch::default()),
-            identity: self.identity(),
-            workspace_key: 0,
+            identity: Arc::clone(&self.identity),
+            workspace_key: Arc::new(()),
         };
         let no_params = |_: &str| None;
         let input = EvalInput {
@@ -205,8 +334,9 @@ impl CompiledModule {
             temperature: 300.,
             analysis: Analysis::Dc,
             initial_step: false,
+            final_step: false,
             abstime: 0.,
-            gmin: 0.,
+            gmin: sim.gmin,
             limit: false,
             simparams: &no_params,
             mfactor: 1.,
@@ -222,6 +352,8 @@ impl CompiledModule {
                 let mut current = [];
                 let mut out = EvalOutput::default();
                 let mut runtime = Runtime {
+                    drives: vec![],
+                    integrals: vec![],
                     module: self,
                     bound: &bound,
                     input: &input,
@@ -255,6 +387,8 @@ impl CompiledModule {
             let mut current = [];
             let mut out = EvalOutput::default();
             let mut r = Runtime {
+                drives: vec![],
+                integrals: vec![],
                 module: self,
                 bound: &bound,
                 input: &input,
@@ -307,11 +441,7 @@ impl CompiledModule {
             }
         }
         if diagnostics.is_empty() {
-            use std::hash::{Hash, Hasher};
-            let mut hash = std::collections::hash_map::DefaultHasher::new();
-            bound.identity.hash(&mut hash);
-            format!("{:?}{:?}", bound.values, bound.given).hash(&mut hash);
-            bound.workspace_key = hash.finish();
+            bound.layout = topology::layout(self, &bound, &input);
             Ok(bound)
         } else {
             Err(diagnostics)
@@ -319,18 +449,16 @@ impl CompiledModule {
     }
     /// Numeric value of a bound parameter, including aliases.
     pub fn param(&self, bound: &Bound, name: &str) -> Option<f64> {
-        if bound.identity != self.identity() {
+        if !Arc::ptr_eq(&bound.identity, &self.identity) {
             return None;
         }
-        self.params
-            .iter()
-            .position(|p| p.name == name || p.aliases.iter().any(|a| a == name))
+        self.param_index
+            .get(&name.to_ascii_lowercase())
+            .copied()
+            .flatten()
             .and_then(|i| bound.values.get(i))
             .filter(|v| v.text.is_none())
             .map(|v| v.f.v)
-    }
-    fn identity(&self) -> u64 {
-        self.identity
     }
     /// Evaluate with the binding's convenience per-instance workspace.
     pub fn eval(&self, b: &Bound, input: &EvalInput<'_>, state: StateIo<'_>, out: &mut EvalOutput) {
@@ -352,7 +480,7 @@ impl CompiledModule {
         scratch: &mut Scratch,
         out: &mut EvalOutput,
     ) {
-        let n = self.unknown_len();
+        let n = b.layout.unknown_len();
         out.f.resize(n, 0.);
         out.f.fill(0.);
         out.q.resize(n, 0.);
@@ -361,17 +489,24 @@ impl CompiledModule {
         out.df.fill(0.);
         out.dq.resize(n * n, 0.);
         out.dq.fill(0.);
+        out.diagnostic = None;
         out.error = None;
         out.noncon = false;
         if input.x.len() != n
             || state.current.len() < self.states
             || state.accepted.len() < self.states
-            || b.identity != self.identity()
+            || !Arc::ptr_eq(&b.identity, &self.identity)
         {
             out.error = Some("incompatible input, state, or binding shape".into());
             return;
         }
-        if scratch.slots.len() != self.slots || scratch.binding_key != b.workspace_key {
+        if scratch.slots.len() != self.slots
+            || scratch
+                .binding_key
+                .as_ref()
+                .is_none_or(|key| !Arc::ptr_eq(key, &b.workspace_key))
+            || scratch.width != n
+        {
             scratch.slots = vec![
                 Slot {
                     values: vec![],
@@ -381,7 +516,8 @@ impl CompiledModule {
                 self.slots
             ];
             scratch.initialized = false;
-            scratch.binding_key = b.workspace_key;
+            scratch.binding_key = Some(Arc::clone(&b.workspace_key));
+            scratch.width = n;
         }
         // Retained numeric variables are history, independent of this call's unknowns.
         for slot in &mut scratch.slots {
@@ -394,6 +530,8 @@ impl CompiledModule {
         }
         scratch.steps = 0;
         let mut r = Runtime {
+            drives: vec![],
+            integrals: vec![],
             module: self,
             bound: b,
             input,
@@ -403,6 +541,7 @@ impl CompiledModule {
             n,
             depth: 0,
         };
+        r.integrals.resize(self.integrals.len(), None);
         if !r.scratch.initialized {
             for (i, v) in &self.variables {
                 r.init(*i, v);
@@ -410,24 +549,43 @@ impl CompiledModule {
             if r.out.error.is_some() {
                 return;
             }
-            r.scratch.initialized = true;
         }
-        // A voltage branch injects its current once, irrespective of the number of contributions.
-        for branch in &self.branches {
-            if let Some(i) = branch.current {
-                let v = Value::dual(Dual::variable(input.x[i], n, i));
-                r.stamp(branch.a, &v, 1.);
-                r.stamp(branch.b, &v, -1.);
-                let a = r.voltage(branch.a, branch.b);
-                r.stamp(Some(i), &a, 1.);
-            }
-        }
+        r.drives.resize_with(self.branches.len(), Drive::default);
         for s in &self.body {
             r.stmt(s);
         }
+        r.scratch.initialized = r.out.error.is_none();
+        for (k, original) in self.integrals.clone().enumerate() {
+            let state = r.voltage(Some(original), None);
+            let equation = r.integrals[k].take().unwrap_or(state);
+            r.stamp(b.layout.index(original), &equation, 1.);
+        }
+        for (k, branch) in self.branches.iter().enumerate() {
+            if let Some(i) = branch.current.and_then(|id| b.layout.index(id)) {
+                let current = Value::dual(Dual::variable(input.x[i], n, i));
+                r.stamp(branch.a.and_then(|id| b.layout.index(id)), &current, 1.);
+                r.stamp(branch.b.and_then(|id| b.layout.index(id)), &current, -1.);
+                let lhs = if r.drives[k].voltage || !branch.contributed {
+                    r.voltage(branch.a, branch.b)
+                } else {
+                    current
+                };
+                r.stamp(Some(i), &lhs, 1.);
+                if let Some(rhs) = r.drives[k].sum.take() {
+                    r.stamp(Some(i), &rhs, -1.);
+                }
+            }
+        }
     }
 }
+#[derive(Default)]
+struct Drive {
+    voltage: bool,
+    sum: Option<Value>,
+}
 struct Runtime<'a, 'b> {
+    drives: Vec<Drive>,
+    integrals: Vec<Option<Value>>,
     module: &'a CompiledModule,
     bound: &'a Bound,
     input: &'a EvalInput<'a>,
@@ -442,6 +600,12 @@ impl Runtime<'_, '_> {
         if self.out.error.is_none() {
             self.out.error = Some(msg.into());
         }
+    }
+    fn unsupported(&mut self, op: &str, span: spx_diag::Span) -> Value {
+        let message = format!("{op} is unsupported in this analysis");
+        self.fail(&message);
+        self.out.diagnostic = Some(Diagnostic::error("E-VA-UNSUPPORTED", message).with_span(span));
+        self.zero()
     }
     fn tick(&mut self) -> bool {
         self.scratch.steps += 1;
@@ -549,7 +713,8 @@ impl Runtime<'_, '_> {
     }
     fn voltage(&self, a: Option<usize>, b: Option<usize>) -> Value {
         let get = |i: Option<usize>| {
-            i.map(|i| Dual::variable(self.input.x.get(i).copied().unwrap_or(0.), self.n, i))
+            i.and_then(|id| self.bound.layout.index(id))
+                .map(|i| Dual::variable(self.input.x.get(i).copied().unwrap_or(0.), self.n, i))
                 .unwrap_or_else(|| Dual::constant(0., self.n))
         };
         Value::dual(get(a).sub(&get(b)))
@@ -587,11 +752,21 @@ impl Runtime<'_, '_> {
             Stmt::Contrib(i, voltage, sign, e) => {
                 let v = self.expr(e);
                 let b = &self.module.branches[*i];
-                if *voltage {
-                    self.stamp(b.current, &v, -sign);
-                } else {
-                    self.stamp(b.a, &v, *sign);
-                    self.stamp(b.b, &v, -sign);
+                if b.current
+                    .and_then(|id| self.bound.layout.index(id))
+                    .is_some()
+                {
+                    let drive = &mut self.drives[*i];
+                    if drive.voltage != *voltage {
+                        drive.sum = None;
+                        drive.voltage = *voltage;
+                    }
+                    let sum = drive.sum.get_or_insert_with(|| Value::num(0., self.n));
+                    sum.f = sum.f.combine(&v.f, sum.f.v + sign * v.f.v, 1., *sign);
+                    sum.q = sum.q.combine(&v.q, sum.q.v + sign * v.q.v, 1., *sign);
+                } else if !*voltage {
+                    self.stamp(b.a.and_then(|id| self.bound.layout.index(id)), &v, *sign);
+                    self.stamp(b.b.and_then(|id| self.bound.layout.index(id)), &v, -sign);
                 }
             }
             Stmt::If(c, a, b) => {
@@ -641,8 +816,16 @@ impl Runtime<'_, '_> {
                     self.stmt(body);
                 }
             }
-            Stmt::Event(body) => {
-                if self.input.initial_step {
+            Stmt::Event {
+                initial,
+                startup,
+                last,
+                body,
+            } => {
+                if (*startup && !self.scratch.initialized)
+                    || (*initial && self.input.initial_step)
+                    || (*last && self.input.final_step)
+                {
                     self.stmt(body);
                 }
             }
@@ -679,19 +862,29 @@ impl Runtime<'_, '_> {
             E::Var(i) => self.load(*i, None),
             E::Index(i, k) => self.load(*i, Some(k)),
             E::Voltage(a, b) => self.voltage(*a, *b),
-            E::Current(i) => Value::dual(Dual::variable(
-                self.input.x.get(*i).copied().unwrap_or(0.),
-                self.n,
-                *i,
-            )),
+            E::Current(i) => self.module.branches[*i]
+                .current
+                .and_then(|id| self.bound.layout.index(id))
+                .map_or_else(
+                    || self.zero(),
+                    |j| Value::dual(Dual::variable(self.input.x[j], self.n, j)),
+                ),
             E::Given(i) => Value::num(
                 f64::from(self.bound.given.get(*i).copied().unwrap_or(false)),
                 self.n,
             ),
-            E::Connected => Value::num(1., self.n),
+            E::Connected(i) => Value::num(f64::from(*i < self.bound.connected_ports), self.n),
             E::Ddx(a, i) => {
                 let v = self.expr(a);
-                Value::num(v.f.d.get(*i).copied().unwrap_or(0.), self.n)
+                Value::num(
+                    self.bound
+                        .layout
+                        .index(*i)
+                        .and_then(|j| v.f.d.get(j))
+                        .copied()
+                        .unwrap_or(0.),
+                    self.n,
+                )
             }
             E::Select(c, a, b) => {
                 if self.expr(c).truth() {
@@ -737,6 +930,37 @@ impl Runtime<'_, '_> {
                     self.binary(op, x, y, a.ty == Ty::Integer && b.ty == Ty::Integer)
                 }
             }
+            E::Unsupported(name, span) => self.unsupported(name, *span),
+            E::Integral(k, integrand, ic, span) => {
+                if self.integrals[*k].is_some() {
+                    return self.unsupported("repeated evaluation of one idt operator", *span);
+                }
+                let state = self.voltage(Some(self.module.integrals.start + k), None);
+                let initial = self.input.analysis == Analysis::Dc
+                    || (self.input.analysis == Analysis::Tran && self.input.abstime == 0.);
+                // In DC the explicit initial condition fixes the state. In the time domain
+                // d(state)/dt = integrand becomes q = state and f = -integrand.
+                let residual = if initial {
+                    state.f.sub(&self.expr(ic).f)
+                } else {
+                    let u = self.expr(integrand);
+                    u.f.map(-u.f.v, -1.)
+                };
+                self.integrals[*k] = Some(Value {
+                    f: residual,
+                    q: state.f.clone(),
+                    text: None,
+                });
+                state
+            }
+            E::Call(name, _)
+                if matches!(
+                    name.as_str(),
+                    "white_noise" | "flicker_noise" | "noise_table"
+                ) =>
+            {
+                self.zero()
+            }
             E::Call(name, args) => {
                 let a = args.iter().map(|e| self.expr(e)).collect::<Vec<_>>();
                 self.call(name, &a)
@@ -770,7 +994,11 @@ impl Runtime<'_, '_> {
             }
             E::Limit(slot, name, args, func) => {
                 let values = args.iter().map(|e| self.expr(e)).collect::<Vec<_>>();
-                let v = &values[0];
+                let mut v = values[0].clone();
+                // The polarity-aware junction limiter operates in forward-junction coordinates.
+                if name == "typedpnjlim_new" {
+                    v.f = v.f.mul(&values[3].f);
+                }
                 let new = v.f.v;
                 let previous = self.state.current[*slot];
                 let old = if previous.is_finite() {
@@ -778,13 +1006,13 @@ impl Runtime<'_, '_> {
                 } else {
                     self.state.accepted[*slot]
                 };
-                let limited = if !self.input.limit {
+                let limited = if !self.input.limit || name == "dummy" {
                     new
                 } else if let Some(i) = func {
                     let mut a = values.clone();
                     a.insert(1, Value::num(old, self.n));
                     self.function(*i, &a).0.f.v
-                } else if name == "pnjlim" {
+                } else if matches!(name.as_str(), "pnjlim" | "typedpnjlim_new") {
                     limit::pnjlim(new, old, values[1].f.v, values[2].f.v)
                 } else {
                     limit::fetlim(new, old, values[1].f.v)
@@ -793,7 +1021,6 @@ impl Runtime<'_, '_> {
                 if (limited - new).abs() > 1e-14 * (1. + new.abs()) {
                     self.out.noncon = true;
                 }
-                let mut v = v.clone();
                 v.f.t += new - limited;
                 v.f.v = limited;
                 v
@@ -946,11 +1173,26 @@ impl Runtime<'_, '_> {
                 }
             }
             "$abstime" => Value::num(self.input.abstime, n),
-            "$mfactor" => Value::num(self.input.mfactor, n),
+            "$mfactor" => Value::num(
+                self.input.mfactor
+                    * if self.module.implicit_m {
+                        self.bound.values[0].f.v
+                    } else {
+                        1.
+                    },
+                n,
+            ),
             "$simparam" => {
                 let key = a[0].text.as_deref().unwrap_or("");
                 let v = (self.input.simparams)(key)
-                    .or_else(|| (key == "gmin").then_some(self.input.gmin))
+                    .or(match key {
+                        "gmin" => Some(self.input.gmin),
+                        "tnom" => Some(self.bound.sim.tnom),
+                        "scale" => Some(1.),
+                        "shrink" => Some(0.),
+                        "imelt" | "imax" if a.len() == 1 => Some(1.),
+                        _ => None,
+                    })
                     .unwrap_or(y);
                 Value::num(v, n)
             }

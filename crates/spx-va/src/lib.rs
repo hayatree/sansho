@@ -10,7 +10,7 @@ pub mod lexer;
 mod limit;
 mod parser;
 mod sema;
-pub use eval::{Analysis, Bound, EvalInput, EvalOutput, Scratch, StateIo};
+pub use eval::{Analysis, BindOptions, Bound, EvalInput, EvalOutput, Layout, Scratch, StateIo};
 pub use ir::{CompiledModule, ParamInfo};
 pub use sema::compile_module;
 pub mod preproc;
@@ -21,6 +21,15 @@ use spx_diag::Diagnostic;
 pub trait VaLoader {
     /// Load include text and its canonical name, relative to an optional source.
     fn load(&self, path: &str, from: Option<&str>) -> Result<(String, String), String>;
+    /// Look for a local standard header before using its built-in definition.
+    /// Filesystem loaders can distinguish absence from a failure reading an existing file.
+    fn standard_header(
+        &self,
+        path: &str,
+        from: Option<&str>,
+    ) -> Result<Option<(String, String)>, String> {
+        Ok(self.load(path, from).ok())
+    }
 }
 /// Include loader that rejects external file access.
 #[derive(Debug)]

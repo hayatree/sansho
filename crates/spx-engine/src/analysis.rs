@@ -249,7 +249,10 @@ pub(crate) fn op(ckt: &Circuit, opts: &SimOptions) -> Result<AnalysisResult, Dia
     let mut x = vec![0.0; ckt.dim()];
     solve_op(
         ckt,
-        &make_ctx(opts, Mode::Dc, NO_TRAN),
+        &EvalCtx {
+            final_step: true,
+            ..make_ctx(opts, Mode::Dc, NO_TRAN)
+        },
         &mut x,
         &mut ws,
         opts,
@@ -290,11 +293,18 @@ pub(crate) fn dc_sweep(
     let mut scale = Vec::with_capacity(count);
     let mut cols = vec![Vec::with_capacity(count); n];
     let mut result = Ok(());
-    let ctx = make_ctx(opts, Mode::Dc, NO_TRAN);
+    let mut ctx = make_ctx(opts, Mode::Dc, NO_TRAN);
     let integ = Integration::dc(n);
     for k in 0..count {
         let v = start + k as f64 * step;
-        ckt.set_param(source, "dc", v);
+        ctx.final_step = k + 1 == count;
+        if !ckt.set_param(source, "dc", v) {
+            result = Err(Diagnostic::error(
+                "E-DC-SOURCE",
+                format!("cannot apply dc={v} to {source} in the current circuit layout"),
+            ));
+            break;
+        }
         // Continue from the previous point; fall back to a full operating-point solve.
         let continued = k > 0
             && newton(ckt, &ctx, &integ, &mut x, &mut ws, opts, opts.itl1, 0.0)
@@ -372,9 +382,14 @@ pub(crate) fn ac(
         "AC operating point",
     )?;
     // Linearize at the operating point (no limiting, state = accepted operating point).
+    ctx.mode = Mode::Ac;
+    ctx.final_step = true;
     ctx.limit = false;
     ws.restore();
     assemble(ckt, &ctx, &x, &mut ws, opts, 0.0);
+    if let Some(d) = ws.slots.iter().find_map(|s| s.error.clone()) {
+        return Err(d);
+    }
     let mut b = vec![c64::new(0.0, 0.0); n];
     for (gi, group) in ckt.groups.iter().enumerate() {
         let l = &ckt.layouts[gi];
@@ -651,6 +666,7 @@ pub(crate) fn tran(
         let order = if hist.len() >= 3 { 2 } else { 1 };
         integration(opts.method, order, h, &hist, &qdot, &mut integ);
         ctx.time = t + h;
+        ctx.final_step = ctx.time >= tstop - eps;
         x_new.copy_from_slice(&x);
         if let Err(e) = newton(ckt, &ctx, &integ, &mut x_new, &mut ws, opts, opts.itl4, 0.0) {
             h /= 8.0;
@@ -673,6 +689,7 @@ pub(crate) fn tran(
         }
         // Charges at the converged point (state is updated consistently for commit).
         eval_ctx.time = ctx.time;
+        eval_ctx.final_step = ctx.final_step;
         assemble(ckt, &eval_ctx, &x_new, &mut ws, opts, 0.0);
         for i in 0..n {
             qdot_new[i] = integ.a0 * ws.asm.q[i] + integ.hist[i];

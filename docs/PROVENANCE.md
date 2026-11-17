@@ -102,3 +102,12 @@ model code, or interface headers. There is no third-party code port requiring a 
 
 Implemented without network access, external source implementations, interface headers, PDK
 files or new third-party dependencies. No ported code requires a NOTICE addition.
+
+### Verilog-A VA-4a
+
+| Component | Files | Provenance |
+|---|---|---|
+| Built-in headers | `spx-va/src/headers/constants.vams`, `disciplines.vams` | Original declarations from Accellera Verilog-AMS LRM 2.4. Math values follow the named mathematical identities. Physical values follow the SI definitions and CODATA 2022. |
+| Binding and branch collapse | `spx-va/src/eval/topology.rs`, `sema.rs`, `eval.rs`, `spx-engine/src/circuit.rs` | Original constant propagation, union-find and MNA stamping from general compiler and circuit literature. Port current probes use an ideal series voltage source. Integration introduces a DAE state. |
+| Collapse fixture | `spx-va/tests/models/collapse.va` | Authored from Ohm's law and the Shockley diode equation. |
+| Local model verification | `spx-va/tests/production.rs`, `spx-engine/tests/verilog_a.rs` | Original finite-difference harness and DC transfer test. Third-party models are external test inputs. |

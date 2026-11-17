@@ -1,6 +1,6 @@
 //! Analog tokens with original source positions.
 //! Provenance: original implementation from the Accellera Verilog-AMS LRM 2.4; see docs/PROVENANCE.md.
-use crate::preproc::Preprocessed;
+use crate::{ast::ParamKind, preproc::Preprocessed};
 use spx_diag::{Diagnostic, Span};
 /// Lexical token categories.
 #[derive(Debug, Clone, PartialEq)]
@@ -23,6 +23,8 @@ pub enum TokenKind {
 /// A lexical token and its original source position.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
+    /// Parameter placement from preceding attributes.
+    pub placement: Option<ParamKind>,
     /// Syntactic form.
     pub kind: TokenKind,
     /// Original source position.
@@ -35,6 +37,7 @@ pub fn lex(source: &Preprocessed) -> (Vec<Token>, Vec<Diagnostic>) {
     let mut i = 0;
     let mut tokens = Vec::new();
     let mut errors = Vec::new();
+    let mut placement = None;
     while i < b.len() {
         if b[i].is_ascii_whitespace() {
             i += 1;
@@ -47,9 +50,41 @@ pub fn lex(source: &Preprocessed) -> (Vec<Token>, Vec<Diagnostic>) {
             continue;
         }
         if s[i..].starts_with("/*") || s[i..].starts_with("(*") {
-            let close = if b[i] == b'/' { "*/" } else { "*)" };
-            if let Some(n) = s[i + 2..].find(close) {
-                i += n + 4;
+            let close = if b[i] == b'/' {
+                s[i + 2..].find("*/").map(|n| i + 2 + n)
+            } else {
+                let mut quoted = false;
+                let mut begin = i + 2;
+                let mut k = begin;
+                while k < b.len() {
+                    if quoted && b[k] == b'\\' {
+                        k += 2;
+                        continue;
+                    }
+                    if b[k] == b'"' {
+                        quoted = !quoted;
+                    }
+                    if !quoted && (b[k] == b',' || b[k..].starts_with(b"*)")) {
+                        if let Some((key, value)) = s[begin..k].split_once('=')
+                            && key.trim() == "type"
+                        {
+                            placement = match value.trim() {
+                                "\"model\"" => Some(ParamKind::Model),
+                                "\"instance\"" => Some(ParamKind::Instance),
+                                _ => placement,
+                            };
+                        }
+                        if b[k] == b'*' {
+                            break;
+                        }
+                        begin = k + 1;
+                    }
+                    k += 1;
+                }
+                (k < b.len()).then_some(k)
+            };
+            if let Some(end) = close {
+                i = end + 2;
             } else {
                 errors.push(
                     Diagnostic::error("E-VA-SYNTAX", "unterminated comment or attribute")
@@ -101,6 +136,13 @@ pub fn lex(source: &Preprocessed) -> (Vec<Token>, Vec<Diagnostic>) {
                         }
                         value.push(char::from_u32(code).unwrap_or('\u{fffd}'));
                     } else {
+                        if !b[i].is_ascii()
+                            && let Some(c) = s[i..].chars().next()
+                        {
+                            value.push(c);
+                            i += c.len_utf8();
+                            continue;
+                        }
                         value.push(match b[i] {
                             b'n' => '\n',
                             b't' => '\t',
@@ -142,7 +184,7 @@ pub fn lex(source: &Preprocessed) -> (Vec<Token>, Vec<Diagnostic>) {
                     Some(b'h' | b'H') => 16,
                     _ => 0,
                 };
-                i = (i + 1).min(b.len());
+                i += s[i..].chars().next().map_or(0, char::len_utf8);
                 while i < b.len() && b[i].is_ascii_whitespace() {
                     i += 1;
                 }
@@ -233,9 +275,14 @@ pub fn lex(source: &Preprocessed) -> (Vec<Token>, Vec<Diagnostic>) {
                 TokenKind::Symbol(c.to_string())
             }
         };
-        tokens.push(Token { kind, span });
+        tokens.push(Token {
+            kind,
+            span,
+            placement: placement.take(),
+        });
     }
     tokens.push(Token {
+        placement: None,
         kind: TokenKind::Eof,
         span: source.positions.last().copied().unwrap_or(Span::new(1, 1)),
     });

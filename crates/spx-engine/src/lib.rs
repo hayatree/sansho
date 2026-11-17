@@ -136,7 +136,7 @@ fn run_analysis(
         None
     };
     let ckt = owned.as_ref().unwrap_or(ckt);
-    match card {
+    let mut result = match card {
         AnalysisCard::Op { .. } => analysis::op(ckt, opts),
         AnalysisCard::Dc {
             source,
@@ -170,7 +170,23 @@ fn run_analysis(
             uic,
             ..
         } => analysis::tran(ckt, opts, *tstep, *tstop, *tstart, *tmax, *uic),
+    }?;
+    for (name, index) in &ckt.aliases {
+        let points = result.len().max(result.scale_values.len());
+        result.variables.push(spx_output::Variable {
+            name: name.clone(),
+            quantity: spx_output::Quantity::Voltage,
+        });
+        match &mut result.data {
+            spx_output::Data::Real { columns } => {
+                columns.push(index.map_or_else(|| vec![0.; points], |k| columns[k].clone()))
+            }
+            spx_output::Data::Complex { columns } => {
+                columns.push(index.map_or_else(|| vec![(0., 0.); points], |k| columns[k].clone()))
+            }
+        }
     }
+    Ok(result)
 }
 
 fn card_span(card: &AnalysisCard) -> spx_diag::Span {

@@ -16,6 +16,7 @@ fn run(m: &CompiledModule, b: &Bound, x: &[f64]) -> EvalOutput {
             temperature: 300.,
             analysis: Analysis::Dc,
             initial_step: false,
+            final_step: false,
             abstime: 0.,
             gmin: 1e-12,
             limit: false,
@@ -115,6 +116,7 @@ end endmodule
         temperature: 300.,
         analysis: Analysis::Dc,
         initial_step: false,
+        final_step: false,
         abstime: 0.,
         gmin: 0.,
         limit: true,
@@ -238,6 +240,7 @@ fn initialization_and_runtime_errors() {
         temperature: 300.,
         analysis: Analysis::Dc,
         initial_step: true,
+        final_step: false,
         abstime: 0.,
         gmin: 0.,
         limit: false,
@@ -280,8 +283,7 @@ fn unsupported_has_spans() {
         "module m(p); electrical p; analog I(p)<+V(p)*ddt(V(p)); endmodule",
         "module m(p); electrical p; analog I(p)<+sin(ddt(V(p))); endmodule",
         "module m(p); electrical p; analog I(p)<+ddt(ddt(V(p))); endmodule",
-        "module m(p); electrical p; analog I(p)<+I(p); endmodule",
-        "module m(p); electrical p; analog I(p)<+I(<p>); endmodule",
+        "module m(p); electrical p; analog V(<p>)<+0; endmodule",
         "module m(p); electrical p; analog I(p)<+ddx(V(p),V(p,0)); endmodule",
         "module m(p); electrical p; analog @(cross(V(p))) ; endmodule",
         "module m(p); electrical p; analog I(p)<+idt(V(p)); endmodule",
@@ -334,16 +336,17 @@ fn parameter_defaults_aliases_and_integer_rounding() {
     assert!(m.bind(&[("c".into(), 0.)]).is_err());
 }
 #[test]
-fn reversed_branch_access_and_named_aliases() {
+fn distinct_parallel_named_branches_and_reversed_implicit_access() {
     let m = compile(
         r#"module reverse(p,n); electrical p,n; branch(p,n) forward; branch(n,p) backward;
  analog begin V(forward)<+2*I(forward); V(backward)<+-1; I(p,n)<+3; I(n,p)<+1; I(p,n)<+I(backward); end endmodule"#,
     );
-    assert_eq!(m.branch_unknowns.len(), 1);
+    assert_eq!(m.branch_unknowns.len(), 2);
     let b = m.bind(&[]).unwrap();
-    let o = run(&m, &b, &[4., 1., 0.5]);
-    assert_eq!(o.f, [2., -2., 1.]);
-    finite_difference(&m, &b, &[4., 1., 0.5]);
+    let bias = [4., 1., 0.5, 0.25];
+    let o = run(&m, &b, &bias);
+    assert_eq!(o.f, [2.5, -2.5, 2., -2.]);
+    finite_difference(&m, &b, &bias);
 }
 #[test]
 fn inout_nested_functions_and_local_scopes() {
@@ -373,6 +376,7 @@ fn user_and_fet_limiters() {
         temperature: 300.,
         analysis: Analysis::Dc,
         initial_step: false,
+        final_step: false,
         abstime: 0.,
         gmin: 0.,
         limit: true,
@@ -418,6 +422,7 @@ fn environment_modes_and_limexp() {
         temperature: 320.,
         analysis: Analysis::Ac,
         initial_step: true,
+        final_step: false,
         abstime: 2.,
         gmin: 0.5,
         limit: false,
@@ -456,6 +461,7 @@ fn scratch_and_invalid_shapes() {
         temperature: 300.,
         analysis: Analysis::Dc,
         initial_step: false,
+        final_step: false,
         abstime: 0.,
         gmin: 0.,
         limit: false,
@@ -546,6 +552,7 @@ fn static_block_locals_and_output_index_capture() {
         temperature: 300.,
         analysis: Analysis::Dc,
         initial_step: true,
+        final_step: false,
         abstime: 0.,
         gmin: 0.,
         limit: false,
@@ -590,6 +597,7 @@ fn limited_diode_is_linearized_at_actual_voltage() {
             temperature: 300.,
             analysis: Analysis::Dc,
             initial_step: false,
+            final_step: false,
             abstime: 0.,
             gmin: 0.,
             limit: true,
@@ -611,4 +619,190 @@ fn limited_diode_is_linearized_at_actual_voltage() {
     assert!((out.f[0] - expected).abs() <= 4. * f64::EPSILON * expected.abs());
     assert!((out.df[0] - g).abs() <= 4. * f64::EPSILON * g.abs());
     assert!((out.q[0] - 1e-9 * expected).abs() <= 4. * f64::EPSILON * (1e-9 * expected).abs());
+}
+
+#[test]
+fn collapsed_diode_is_the_limit_of_the_resistive_layout() {
+    let m = compile(include_str!("models/collapse.va"));
+    let model = m.bind_model(&[], BindOptions::default()).unwrap();
+    let short = m.bind_instance(&model, &[]).unwrap();
+    let resistance = 1e-4;
+    let series = m
+        .bind_instance(&model, &[("rs".into(), resistance)])
+        .unwrap();
+    assert_eq!(short.layout().representatives(), &[0, 1]);
+    assert_eq!(series.layout().representatives(), &[0, 1, 2]);
+    let voltage = 0.45;
+    let collapsed = run(&m, &short, &[voltage, 0.]);
+    let current = collapsed.f[0];
+    let finite = run(&m, &series, &[voltage + resistance * current, 0., voltage]);
+    assert!((finite.f[0] - current).abs() < 1e-11);
+    assert!(finite.f[2].abs() < 1e-11);
+    assert_eq!(finite.f[1], collapsed.f[1]);
+}
+
+#[test]
+fn dynamic_branch_is_preserved_at_zero_bias() {
+    let m = compile(
+        "module sw(p,n); electrical p,n; analog if(V(p)>1) I(p,n)<+2*V(p,n); else V(p,n)<+0; endmodule",
+    );
+    let b = m.bind(&[]).unwrap();
+    assert_eq!(b.layout().unknown_len(), 3);
+    assert_eq!(run(&m, &b, &[0., 0., 1.]).f, [1., -1., 0.]);
+    assert_eq!(run(&m, &b, &[2., 0., 1.]).f, [1., -1., -3.]);
+}
+
+#[test]
+fn connected_ports_and_flow_sensing() {
+    let m = compile(
+        "module sense(a,b); electrical a,b; branch (<a>) probe; analog begin I(a)<+2*V(a); I(b)<+I(probe)+I(<a>)+$port_connected(b); end endmodule",
+    );
+    let full = m.bind(&[]).unwrap();
+    let open = m.bind_connected_instance(&full, &[], 1).unwrap();
+    // External a,b, the inside of the sensing port, and positive current entering a.
+    assert_eq!(run(&m, &full, &[2., 0., 2., 4.]).f, [4., 9., 0., 0.]);
+    assert_eq!(run(&m, &open, &[2., 0., 2., 4.]).f, [4., 8., 0., 0.]);
+    finite_difference(&m, &open, &[2., 0., 1.5, 3.8]);
+}
+
+#[test]
+fn parameter_kinds_aliases_ambiguity_and_simulator_defaults() {
+    let m = compile(
+        r#"module settings(p); electrical p; (* desc="type=instance, *)", type="instance" *) parameter real Size=3;
+        (* type="model" *) parameter real Heat=$simparam("tnom",0); aliasparam Width=Size;
+        analog I(p)<+(Size+$given(Size))*$mfactor+Heat; endmodule"#,
+    );
+    let opts = BindOptions {
+        tnom: 33.,
+        gmin: 1e-11,
+    };
+    assert_eq!(
+        m.parameter_info("width").unwrap().placement,
+        Some(ParamKind::Instance)
+    );
+    assert_eq!(
+        m.bind_model(&[("WIDTH".into(), 3.)], opts).unwrap_err()[0].code,
+        "E-VA-PARAM"
+    );
+    let b = m.bind_model(&[], opts).unwrap();
+    assert!(
+        m.bind_instance(&b, &[("heat".into(), 2.)]).unwrap_err()[0]
+            .message
+            .contains("model parameter")
+    );
+    let i = m
+        .bind_instance(&b, &[("wIdTh".into(), 5.), ("M".into(), 2.)])
+        .unwrap();
+    assert_eq!(run(&m, &i, &[0.]).f, [45.]);
+    let d = m.bind_instance(&b, &[("sise".into(), 1.)]).unwrap_err();
+    assert!(d[0].message.contains("did you mean Size"));
+    let m = compile("module ambiguous(); parameter real val=0, VAL=1; endmodule");
+    assert!(
+        m.bind(&[("Val".into(), 2.)]).unwrap_err()[0]
+            .message
+            .contains("ambiguous")
+    );
+}
+
+#[test]
+fn final_events_noise_tables_and_unused_random_calls() {
+    let m = compile(
+        r#"module events(p); electrical p; integer seed; real a;
+        analog begin @(initial_model or initial_instance) a=1; @(final_step) a=2;
+        I(p)<+a+noise_table({1,2,10,0.3},"spectrum");
+        if (V(p)>0) I(p)<+$rdist_normal(seed,0,1);
+        $discontinuity(1); $bound_step(1n); end endmodule"#,
+    );
+    let b = m.bind(&[]).unwrap();
+    let input = EvalInput {
+        x: &[0.],
+        temperature: 300.,
+        analysis: Analysis::Dc,
+        initial_step: true,
+        final_step: false,
+        abstime: 0.,
+        gmin: 0.,
+        limit: false,
+        simparams: &|_| None,
+        mfactor: 1.,
+    };
+    let mut o = EvalOutput::default();
+    m.eval(
+        &b,
+        &input,
+        StateIo {
+            accepted: &[],
+            current: &mut [],
+        },
+        &mut o,
+    );
+    assert_eq!(o.f, [1.]);
+    m.eval(
+        &b,
+        &EvalInput {
+            initial_step: false,
+            final_step: true,
+            ..input
+        },
+        StateIo {
+            accepted: &[],
+            current: &mut [],
+        },
+        &mut o,
+    );
+    assert_eq!(o.f, [2.]);
+    m.eval(
+        &b,
+        &EvalInput { x: &[1.], ..input },
+        StateIo {
+            accepted: &[],
+            current: &mut [],
+        },
+        &mut o,
+    );
+    let d = o.diagnostic.unwrap();
+    assert_eq!(d.code, "E-VA-UNSUPPORTED");
+    assert!(d.span.is_some());
+}
+
+#[test]
+fn switching_bindings_restarts_instance_initialization() {
+    let m = compile(
+        r#"module startup(p); electrical p; real t; analog begin @(initial_instance) t=$simparam("tnom"); I(p)<+t; end endmodule"#,
+    );
+    let mut scratch = Scratch::default();
+    let mut out = EvalOutput::default();
+    for tnom in [20., 55.] {
+        let b = m
+            .bind_model(
+                &[],
+                BindOptions {
+                    tnom,
+                    ..BindOptions::default()
+                },
+            )
+            .unwrap();
+        m.eval_with_scratch(
+            &b,
+            &EvalInput {
+                x: &[0.],
+                temperature: 310.,
+                analysis: Analysis::Dc,
+                initial_step: false,
+                final_step: false,
+                abstime: 0.,
+                gmin: 0.,
+                limit: false,
+                simparams: &|_| None,
+                mfactor: 1.,
+            },
+            StateIo {
+                accepted: &[],
+                current: &mut [],
+            },
+            &mut scratch,
+            &mut out,
+        );
+        assert_eq!(out.f, [tnom]);
+    }
 }

@@ -23,7 +23,7 @@ struct Processor<'a> {
     macros: BTreeMap<String, Macro>,
     out: Preprocessed,
     errors: Vec<Diagnostic>,
-    comment: bool,
+
     expansion_positions: Vec<Span>,
     expansions: usize,
 }
@@ -31,14 +31,25 @@ struct Processor<'a> {
 pub fn preprocess(text: &str, loader: &dyn VaLoader) -> (Preprocessed, Vec<Diagnostic>) {
     let mut p = Processor {
         loader,
-        macros: BTreeMap::new(),
+        macros: ["__VAMS_ENABLE__", "__VAMS_COMPACT_MODELING__"]
+            .into_iter()
+            .map(|n| {
+                (
+                    n.into(),
+                    Macro {
+                        args: None,
+                        body: "1".into(),
+                    },
+                )
+            })
+            .collect(),
         out: Preprocessed {
             text: String::new(),
             positions: Vec::new(),
             sources: vec!["<input>".into()],
         },
         errors: Vec::new(),
-        comment: false,
+
         expansion_positions: Vec::new(),
         expansions: 0,
     };
@@ -53,12 +64,6 @@ impl Processor<'_> {
         self.errors
             .push(Diagnostic::error(code, msg).with_span(span));
     }
-    fn emit(&mut self, text: &str, span: Span) {
-        self.out.text.push_str(text);
-        self.out
-            .positions
-            .extend(std::iter::repeat_n(span, text.len()));
-    }
     fn file(&mut self, text: &str, file: u32, depth: usize) {
         if depth >= 32 {
             self.error(
@@ -69,6 +74,21 @@ impl Processor<'_> {
             return;
         }
         let mut conditions: Vec<(bool, bool, bool)> = Vec::new();
+        let text = mask_comments(text).unwrap_or_else(|offset| {
+            let prefix = &text[..offset];
+            self.error(
+                "E-VA-SYNTAX",
+                "unterminated block comment",
+                Span::new(
+                    prefix.bytes().filter(|&b| b == b'\n').count() as u32 + 1,
+                    prefix.rsplit('\n').next().unwrap_or("").len() as u32 + 1,
+                )
+                .in_file(file),
+            );
+            text.to_string()
+        });
+        let mut pending = String::new();
+        let mut pending_positions = Vec::new();
         let mut lines = text.lines().enumerate();
         while let Some((line, first)) = lines.next() {
             let span = Span::new(line as u32 + 1, 1).in_file(file);
@@ -96,9 +116,28 @@ impl Processor<'_> {
                 let end = r.find(|c: char| !ident(c)).unwrap_or(r.len());
                 (&r[..end], r[end..].trim_start())
             });
-            if !self.comment
-                && let Some((name, rest)) = directive
-            {
+            let directive = directive.filter(|(name, _)| {
+                matches!(
+                    *name,
+                    "ifdef"
+                        | "ifndef"
+                        | "elsif"
+                        | "else"
+                        | "endif"
+                        | "define"
+                        | "undef"
+                        | "include"
+                        | "resetall"
+                        | "timescale"
+                        | "default_nettype"
+                )
+            });
+            if let Some((name, rest)) = directive {
+                if let Some(&start) = pending_positions.first() {
+                    self.expand_emit(&pending, start, &pending_positions);
+                    pending.clear();
+                    pending_positions.clear();
+                }
                 match name {
                     "ifdef" | "ifndef" => {
                         let yes = self
@@ -181,15 +220,14 @@ impl Processor<'_> {
                             .strip_prefix('"')
                             .and_then(|s| s.split_once('"').map(|(path, _)| path))
                         {
-                            let loaded = builtin(path)
-                                .map(|s| (path.to_string(), s))
-                                .map(Ok)
-                                .unwrap_or_else(|| {
-                                    self.loader.load(
-                                        path,
-                                        self.out.sources.get(file as usize).map(String::as_str),
-                                    )
-                                });
+                            let from = self.out.sources.get(file as usize).map(String::as_str);
+                            let loaded = if let Some(header) = builtin(path) {
+                                self.loader.standard_header(path, from).map(|local| {
+                                    local.unwrap_or_else(|| (path.to_owned(), header.to_owned()))
+                                })
+                            } else {
+                                self.loader.load(path, from)
+                            };
                             match loaded {
                                 Ok((name, body)) => {
                                     let index = self.out.sources.len() as u32;
@@ -204,16 +242,17 @@ impl Processor<'_> {
                     }
                     "resetall" | "timescale" | "default_nettype" => {}
                     "define" | "undef" | "include" => {}
-                    _ => {
-                        if active {
-                            self.expand_emit(&s, span, &positions);
-                        }
-                    }
+                    _ => {}
                 }
             } else if active {
-                self.expand_emit(&s, span, &positions);
+                pending.push_str(&s);
+                pending.push('\n');
+                pending_positions.extend(positions);
+                pending_positions.push(span);
             }
-            self.emit("\n", span);
+        }
+        if !pending.is_empty() {
+            self.expand_emit(&pending, pending_positions[0], &pending_positions);
         }
         if !conditions.is_empty() {
             self.error(
@@ -224,7 +263,16 @@ impl Processor<'_> {
         }
     }
     fn expand_emit(&mut self, s: &str, span: Span, positions: &[Span]) {
+        let before = self.errors.len();
         let expanded = self.expand(s, span, 0);
+        for e in &mut self.errors[before..] {
+            if let Some(p) = e.span {
+                e.span = positions
+                    .get(p.col.saturating_sub(span.col) as usize)
+                    .copied()
+                    .or(Some(p));
+            }
+        }
         self.out.text.push_str(&expanded);
         self.out
             .positions
@@ -246,31 +294,11 @@ impl Processor<'_> {
         let mut mapping = Vec::new();
         let mut previous = (0, 0);
         while i < s.len() {
-            map_segment(s, &out, previous, (i, out.len()), span, &mut mapping);
+            if depth == 0 {
+                map_segment(s, &out, previous, (i, out.len()), span, &mut mapping);
+            }
             previous = (i, out.len());
             let tail = &s[i..];
-            if self.comment {
-                if tail.starts_with("*/") {
-                    self.comment = false;
-                    out.push_str("*/");
-                    i += 2;
-                } else if let Some(c) = tail.chars().next() {
-                    out.push(c);
-                    i += c.len_utf8();
-                }
-                continue;
-            }
-            if !quoted && tail.starts_with("//") {
-                out.push_str(tail);
-                i = s.len();
-                break;
-            }
-            if !quoted && tail.starts_with("/*") {
-                self.comment = true;
-                out.push_str("/*");
-                i += 2;
-                continue;
-            }
             if tail.starts_with('"') {
                 quoted = !quoted;
             }
@@ -284,13 +312,25 @@ impl Processor<'_> {
                 let end = tail[1..]
                     .find(|c: char| !ident(c))
                     .map_or(tail.len(), |n| n + 1);
+                let invocation = Span {
+                    col: if depth == 0 {
+                        span.col + i as u32
+                    } else {
+                        span.col
+                    },
+                    ..span
+                };
                 let name = &tail[1..end];
                 i += end;
                 if let Some(m) = self.macros.get(name).cloned() {
                     self.expansions += 1;
                     if self.expansions >= 100_000 {
                         if self.expansions == 100_000 {
-                            self.error("E-VA-PREPROC", "macro expansion budget exceeded", span);
+                            self.error(
+                                "E-VA-PREPROC",
+                                "macro expansion budget exceeded",
+                                invocation,
+                            );
                         }
                         continue;
                     }
@@ -300,30 +340,34 @@ impl Processor<'_> {
                             i += s[i..].chars().next().map_or(0, char::len_utf8);
                         }
                         if !s[i..].starts_with('(') {
-                            self.error("E-VA-PREPROC", "expected macro arguments", span);
+                            self.error("E-VA-PREPROC", "expected macro arguments", invocation);
                             continue;
                         }
                         i += 1;
                         let start = i;
-                        let mut level = 0;
+                        let mut level = 0usize;
                         let mut args = Vec::new();
                         let mut part = start;
                         let mut string = false;
                         while i < s.len() {
                             let b = s.as_bytes()[i];
+                            if string && b == b'\\' {
+                                i = (i + 2).min(s.len());
+                                continue;
+                            }
                             if b == b'"' {
                                 string = !string;
                             }
                             if !string {
-                                if b == b'(' {
+                                if matches!(b, b'(' | b'[' | b'{') {
                                     level += 1;
                                 }
-                                if b == b')' {
-                                    if level == 0 {
+                                if matches!(b, b')' | b']' | b'}') {
+                                    if level == 0 && b == b')' {
                                         args.push(s[part..i].trim().to_string());
                                         break;
                                     }
-                                    level -= 1;
+                                    level = level.saturating_sub(1);
                                 }
                                 if b == b',' && level == 0 {
                                     args.push(s[part..i].trim().to_string());
@@ -333,7 +377,7 @@ impl Processor<'_> {
                             i += 1;
                         }
                         if i == s.len() {
-                            self.error("E-VA-PREPROC", "unterminated macro call", span);
+                            self.error("E-VA-PREPROC", "unterminated macro call", invocation);
                         } else {
                             i += 1;
                         }
@@ -341,13 +385,19 @@ impl Processor<'_> {
                             args.clear();
                         }
                         if args.len() != params.len() {
-                            self.error("E-VA-PREPROC", "macro argument count mismatch", span);
+                            self.error("E-VA-PREPROC", "macro argument count mismatch", invocation);
                         }
                         let mut replaced = String::new();
                         let mut pos = 0;
+                        let mut in_string = false;
+                        let mut escaped = false;
                         while pos < body.len() {
                             let c = body[pos..].chars().next().unwrap_or(' ');
-                            if ident(c) {
+                            if c == '"' && !escaped {
+                                in_string = !in_string;
+                            }
+                            escaped = in_string && c == '\\' && !escaped;
+                            if !in_string && ident(c) {
                                 let end = body[pos..]
                                     .find(|c: char| !ident(c))
                                     .map_or(body.len(), |n| pos + n);
@@ -365,16 +415,22 @@ impl Processor<'_> {
                         }
                         body = replaced;
                     }
-                    out.push_str(&self.expand(&body, span, depth + 1));
+                    out.push_str(&self.expand(&body, invocation, depth + 1));
                 } else {
-                    self.error("E-VA-PREPROC", format!("undefined macro `{name}"), span);
+                    self.error(
+                        "E-VA-PREPROC",
+                        format!("undefined macro `{name}"),
+                        invocation,
+                    );
                 }
             } else if let Some(c) = tail.chars().next() {
                 out.push(c);
                 i += c.len_utf8();
             }
         }
-        map_segment(s, &out, previous, (i, out.len()), span, &mut mapping);
+        if depth == 0 {
+            map_segment(s, &out, previous, (i, out.len()), span, &mut mapping);
+        }
         if depth == 0 {
             self.expansion_positions = mapping;
         }
@@ -396,12 +452,45 @@ fn map_segment(
         ..span
     }));
 }
-fn builtin(path: &str) -> Option<String> {
+// Preserve byte offsets while removing comments before preprocessing directives.
+fn mask_comments(text: &str) -> Result<String, usize> {
+    let mut bytes = text.as_bytes().to_vec();
+    let mut i = 0;
+    let mut quoted = false;
+    while i < bytes.len() {
+        if quoted && bytes[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if bytes[i] == b'"' {
+            quoted = !quoted;
+            i += 1;
+            continue;
+        }
+        let tail = &text.as_bytes()[i..];
+        let len = if !quoted && tail.starts_with(b"//") {
+            tail.iter().position(|&b| b == b'\n').unwrap_or(tail.len())
+        } else if !quoted && tail.starts_with(b"/*") {
+            tail[2..].windows(2).position(|w| w == b"*/").ok_or(i)? + 4
+        } else {
+            i += 1;
+            continue;
+        };
+        for b in &mut bytes[i..i + len] {
+            if *b != b'\n' {
+                *b = b' ';
+            }
+        }
+        i += len;
+    }
+    Ok(String::from_utf8(bytes).unwrap_or_default())
+}
+fn builtin(path: &str) -> Option<&'static str> {
     match path {
- "disciplines.vams" => Some("`ifndef SPX_BUILTIN_DISCIPLINES_VAMS\n`define SPX_BUILTIN_DISCIPLINES_VAMS\nnature Current; units = \"A\"; access = I; abstol = 1p; endnature\nnature Voltage; units = \"V\"; access = V; abstol = 1u; endnature\nnature Charge; units = \"C\"; access = Q; abstol = 1f; endnature\nnature Flux; units = \"Wb\"; access = Phi; abstol = 1p; endnature\nnature Temperature; units = \"K\"; access = Temp; abstol = 1u; endnature\nnature Power; units = \"W\"; access = Pwr; abstol = 1n; endnature\ndiscipline electrical; potential Voltage; flow Current; domain continuous; enddiscipline\ndiscipline magnetic; potential Flux; flow Current; domain continuous; enddiscipline\ndiscipline thermal; potential Temperature; flow Power; domain continuous; enddiscipline\ndiscipline kirchoff; potential Voltage; flow Current; domain continuous; enddiscipline\n`endif\n".into()),
- "constants.vams" => { let constants = [("M_PI","3.14159265358979323846"),("M_TWO_PI","6.28318530717958647692"),("M_PI_2","1.57079632679489661923"),("M_E","2.71828182845904523536"),("M_SQRT2","1.41421356237309504880"),("M_LN2","0.69314718055994530942"),("M_LN10","2.30258509299404568402"),("M_LOG2E","1.44269504088896340736"),("M_LOG10E","0.43429448190325182765"),("M_1_PI","0.31830988618379067154"),("M_2_PI","0.63661977236758134308"),("M_2_SQRTPI","1.12837916709551257390"),("M_SQRT1_2","0.70710678118654752440"),("P_Q","1.602176634e-19"),("P_C","299792458.0"),("P_K","1.380649e-23"),("P_H","6.62607015e-34"),("P_EPS0","8.8541878188e-12"),("P_U0","1.25663706127e-6"),("P_CELSIUS0","273.15")]; Some(constants.iter().map(|(n,v)| format!("`define {n} {v}\n")).collect()) },
- _ => None
- }
+        "constants.vams" | "constants.h" => Some(include_str!("headers/constants.vams")),
+        "disciplines.vams" | "discipline.h" => Some(include_str!("headers/disciplines.vams")),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

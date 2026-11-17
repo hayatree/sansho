@@ -29,7 +29,13 @@ fn models() {
     ] {
         let tree = parse_va(text, &NoVaFiles).unwrap_or_else(|e| panic!("{e:#?}"));
         assert_eq!(tree.modules.len(), 1);
-        assert_eq!(tree.natures.len(), 6);
+        assert_eq!(
+            tree.natures
+                .iter()
+                .filter(|n| n.name.name == "Voltage")
+                .count(),
+            1
+        );
         assert!(
             tree.modules[0]
                 .items
@@ -217,9 +223,47 @@ fn include_depth_and_comments() {
 #[test]
 fn repeated_builtin_include_and_string_escapes() {
     let tree=parse_va("`include \"disciplines.vams\"\n`include \"disciplines.vams\"\nmodule m(); parameter string s=\"a\\101\\n\"; endmodule",&NoVaFiles).unwrap();
-    assert_eq!(tree.natures.len(), 6);
+    assert_eq!(
+        tree.natures
+            .iter()
+            .filter(|n| n.name.name == "Voltage")
+            .count(),
+        1
+    );
     let ItemKind::Param(p) = &tree.modules[0].items[0].kind else {
         panic!()
     };
     assert_eq!(p.value.kind, ExprKind::Str("aA\n".into()));
+}
+
+#[test]
+fn header_fallback_multiline_invocations_and_predefines() {
+    struct Header;
+    impl VaLoader for Header {
+        fn load(&self, path: &str, _: Option<&str>) -> Result<(String, String), String> {
+            if path == "constants.h" {
+                Ok((path.into(), "`define USER_SCALE 4".into()))
+            } else {
+                Err("absent".into())
+            }
+        }
+    }
+    let text = r#"`include "constants.h"
+`include "discipline.h"
+`include "constants.vams"
+`define SUM(a,b) ((a)+(b)) // this comment ends at the definition
+`ifdef __VAMS_ENABLE__
+`ifdef __VAMS_COMPACT_MODELING__
+module headers();
+parameter real v=`SUM(
+    `USER_SCALE,
+    `M_PI_4);
+endmodule
+`endif
+`endif"#;
+    let ast = parse_va(text, &Header).unwrap();
+    assert!(ast.disciplines.iter().any(|d| d.name.name == "electrical"));
+    let m = compile_module(&ast, Some("headers")).unwrap();
+    let b = m.bind(&[]).unwrap();
+    assert_eq!(m.param(&b, "V"), Some(4. + std::f64::consts::FRAC_PI_4));
 }

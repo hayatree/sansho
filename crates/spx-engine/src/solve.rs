@@ -125,6 +125,7 @@ pub(crate) fn make_ctx(opts: &SimOptions, mode: Mode, tran: TranParams) -> EvalC
         temp: opts.temp + 273.15,
         limit: true,
         init_junctions: false,
+        final_step: false,
     }
 }
 

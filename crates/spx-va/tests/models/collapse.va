@@ -1,0 +1,16 @@
+//! Series-resistance diode for binding-time node-collapse tests.
+//! Provenance: original test from Ohm's law, the Shockley equation and Accellera LRM 2.4.
+module series_junction(anode,cathode);
+    inout anode,cathode;
+    electrical anode,cathode,junction;
+    (* type = "instance" *) parameter real RS = 0 from [0:inf);
+    real resistance;
+    analog begin
+        resistance = RS;
+        if (resistance == 0)
+            V(anode,junction) <+ 0.0;
+        else
+            I(anode,junction) <+ V(anode,junction)/resistance;
+        I(junction,cathode) <+ 1e-12*(exp(V(junction,cathode)/0.026)-1);
+    end
+endmodule

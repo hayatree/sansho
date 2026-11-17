@@ -100,6 +100,14 @@ pub enum ItemKind {
         target: Ident,
     },
 }
+/// Placement of external overrides specified by the parameter's type attribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamKind {
+    /// Explicit model-card parameter.
+    Model,
+    /// Instance-line parameter.
+    Instance,
+}
 /// A parameter declaration with default and validation constraints.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamDecl {
@@ -109,6 +117,8 @@ pub struct ParamDecl {
     pub ty: String,
     /// Whether this is a localparam.
     pub local: bool,
+    /// Explicit placement attribute. Unannotated parameters permit instance overrides.
+    pub placement: Option<ParamKind>,
     /// Optional initializer or parameter default.
     pub value: Expr,
     /// Declared from/exclude constraints.
@@ -281,6 +291,10 @@ pub enum ExprKind {
     Str(String),
     /// Identifier reference.
     Ident(Ident),
+    /// Braced list of values, e.g. a noise spectrum table.
+    List(Vec<Expr>),
+    /// Port branch terminal in an angle-bracket branch declaration.
+    Port(Ident),
     /// Array element access.
     Index(Box<Expr>, Box<Expr>),
     /// Unary operator expression.
