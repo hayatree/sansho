@@ -545,6 +545,26 @@ impl Flat<'_> {
                         }
                         self.push(toks, line);
                     }
+                    ".save" => {
+                        let mut tokens = line.tokens.clone();
+                        let mut fields = tokens[1..].iter_mut();
+                        while let Some(probe) = fields.next() {
+                            match probe.lower().as_str() {
+                                "v" => {
+                                    if let Some(node) = fields.next() {
+                                        node.text = ctx.node(&self.defs, &node.text);
+                                    }
+                                }
+                                "i" => {
+                                    if let Some(device) = fields.next() {
+                                        device.text = ctx.element(&device.text);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        self.push(tokens, line);
+                    }
                     ".ic" | ".nodeset" => {
                         let mut toks = self.substitute(&line.tokens, scope);
                         // `v(node)=value` lexes as `v node = value`.

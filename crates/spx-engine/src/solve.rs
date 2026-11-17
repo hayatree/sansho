@@ -49,6 +49,7 @@ pub(crate) struct Assembled {
 /// Reusable per-job workspace.
 #[derive(Debug)]
 pub(crate) struct Workspace {
+    pub assemblies: usize,
     pub newton_calls: usize,
     pub newton_iterations: usize,
     pub slots: Vec<Slots>,
@@ -75,6 +76,7 @@ impl Workspace {
         let n = ckt.dim();
         let nnz = ckt.pattern.nnz();
         Self {
+            assemblies: 0,
             newton_calls: 0,
             newton_iterations: 0,
             slots: ckt.new_slots(),
@@ -153,6 +155,7 @@ pub(crate) fn assemble(
     opts: &SimOptions,
     gshunt: f64,
 ) {
+    ws.assemblies += 1;
     let par = ckt.parallel && rayon::current_num_threads() > 1;
     let eval = |((group, s), (current, accepted)): EvalItem<'_>| {
         s.noncon = false;

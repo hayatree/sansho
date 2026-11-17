@@ -159,12 +159,12 @@ pub trait DeviceGroup: Send + Sync {
 Results are therefore bit-identical regardless of thread count or scheduling. Extra memory is about
 8 bytes × number of contributions.
 
-Implemented (M3) in `spx-engine/src/circuit.rs` (`Gather`) and `solve.rs` (`assemble`): device
-groups are split at elaboration into fixed-size chunks (64 nonlinear / 1024 linear instances), which
-are evaluated in parallel; every value of `G`, `C`, `f`, `q`, `b` is then gathered from its ordered
-source list. Chunk boundaries depend only on the netlist, never on the thread count, and parallel
-evaluation is enabled only for circuits with ≥ 256 nonlinear instances. A test checks bit-identical
-results for 1, 2, 5 and 8 threads.
+Elaboration fixes the chunk size at 1,024 for linear devices, 64 for built-in nonlinear devices
+and two for interpreted Verilog-A instances. Each VA chunk keeps reusable input and stamp buffers
+and an interpreter workspace for each instance. Device evaluation uses Rayon when the circuit
+has at least eight VA instances or 256 nonlinear instances. Every value of `G`, `C`, `f`, `q`
+and `b` is gathered in its original source order. The VA assembly test compares the bits of every
+time point and signal on one, two and five threads.
 
 ---
 
@@ -299,7 +299,7 @@ alterations is planned with the own sparse solver (M5).
 }
 ```
 
-- Pre-run lint: floating nodes, no DC path, V loops, unused models, suspicious units
+- Pre-run lint: floating nodes, no DC path, V loops, unused models defined in the main file (once per source definition), suspicious units
   (e.g. `1M` vs `1Meg`), implausible values, default MOSFET geometry, `.meas` signals that do not
   exist (with "did you mean" suggestions), suspicious `.tran` steps.
 - Error codes are stable IDs, each with documentation: the registry in
@@ -349,7 +349,7 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 - All levels run on a rayon pool. `run_with` creates one with `threads` workers;
   `run_in_current_pool` uses the pool the caller installed (to avoid clashing with agent-side
   parallelism), and a `Session` keeps one pool for its lifetime.
-- Parallelism is automatically suppressed for small circuits (fewer than 256 nonlinear instances).
+- L1 and L2 use the circuit-size thresholds in §4. The standalone VA benchmark and timings are in Verilog-A §12.
 - Measured (M3, 1001-stage MOS1 ring oscillator, 1595 Newton iterations): assembly 466 ms on 1
   thread, 219 ms on 4, 194 ms on 8; LU (serial until M5) ≈ 145 ms. Results are bit-identical.
 
@@ -410,7 +410,10 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
     multiplier. See the binding rules in [Verilog-A §11](verilog-a.md#11-va-4b-production-circuits).
   - Not yet: `.option scale`, `B` sources, `K` coupling, switches, `.temp` scaling,
     instance `ic=`.
-- **Output**: ngspice raw format (readable by Xschem and other existing tools).
+- `.save v(node) i(vsrc)` selects exported raw and API vectors across analysis cards. Multiple
+  cards accumulate selections. The independent scale and circuit ordering are preserved, and
+  `.save all` exports all vectors. Both deck measurements and later session measurements have
+  access to the complete traces. Raw files use the ngspice format readable by Xschem.
 - **Models**: built-ins start at Level 1. BSIM4 is ported from the Berkeley distribution into a
   separate crate (`spx-model-bsim4`, under its original license; see §11). Production Verilog-A models are compiled by spx-va. Verification loads
   OSDI models into the external reference simulator. PDKs are not bundled.

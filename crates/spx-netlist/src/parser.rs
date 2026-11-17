@@ -56,6 +56,7 @@ pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<
         analyses: p.analyses,
         options: p.options,
         models: p.models,
+        saves: p.saves,
         measures: p.measures,
         warnings: p.diags,
     })
@@ -68,6 +69,7 @@ struct Parser {
     analyses: Vec<AnalysisCard>,
     options: Vec<OptionCard>,
     models: Vec<ModelCard>,
+    saves: Vec<String>,
     measures: Vec<crate::MeasureCard>,
     ics: Vec<NodeValue>,
     nodesets: Vec<NodeValue>,
@@ -1016,6 +1018,36 @@ impl Parser {
                             span: t[i].span,
                         });
                         i += 1;
+                    }
+                }
+            }
+            ".save" => {
+                if self.need(line, 2, ".save v(node) i(vsrc) | all").is_none() {
+                    return;
+                }
+                let mut fields = t[1..].iter();
+                while let Some(field) = fields.next() {
+                    let name = field.lower();
+                    let signal = match name.as_str() {
+                        "all" => name,
+                        "v" | "i" => {
+                            let Some(arg) = fields.next() else {
+                                self.err("E-PARSE-ARITY", "missing .save signal name", field.span);
+                                return;
+                            };
+                            format!("{name}({})", arg.lower())
+                        }
+                        _ => {
+                            self.err(
+                                "E-PARSE-ARITY",
+                                format!("unsupported .save signal {name}"),
+                                field.span,
+                            );
+                            return;
+                        }
+                    };
+                    if !self.saves.contains(&signal) {
+                        self.saves.push(signal);
                     }
                 }
             }

@@ -45,3 +45,21 @@ fn clean_netlist_has_no_lint() {
     );
     assert!(c.is_empty(), "{c:?}");
 }
+
+#[test]
+fn unused_models_are_reported_once_per_main_file_definition() {
+    struct Library;
+    impl spx_netlist::SourceLoader for Library {
+        fn load(&self, path: &str, _: Option<&str>) -> Result<(String, String), String> {
+            Ok((path.into(), ".model lib_unused d\n".into()))
+        }
+    }
+    let nl = spx_netlist::parse_with("lint\n.include models.lib\n.subckt cell n\n.model unused d\nR1 n 0 1k\n.ends\nX1 a cell\nX2 a cell\nV1 a 0 1\n.op\n", &Library).unwrap();
+    let warnings = check(&nl).unwrap().warnings;
+    let unused: Vec<_> = warnings
+        .iter()
+        .filter(|d| d.code == "W-LINT-UNUSED-MODEL")
+        .collect();
+    assert_eq!(unused.len(), 1);
+    assert_eq!(unused[0].span.unwrap().file, 0);
+}

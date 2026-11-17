@@ -106,9 +106,24 @@ fn smoke(file: &str, defines: &str, expected: Option<&str>) {
     };
     let mut scratch = Scratch::default();
     let (reference, cold) = eval(&x, &mut scratch, true);
-    let (_, warm) = eval(&x, &mut scratch, false);
+    let (warm_output, specialize) = eval(&x, &mut scratch, false);
+    if file == "psp103/psp103.va" {
+        for (cold, warm) in [
+            (&reference.f, &warm_output.f),
+            (&reference.q, &warm_output.q),
+            (&reference.df, &warm_output.df),
+            (&reference.dq, &warm_output.dq),
+        ] {
+            for (&a, &b) in cold.iter().zip(warm) {
+                assert_eq!(a.to_bits(), b.to_bits(), "{file}: cold {a:e}, warm {b:e}");
+            }
+        }
+    }
+    let mut samples: Vec<_> = (0..11).map(|_| eval(&x, &mut scratch, false).1).collect();
+    samples.sort_unstable();
+    let warm = samples[samples.len() / 2];
     eprintln!(
-        "{}: compile {compile_time:?}, initialized evaluation {cold:?}, subsequent evaluation {warm:?}, {} bound unknowns",
+        "{}: compile {compile_time:?}, initialized evaluation {cold:?}, second evaluation (includes specialization) {specialize:?}, median warm evaluation {warm:?}, {} bound unknowns",
         module.name,
         x.len()
     );

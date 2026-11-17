@@ -340,6 +340,9 @@ pub fn write(nl: &Netlist) -> String {
     for a in &nl.analyses {
         let _ = writeln!(out, "{}", write_analysis(a));
     }
+    if !nl.saves.is_empty() {
+        let _ = writeln!(out, ".save {}", nl.saves.join(" "));
+    }
     for m in &nl.measures {
         let _ = writeln!(out, "{}", write_measure(m));
     }

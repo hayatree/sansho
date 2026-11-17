@@ -373,7 +373,9 @@ fn lower(m: &ast::Module, potentials: BTreeSet<String>) -> R<CompiledModule> {
             param_index.insert(alias.into(), index);
         }
     }
+    let history = crate::eval::program::history(&body, l.slots);
     Ok(CompiledModule {
+        history,
         optional_ports: l.optional_ports,
         param_index,
         name: m.name.name.clone(),
@@ -905,7 +907,7 @@ impl Lower {
             A::Real(v) => E::Num(*v),
             A::Str(v) => {
                 ty = Ty::String;
-                E::Str(v.clone())
+                E::Str(v.as_str().into())
             }
             A::Ident(n) => {
                 if n.name == "inf" {

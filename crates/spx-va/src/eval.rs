@@ -1,7 +1,12 @@
 //! Analog tree interpreter and public evaluation API.
 //! Provenance: original implementation from Accellera LRM 2.4 and forward-mode AD literature.
+pub(crate) mod program;
 mod topology;
-use crate::{dual::Dual, ir::*, limit};
+use crate::{
+    dual::{Dual, Gradients},
+    ir::*,
+    limit,
+};
 use spx_diag::Diagnostic;
 use std::sync::{Arc, Mutex};
 pub use topology::Layout;
@@ -80,34 +85,33 @@ pub struct EvalOutput {
 struct Value {
     f: Dual,
     q: Dual,
-    text: Option<String>,
+    text: Option<Arc<str>>,
 }
 impl Value {
-    fn num(v: f64, n: usize) -> Self {
+    fn num(v: f64) -> Self {
         Self {
-            f: Dual::constant(v, n),
-            q: Dual::constant(0., n),
+            f: Dual::constant(v),
+            q: Dual::constant(0.),
             text: None,
         }
     }
     fn dual(f: Dual) -> Self {
-        let n = f.d.len();
         Self {
             f,
-            q: Dual::constant(0., n),
+            q: Dual::constant(0.),
             text: None,
         }
     }
-    fn string(s: String, n: usize) -> Self {
+    fn string(s: Arc<str>) -> Self {
         Self {
             text: Some(s),
-            ..Self::num(0., n)
+            ..Self::num(0.)
         }
     }
-    fn cast(mut self, t: Ty) -> Self {
+    fn cast(mut self, t: Ty, g: &mut Gradients) -> Self {
         if t == Ty::Integer {
-            self.f = self.f.map(self.f.v.trunc(), 0.);
-            self.q = self.q.map(self.q.v.trunc(), 0.);
+            self.f = self.f.map(self.f.v.trunc(), 0., g);
+            self.q = self.q.map(self.q.v.trunc(), 0., g);
         }
         self
     }
@@ -136,6 +140,12 @@ pub struct Scratch {
     steps: usize,
     binding_key: Option<Arc<()>>,
     width: usize,
+    machine: program::Machine,
+    gradients: Gradients,
+    drives: Vec<Drive>,
+    integrals: Vec<Option<Value>>,
+    frames: Vec<CallFrame>,
+    calls: Vec<usize>,
 }
 /// Validated parameter values and explicit-supply flags.
 /// The convenience evaluator owns one instance workspace here; use `eval_with_scratch`
@@ -362,7 +372,7 @@ impl CompiledModule {
         for (i, p) in self.params.iter().enumerate() {
             let inherited = model.filter(|m| m.given.get(i).copied().unwrap_or(false));
             let value = if let Some(v) = overrides[i] {
-                Value::num(if p.ty == "integer" { v.round() } else { v }, 0)
+                Value::num(if p.ty == "integer" { v.round() } else { v })
             } else if let Some(m) = inherited {
                 m.values[i].clone()
             } else {
@@ -389,7 +399,7 @@ impl CompiledModule {
                     diagnostics.push(Diagnostic::error("E-VA-PARAM", e).with_span(p.default.span));
                 }
                 if p.ty == "integer" {
-                    Value::num(v.f.v.round(), 0)
+                    Value::num(v.f.v.round())
                 } else {
                     v
                 }
@@ -494,7 +504,7 @@ impl CompiledModule {
         &self,
         b: &Bound,
         input: &EvalInput<'_>,
-        state: StateIo<'_>,
+        mut state: StateIo<'_>,
         scratch: &mut Scratch,
         out: &mut EvalOutput,
     ) {
@@ -536,20 +546,23 @@ impl CompiledModule {
             scratch.initialized = false;
             scratch.binding_key = Some(Arc::clone(&b.workspace_key));
             scratch.width = n;
+            scratch.machine = program::Machine::default();
+        }
+        if scratch.initialized && program::evaluate(self, b, input, scratch, out, &mut state) {
+            return;
         }
         // Retained numeric variables are history, independent of this call's unknowns.
         for slot in &mut scratch.slots {
             for v in &mut slot.values {
-                v.f.t = 0.;
-                v.q.t = 0.;
-                v.f.d.fill(0.);
-                v.q.d.fill(0.);
+                v.f = Dual::constant(v.f.v);
+                v.q = Dual::constant(v.q.v);
             }
         }
+        scratch.gradients.reset(n);
         scratch.steps = 0;
         let mut r = Runtime {
-            drives: vec![],
-            integrals: vec![],
+            drives: std::mem::take(&mut scratch.drives),
+            integrals: std::mem::take(&mut scratch.integrals),
             module: self,
             bound: b,
             input,
@@ -559,6 +572,7 @@ impl CompiledModule {
             n,
             depth: 0,
         };
+        r.integrals.clear();
         r.integrals.resize(self.integrals.len(), None);
         if !r.scratch.initialized {
             for (i, v) in &self.variables {
@@ -568,6 +582,7 @@ impl CompiledModule {
                 return;
             }
         }
+        r.drives.clear();
         r.drives.resize_with(self.branches.len(), Drive::default);
         for s in &self.body {
             r.stmt(s);
@@ -580,7 +595,7 @@ impl CompiledModule {
         }
         for (k, branch) in self.branches.iter().enumerate() {
             if let Some(i) = branch.current.and_then(|id| b.layout.index(id)) {
-                let current = Value::dual(Dual::variable(input.x[i], n, i));
+                let current = Value::dual(Dual::variable(input.x[i], i, &mut r.scratch.gradients));
                 r.stamp(branch.a.and_then(|id| b.layout.index(id)), &current, 1.);
                 r.stamp(branch.b.and_then(|id| b.layout.index(id)), &current, -1.);
                 let lhs = if r.drives[k].voltage || !branch.contributed {
@@ -594,13 +609,22 @@ impl CompiledModule {
                 }
             }
         }
+        r.scratch.drives = r.drives;
+        r.scratch.integrals = r.integrals;
     }
 }
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Drive {
     voltage: bool,
     sum: Option<Value>,
 }
+#[derive(Default, Debug)]
+struct CallFrame {
+    inputs: Vec<Value>,
+    locations: Vec<Option<(usize, usize)>>,
+    outputs: Vec<Option<Value>>,
+}
+
 struct Runtime<'a, 'b> {
     drives: Vec<Drive>,
     integrals: Vec<Option<Value>>,
@@ -635,7 +659,7 @@ impl Runtime<'_, '_> {
         }
     }
     fn zero(&self) -> Value {
-        Value::num(0., self.n)
+        Value::num(0.)
     }
     fn init(&mut self, i: usize, v: &Variable) {
         let mut lower = 0;
@@ -660,7 +684,7 @@ impl Runtime<'_, '_> {
             .as_ref()
             .map(|e| self.expr(e))
             .unwrap_or_else(|| self.zero())
-            .cast(v.ty);
+            .cast(v.ty, &mut self.scratch.gradients);
         if let Some(s) = self.scratch.slots.get_mut(i) {
             s.lower = lower;
             s.ty = v.ty;
@@ -727,27 +751,54 @@ impl Runtime<'_, '_> {
     }
     fn write(&mut self, i: usize, k: usize, value: Value) {
         let ty = self.scratch.slots[i].ty;
-        self.scratch.slots[i].values[k] = value.cast(ty);
+        self.scratch.slots[i].values[k] = value.cast(ty, &mut self.scratch.gradients);
     }
-    fn voltage(&self, a: Option<usize>, b: Option<usize>) -> Value {
-        let get = |i: Option<usize>| {
+    fn voltage(&mut self, a: Option<usize>, b: Option<usize>) -> Value {
+        let mut get = |i: Option<usize>| {
             i.and_then(|id| self.bound.layout.index(id))
-                .map(|i| Dual::variable(self.input.x.get(i).copied().unwrap_or(0.), self.n, i))
-                .unwrap_or_else(|| Dual::constant(0., self.n))
+                .map(|i| {
+                    Dual::variable(
+                        self.input.x.get(i).copied().unwrap_or(0.),
+                        i,
+                        &mut self.scratch.gradients,
+                    )
+                })
+                .unwrap_or_else(|| Dual::constant(0.))
         };
-        Value::dual(get(a).sub(&get(b)))
+        Value::dual(get(a).sub(get(b), &mut self.scratch.gradients))
     }
     fn stamp(&mut self, row: Option<usize>, v: &Value, sign: f64) {
         if let Some(i) = row {
             self.out.f[i] += sign * (v.f.v + v.f.t);
             self.out.q[i] += sign * (v.q.v + v.q.t);
-            for j in 0..self.n {
-                self.out.df[i * self.n + j] += sign * v.f.d[j];
-                self.out.dq[i * self.n + j] += sign * v.q.d[j];
+            for (dual, jac) in [(v.f, &mut self.out.df), (v.q, &mut self.out.dq)] {
+                for (x, &d) in jac[i * self.n..(i + 1) * self.n]
+                    .iter_mut()
+                    .zip(self.scratch.gradients.row(dual))
+                {
+                    *x += sign * d;
+                }
             }
         }
     }
     fn stmt(&mut self, s: &Stmt) {
+        // At a statement boundary only variables, branch drives and integral
+        // equations can outlive the statement in this invocation.
+        let g = &mut self.scratch.gradients;
+        if g.needs_collection() {
+            for v in self
+                .scratch
+                .slots
+                .iter_mut()
+                .flat_map(|s| &mut s.values)
+                .chain(self.drives.iter_mut().filter_map(|d| d.sum.as_mut()))
+                .chain(self.integrals.iter_mut().flatten())
+            {
+                g.retain(&mut v.f);
+                g.retain(&mut v.q);
+            }
+            g.finish_collection();
+        }
         if !self.tick() {
             return;
         }
@@ -779,9 +830,21 @@ impl Runtime<'_, '_> {
                         drive.sum = None;
                         drive.voltage = *voltage;
                     }
-                    let sum = drive.sum.get_or_insert_with(|| Value::num(0., self.n));
-                    sum.f = sum.f.combine(&v.f, sum.f.v + sign * v.f.v, 1., *sign);
-                    sum.q = sum.q.combine(&v.q, sum.q.v + sign * v.q.v, 1., *sign);
+                    let sum = drive.sum.get_or_insert_with(|| Value::num(0.));
+                    sum.f = sum.f.combine(
+                        v.f,
+                        sum.f.v + sign * v.f.v,
+                        1.,
+                        *sign,
+                        &mut self.scratch.gradients,
+                    );
+                    sum.q = sum.q.combine(
+                        v.q,
+                        sum.q.v + sign * v.q.v,
+                        1.,
+                        *sign,
+                        &mut self.scratch.gradients,
+                    );
                 } else if !*voltage {
                     self.stamp(b.a.and_then(|id| self.bound.layout.index(id)), &v, *sign);
                     self.stamp(b.b.and_then(|id| self.bound.layout.index(id)), &v, -sign);
@@ -853,7 +916,7 @@ impl Runtime<'_, '_> {
                         .iter()
                         .map(|e| {
                             let v = self.expr(e);
-                            v.text.unwrap_or_else(|| v.f.v.to_string())
+                            v.text.map_or_else(|| v.f.v.to_string(), |s| s.to_string())
                         })
                         .collect::<Vec<_>>()
                         .join(" ");
@@ -867,41 +930,46 @@ impl Runtime<'_, '_> {
             return self.zero();
         }
         let value = match &e.kind {
-            E::Num(v) => Value::num(*v, self.n),
-            E::Str(s) => Value::string(s.clone(), self.n),
+            E::Num(v) => Value::num(*v),
+            E::Str(s) => Value::string(s.clone()),
             E::Param(i) => {
                 let p = &self.bound.values[*i];
                 if let Some(s) = &p.text {
-                    Value::string(s.clone(), self.n)
+                    Value::string(s.clone())
                 } else {
-                    Value::num(p.f.v, self.n)
+                    Value::num(p.f.v)
                 }
             }
             E::Var(i) => self.load(*i, None),
             E::Index(i, k) => self.load(*i, Some(k)),
             E::Voltage(a, b) => self.voltage(*a, *b),
-            E::Current(i) => self.module.branches[*i]
-                .current
-                .and_then(|id| self.bound.layout.index(id))
-                .map_or_else(
-                    || self.zero(),
-                    |j| Value::dual(Dual::variable(self.input.x[j], self.n, j)),
-                ),
-            E::Given(i) => Value::num(
-                f64::from(self.bound.given.get(*i).copied().unwrap_or(false)),
-                self.n,
-            ),
-            E::Connected(i) => Value::num(f64::from(*i < self.bound.connected_ports), self.n),
+            E::Current(i) => {
+                if let Some(j) = self.module.branches[*i]
+                    .current
+                    .and_then(|id| self.bound.layout.index(id))
+                {
+                    Value::dual(Dual::variable(
+                        self.input.x[j],
+                        j,
+                        &mut self.scratch.gradients,
+                    ))
+                } else {
+                    self.zero()
+                }
+            }
+            E::Given(i) => Value::num(f64::from(
+                self.bound.given.get(*i).copied().unwrap_or(false),
+            )),
+            E::Connected(i) => Value::num(f64::from(*i < self.bound.connected_ports)),
             E::Ddx(a, i) => {
                 let v = self.expr(a);
                 Value::num(
                     self.bound
                         .layout
                         .index(*i)
-                        .and_then(|j| v.f.d.get(j))
+                        .and_then(|j| self.scratch.gradients.row(v.f).get(j))
                         .copied()
                         .unwrap_or(0.),
-                    self.n,
                 )
             }
             E::Select(c, a, b) => {
@@ -916,11 +984,11 @@ impl Runtime<'_, '_> {
                 match op.as_str() {
                     "+" => a,
                     "-" => Value {
-                        f: a.f.map(-a.f.v, -1.),
-                        q: a.q.map(-a.q.v, -1.),
+                        f: a.f.map(-a.f.v, -1., &mut self.scratch.gradients),
+                        q: a.q.map(-a.q.v, -1., &mut self.scratch.gradients),
                         text: None,
                     },
-                    "!" => Value::num(f64::from(!a.truth()), self.n),
+                    "!" => Value::num(f64::from(!a.truth())),
                     _ => {
                         let x = a.f.v as i64;
                         let v = match op.as_str() {
@@ -933,16 +1001,16 @@ impl Runtime<'_, '_> {
                             "~^" | "^~" => 1 - (x.count_ones() % 2) as i64,
                             _ => 0,
                         };
-                        Value::num(v as f64, self.n)
+                        Value::num(v as f64)
                     }
                 }
             }
             E::Binary(op, a, b) => {
                 let x = self.expr(a);
                 if op == "&&" && !x.truth() {
-                    Value::num(0., self.n)
+                    Value::num(0.)
                 } else if op == "||" && x.truth() {
-                    Value::num(1., self.n)
+                    Value::num(1.)
                 } else {
                     let y = self.expr(b);
                     self.binary(op, x, y, a.ty == Ty::Integer && b.ty == Ty::Integer)
@@ -959,14 +1027,14 @@ impl Runtime<'_, '_> {
                 // In DC the explicit initial condition fixes the state. In the time domain
                 // d(state)/dt = integrand becomes q = state and f = -integrand.
                 let residual = if initial {
-                    state.f.sub(&self.expr(ic).f)
+                    state.f.sub(self.expr(ic).f, &mut self.scratch.gradients)
                 } else {
                     let u = self.expr(integrand);
-                    u.f.map(-u.f.v, -1.)
+                    u.f.map(-u.f.v, -1., &mut self.scratch.gradients)
                 };
                 self.integrals[*k] = Some(Value {
                     f: residual,
-                    q: state.f.clone(),
+                    q: state.f,
                     text: None,
                 });
                 state
@@ -979,43 +1047,60 @@ impl Runtime<'_, '_> {
             {
                 self.zero()
             }
-            E::Call(name, args) => {
-                let a = args.iter().map(|e| self.expr(e)).collect::<Vec<_>>();
-                self.call(name, &a)
-            }
+            E::Call(name, args) => match args.as_slice() {
+                [] => self.call(name, &[]),
+                [a] => {
+                    let a = self.expr(a);
+                    self.call(name, &[a])
+                }
+                [a, b] => {
+                    let a = self.expr(a);
+                    let b = self.expr(b);
+                    self.call(name, &[a, b])
+                }
+                _ => {
+                    self.fail("invalid built-in arity");
+                    self.zero()
+                }
+            },
             E::Function(i, args) => {
-                let mut values = Vec::with_capacity(args.len());
-                let mut locations = Vec::with_capacity(args.len());
+                let mut frame = self.scratch.frames.pop().unwrap_or_default();
+                frame.inputs.clear();
+                frame.locations.clear();
                 for (e, (_, direction)) in args.iter().zip(&self.module.functions[*i].args) {
                     if direction == "input" {
-                        values.push(self.expr(e));
-                        locations.push(None);
+                        frame.inputs.push(self.expr(e));
+                        frame.locations.push(None);
                     } else {
                         let location = self.location(e);
-                        values.push(if direction == "inout" {
+                        frame.inputs.push(if direction == "inout" {
                             location
                                 .map(|(i, k)| self.scratch.slots[i].values[k].clone())
                                 .unwrap_or_else(|| self.zero())
                         } else {
                             self.zero()
                         });
-                        locations.push(location);
+                        frame.locations.push(location);
                     }
                 }
-                let (v, outputs) = self.function(*i, &values);
-                for (location, value) in locations.into_iter().zip(outputs) {
+                let v = self.function(*i, &frame.inputs, &mut frame.outputs);
+                for (location, value) in frame.locations.drain(..).zip(frame.outputs.drain(..)) {
                     if let (Some((i, k)), Some(value)) = (location, value) {
                         self.write(i, k, value);
                     }
                 }
+                self.scratch.frames.push(frame);
                 v
             }
             E::Limit(slot, name, args, func) => {
-                let values = args.iter().map(|e| self.expr(e)).collect::<Vec<_>>();
+                let mut frame = self.scratch.frames.pop().unwrap_or_default();
+                let values = &mut frame.inputs;
+                values.clear();
+                values.extend(args.iter().map(|e| self.expr(e)));
                 let mut v = values[0].clone();
                 // The polarity-aware junction limiter operates in forward-junction coordinates.
                 if name == "typedpnjlim_new" {
-                    v.f = v.f.mul(&values[3].f);
+                    v.f = v.f.mul(values[3].f, &mut self.scratch.gradients);
                 }
                 let new = v.f.v;
                 let previous = self.state.current[*slot];
@@ -1027,14 +1112,14 @@ impl Runtime<'_, '_> {
                 let limited = if !self.input.limit || name == "dummy" {
                     new
                 } else if let Some(i) = func {
-                    let mut a = values.clone();
-                    a.insert(1, Value::num(old, self.n));
-                    self.function(*i, &a).0.f.v
+                    values.insert(1, Value::num(old));
+                    self.function(*i, values, &mut frame.outputs).f.v
                 } else if matches!(name.as_str(), "pnjlim" | "typedpnjlim_new") {
                     limit::pnjlim(new, old, values[1].f.v, values[2].f.v)
                 } else {
                     limit::fetlim(new, old, values[1].f.v)
                 };
+                self.scratch.frames.push(frame);
                 self.state.current[*slot] = limited;
                 if (limited - new).abs() > 1e-14 * (1. + new.abs()) {
                     self.out.noncon = true;
@@ -1045,7 +1130,7 @@ impl Runtime<'_, '_> {
             }
         };
         if e.ty == Ty::Integer {
-            value.cast(Ty::Integer)
+            value.cast(Ty::Integer, &mut self.scratch.gradients)
         } else {
             value
         }
@@ -1053,21 +1138,21 @@ impl Runtime<'_, '_> {
     fn binary(&mut self, op: &str, a: Value, b: Value, integers: bool) -> Value {
         let x = a.f.v;
         let y = b.f.v;
-        let n = self.n;
+        let g = &mut self.scratch.gradients;
         match op {
             "+" => Value {
-                f: a.f.add(&b.f),
-                q: a.q.add(&b.q),
+                f: a.f.add(b.f, g),
+                q: a.q.add(b.q, g),
                 text: None,
             },
             "-" => Value {
-                f: a.f.sub(&b.f),
-                q: a.q.sub(&b.q),
+                f: a.f.sub(b.f, g),
+                q: a.q.sub(b.q, g),
                 text: None,
             },
             "*" => Value {
-                f: a.f.mul(&b.f),
-                q: a.q.mul(&b.f).add(&a.f.mul(&b.q)),
+                f: a.f.mul(b.f, g),
+                q: a.q.mul(b.f, g).add(a.f.mul(b.q, g), g),
                 text: None,
             },
             "/" => {
@@ -1075,11 +1160,11 @@ impl Runtime<'_, '_> {
                     if y == 0. {
                         self.fail("integer division by zero");
                     }
-                    Value::num((x / y).trunc(), n)
+                    Value::num((x / y).trunc())
                 } else {
                     Value {
-                        f: a.f.div(&b.f),
-                        q: a.q.div(&b.f),
+                        f: a.f.div(b.f, g),
+                        q: a.q.div(b.f, g),
                         text: None,
                     }
                 }
@@ -1089,10 +1174,10 @@ impl Runtime<'_, '_> {
                 if y == 0. {
                     self.fail("integer remainder by zero");
                 }
-                Value::num(x % y, n)
+                Value::num(x % y)
             }
-            "==" | "===" => Value::num(f64::from(a.equal(&b)), n),
-            "!=" | "!==" => Value::num(f64::from(!a.equal(&b)), n),
+            "==" | "===" => Value::num(f64::from(a.equal(&b))),
+            "!=" | "!==" => Value::num(f64::from(!a.equal(&b))),
             "<" | ">" | "<=" | ">=" => {
                 let v = if let (Some(x), Some(y)) = (&a.text, &b.text) {
                     match op {
@@ -1109,10 +1194,10 @@ impl Runtime<'_, '_> {
                         _ => x >= y,
                     }
                 };
-                Value::num(f64::from(v), n)
+                Value::num(f64::from(v))
             }
-            "&&" => Value::num(f64::from(a.truth() && b.truth()), n),
-            "||" => Value::num(f64::from(a.truth() || b.truth()), n),
+            "&&" => Value::num(f64::from(a.truth() && b.truth())),
+            "||" => Value::num(f64::from(a.truth() || b.truth())),
             _ => {
                 let x = x as i64;
                 let y = y as i64;
@@ -1125,21 +1210,26 @@ impl Runtime<'_, '_> {
                     ">>" | ">>>" => x.wrapping_shr(y as u32),
                     _ => 0,
                 };
-                Value::num(v as f64, n)
+                Value::num(v as f64)
             }
         }
     }
-    fn function(&mut self, i: usize, values: &[Value]) -> (Value, Vec<Option<Value>>) {
+    fn function(&mut self, i: usize, values: &[Value], outputs: &mut Vec<Option<Value>>) -> Value {
+        outputs.clear();
         if self.depth >= 128 {
             self.fail("function call depth exceeds 128");
-            return (self.zero(), vec![]);
+            return self.zero();
         }
         self.depth += 1;
+        let floor = self.scratch.gradients.enter();
         let f = &self.module.functions[i];
         // Functions have statically distinct slots; save them so nested calls preserve caller locals.
+        let reentered = self.scratch.calls.contains(&i);
+        self.scratch.calls.push(i);
         let saved = f
             .locals
             .iter()
+            .filter(|_| reentered)
             .map(|(i, _)| (*i, self.scratch.slots[*i].clone()))
             .collect::<Vec<_>>();
         for (i, v) in &f.locals {
@@ -1148,49 +1238,49 @@ impl Runtime<'_, '_> {
         for ((i, dir), v) in f.args.iter().zip(values) {
             if dir != "output" {
                 let ty = self.scratch.slots[*i].ty;
-                self.scratch.slots[*i].values[0] = v.clone().cast(ty);
+                self.scratch.slots[*i].values[0] = v.clone().cast(ty, &mut self.scratch.gradients);
             }
         }
         for s in &f.body {
             self.stmt(s);
         }
         let result = self.load(f.result, None);
-        let outputs = f
-            .args
-            .iter()
-            .map(|(i, dir)| {
-                if dir == "input" {
-                    None
-                } else {
-                    Some(self.load(*i, None))
-                }
-            })
-            .collect();
+        outputs.extend(f.args.iter().map(|(i, dir)| {
+            if dir == "input" {
+                None
+            } else {
+                Some(self.load(*i, None))
+            }
+        }));
         for (i, s) in saved {
             self.scratch.slots[i] = s;
         }
+        self.scratch.gradients.leave(floor);
+        self.scratch.calls.pop();
         self.depth -= 1;
-        (result, outputs)
+        result
     }
     fn call(&mut self, name: &str, a: &[Value]) -> Value {
-        let n = self.n;
         let x = a.first().map_or(0., |a| a.f.v);
         let y = a.get(1).map_or(0., |a| a.f.v);
         match name {
             "ddt" => Value {
-                f: Dual::constant(0., n),
-                q: a[0].f.clone(),
+                f: Dual::constant(0.),
+                q: a[0].f,
                 text: None,
             },
-            "$temperature" => Value::num(self.input.temperature, n),
+            "$temperature" => Value::num(self.input.temperature),
             "$vt" => {
                 if a.is_empty() {
-                    Value::num(K_OVER_Q * self.input.temperature, n)
+                    Value::num(K_OVER_Q * self.input.temperature)
                 } else {
-                    Value::dual(a[0].f.map(x * K_OVER_Q, K_OVER_Q))
+                    Value::dual(
+                        a[0].f
+                            .map(x * K_OVER_Q, K_OVER_Q, &mut self.scratch.gradients),
+                    )
                 }
             }
-            "$abstime" => Value::num(self.input.abstime, n),
+            "$abstime" => Value::num(self.input.abstime),
             "$mfactor" => Value::num(
                 self.input.mfactor
                     * if self.module.implicit_m {
@@ -1198,7 +1288,6 @@ impl Runtime<'_, '_> {
                     } else {
                         1.
                     },
-                n,
             ),
             "$simparam" => {
                 let key = a[0].text.as_deref().unwrap_or("");
@@ -1212,33 +1301,20 @@ impl Runtime<'_, '_> {
                         _ => None,
                     })
                     .unwrap_or(y);
-                Value::num(v, n)
+                Value::num(v)
             }
             "analysis" => {
                 let key = a[0].text.as_deref().unwrap_or("");
-                Value::num(
-                    f64::from(match key {
-                        "dc" | "static" => self.input.analysis == Analysis::Dc,
-                        "tran" => self.input.analysis == Analysis::Tran,
-                        "ac" => self.input.analysis == Analysis::Ac,
-                        "noise" => self.input.analysis == Analysis::Noise,
-                        "ic" => self.input.initial_step,
-                        _ => false,
-                    }),
-                    n,
-                )
+                Value::num(f64::from(match key {
+                    "dc" | "static" => self.input.analysis == Analysis::Dc,
+                    "tran" => self.input.analysis == Analysis::Tran,
+                    "ac" => self.input.analysis == Analysis::Ac,
+                    "noise" => self.input.analysis == Analysis::Noise,
+                    "ic" => self.input.initial_step,
+                    _ => false,
+                }))
             }
-            "white_noise" | "flicker_noise" | "noise_table" => Value::num(0., n),
-            "pow" => {
-                let v = x.powf(y);
-                let dx = if y == 0. { 0. } else { y * x.powf(y - 1.) };
-                let dy = if a[1].f.t == 0. && a[1].f.d.iter().all(|d| *d == 0.) {
-                    0.
-                } else {
-                    v * x.ln()
-                };
-                Value::dual(a[0].f.combine(&a[1].f, v, dx, dy))
-            }
+            "white_noise" | "flicker_noise" | "noise_table" => Value::num(0.),
             "min" | "max" => {
                 if (name == "min" && x <= y) || (name == "max" && x >= y) {
                     a[0].clone()
@@ -1246,62 +1322,17 @@ impl Runtime<'_, '_> {
                     a[1].clone()
                 }
             }
-            "atan2" => {
-                let d = x * x + y * y;
-                Value::dual(a[0].f.combine(&a[1].f, x.atan2(y), y / d, -x / d))
-            }
-            "hypot" => {
-                let v = x.hypot(y);
-                let (dx, dy) = if v == 0. { (0., 0.) } else { (x / v, y / v) };
-                Value::dual(a[0].f.combine(&a[1].f, v, dx, dy))
-            }
             _ => {
-                let (v, d) = match name {
-                    "exp" => (x.exp(), x.exp()),
-                    "limexp" => {
-                        let t = 80f64.exp();
-                        if x > 80. {
-                            (t * (1. + x - 80.), t)
-                        } else {
-                            (x.exp(), x.exp())
-                        }
-                    }
-                    "ln" => (x.ln(), 1. / x),
-                    "log" => (x.log10(), 1. / (x * std::f64::consts::LN_10)),
-                    "sqrt" => {
-                        let v = x.sqrt();
-                        (v, 0.5 / v)
-                    }
-                    "abs" => (
-                        x.abs(),
-                        if x > 0. {
-                            1.
-                        } else if x < 0. {
-                            -1.
-                        } else {
-                            0.
-                        },
-                    ),
-                    "floor" => (x.floor(), 0.),
-                    "ceil" => (x.ceil(), 0.),
-                    "sin" => (x.sin(), x.cos()),
-                    "cos" => (x.cos(), -x.sin()),
-                    "tan" => (x.tan(), 1. / x.cos().powi(2)),
-                    "asin" => (x.asin(), 1. / (1. - x * x).sqrt()),
-                    "acos" => (x.acos(), -1. / (1. - x * x).sqrt()),
-                    "atan" => (x.atan(), 1. / (1. + x * x)),
-                    "sinh" => (x.sinh(), x.cosh()),
-                    "cosh" => (x.cosh(), x.sinh()),
-                    "tanh" => (x.tanh(), 1. - x.tanh().powi(2)),
-                    "asinh" => (x.asinh(), 1. / (1. + x * x).sqrt()),
-                    "acosh" => (x.acosh(), 1. / (x * x - 1.).sqrt()),
-                    "atanh" => (x.atanh(), 1. / (1. - x * x)),
-                    _ => {
-                        self.fail(format!("unknown runtime function {name}"));
-                        (0., 0.)
-                    }
+                let Some(op) = crate::math::Math::named(name) else {
+                    self.fail(format!("unknown runtime function {name}"));
+                    return self.zero();
                 };
-                Value::dual(a[0].f.map(v, d))
+                let (v, dx, dy) = op.apply(x, y);
+                Value::dual(if let Some(b) = a.get(1) {
+                    a[0].f.combine(b.f, v, dx, dy, &mut self.scratch.gradients)
+                } else {
+                    a[0].f.map(v, dx, &mut self.scratch.gradients)
+                })
             }
         }
     }

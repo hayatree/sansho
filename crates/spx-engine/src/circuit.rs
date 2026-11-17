@@ -108,6 +108,9 @@ pub(crate) struct GatherMaps {
 const CHUNK_LINEAR: usize = 1024;
 /// Instances per chunk of a nonlinear device group.
 const CHUNK_NONLINEAR: usize = 64;
+/// Interpreted models have substantially more work per instance than built-in devices.
+const CHUNK_VA: usize = 2;
+const PARALLEL_MIN_VA: usize = 8;
 /// Minimum number of nonlinear instances for parallel evaluation.
 const PARALLEL_MIN_NONLINEAR: usize = 256;
 
@@ -495,7 +498,7 @@ pub(crate) fn compile_cached(
             };
             let group = va
                 .entry(card.kind.clone())
-                .or_insert_with(|| Chunked::new(CHUNK_NONLINEAR));
+                .or_insert_with(|| Chunked::new(CHUNK_VA));
             let chunk = group.cur();
             match chunk.push(
                 Arc::clone(module),
@@ -514,6 +517,7 @@ pub(crate) fn compile_cached(
             }
         }
     }
+    let va_count = nonlinear_count;
     if !errors.is_empty() {
         return Err(errors);
     }
@@ -956,7 +960,7 @@ pub(crate) fn compile_cached(
             no_dc_path,
             state_len,
             gather,
-            parallel: nonlinear_count >= PARALLEL_MIN_NONLINEAR,
+            parallel: va_count >= PARALLEL_MIN_VA || nonlinear_count >= PARALLEL_MIN_NONLINEAR,
             node_elements,
             ics,
             nodesets,

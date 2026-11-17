@@ -250,3 +250,46 @@ fn load_hdl_file_and_alter_instance() {
     assert!((current + 0.001).abs() < 1e-12);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn save_projects_results_and_preserves_measurement_inputs() {
+    let mut s = session(1);
+    let text = RC.replace(".end", ".save i(V1)\n.save v(IN) i(v1)\n.end");
+    let c = s.load(&text).unwrap();
+    let job = s.simulate(&c.circuit_id, None).unwrap();
+    assert!(tr(&job) > 0.);
+    let a = &s.results(&job.job_id).unwrap().unwrap().analyses[0];
+    assert_eq!(
+        a.variables
+            .iter()
+            .map(|v| v.name.as_str())
+            .collect::<Vec<_>>(),
+        ["v(in)", "i(v1)"]
+    );
+    assert!(
+        s.waveform(&job.job_id, "v(out)", None, Reduce::Real, None, None, 20)
+            .is_err()
+    );
+    let m = s
+        .measure(&job.job_id, &["tran vmax max v(out)".into()])
+        .unwrap();
+    assert!((m[0].value.unwrap() - 1.).abs() < 1e-3);
+    let c = s.load(&text.replace(".end", ".save all\n.end")).unwrap();
+    let job = s.simulate(&c.circuit_id, None).unwrap();
+    assert!(
+        s.results(&job.job_id).unwrap().unwrap().analyses[0]
+            .real("v(out)")
+            .is_some()
+    );
+}
+
+#[test]
+fn subcircuit_save_resolves_local_current_and_port_voltage() {
+    let mut s = session(1);
+    let c=s.load("nested save\n.subckt load p\nVprobe p mid 0\nR1 mid 0 1k\n.save i(Vprobe) v(p)\n.ends\nX1 a load\nV1 a 0 1\n.op\n").unwrap();
+    let job = s.simulate(&c.circuit_id, None).unwrap();
+    let a = &s.results(&job.job_id).unwrap().unwrap().analyses[0];
+    assert_eq!(a.variables.len(), 2);
+    assert_eq!(a.real("V(a)").unwrap(), [1.]);
+    assert!((a.real("I(v.x1.vprobe)").unwrap()[0] - 0.001).abs() < 1e-14);
+}

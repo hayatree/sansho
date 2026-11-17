@@ -585,7 +585,7 @@ pub(crate) fn tran(
     tstart: f64,
     tmax: Option<f64>,
     uic: bool,
-) -> Result<AnalysisResult, Diagnostic> {
+) -> Result<(AnalysisResult, crate::TranStats), Diagnostic> {
     let n = ckt.dim();
     let tp = TranParams { tstep, tstop };
     let mut ctx = make_ctx(opts, Mode::Tran, tp);
@@ -656,6 +656,8 @@ pub(crate) fn tran(
     };
     record(0.0, &x, &mut times, &mut cols);
 
+    let mut accepted_steps = 0;
+    let mut attempted_steps = 0;
     let mut t = 0.0;
     let mut bp_idx = 0;
     // The first step is taken without error control, so start small.
@@ -663,6 +665,7 @@ pub(crate) fn tran(
     let mut integ = Integration::dc(n);
     let mut x_new = x.clone();
     while t < tstop - eps {
+        attempted_steps += 1;
         let next_bp = bps.get(bp_idx).copied().unwrap_or(tstop);
         h = h.min(hmax);
         if t + h >= next_bp - eps {
@@ -728,6 +731,7 @@ pub(crate) fn tran(
             }
             grow = factor.clamp(0.5, 2.0);
         }
+        accepted_steps += 1;
         // Accept.
         ws.commit();
         t += h;
@@ -748,16 +752,25 @@ pub(crate) fn tran(
         }
     }
 
-    Ok(AnalysisResult {
-        kind: AnalysisKind::Tran,
-        scale: Some(Variable {
-            name: "time".into(),
-            quantity: Quantity::Time,
-        }),
-        scale_values: times,
-        variables: variables(ckt),
-        data: Data::Real { columns: cols },
-    })
+    let stats = crate::TranStats {
+        accepted_steps,
+        rejected_steps: attempted_steps - accepted_steps,
+        iterations: ws.newton_iterations,
+        assemblies: ws.assemblies,
+    };
+    Ok((
+        AnalysisResult {
+            kind: AnalysisKind::Tran,
+            scale: Some(Variable {
+                name: "time".into(),
+                quantity: Quantity::Time,
+            }),
+            scale_values: times,
+            variables: variables(ckt),
+            data: Data::Real { columns: cols },
+        },
+        stats,
+    ))
 }
 
 #[cfg(test)]

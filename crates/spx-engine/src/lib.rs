@@ -45,9 +45,42 @@ pub struct DcStats {
     pub extra_solves: usize,
 }
 
+/// Transient solver work including the initial operating point.
+#[derive(Debug, Clone)]
+pub struct TranStats {
+    /// Accepted advances in time, excluding time zero.
+    pub accepted_steps: usize,
+    /// Attempts rejected by Newton or LTE control.
+    pub rejected_steps: usize,
+    /// Total Newton iterations.
+    pub iterations: usize,
+    /// Total device assemblies, including converged-point charge evaluation.
+    pub assemblies: usize,
+}
+
+enum Stats {
+    Dc(DcStats),
+    Tran(TranStats),
+}
+
+/// Private full traces for evaluating additional measurements after a projected run.
+#[derive(Debug, Clone)]
+pub struct MeasurementContext(Box<SimResults>);
+
+impl MeasurementContext {
+    /// Evaluate measurements using saved and unsaved signals.
+    pub fn measure(&self, cards: &[spx_netlist::MeasureCard]) -> Vec<spx_output::Measurement> {
+        measure::evaluate(cards, &self.0)
+    }
+}
+
 /// Successful run: results plus non-fatal diagnostics.
 #[derive(Debug, Clone)]
 pub struct RunOutput {
+    /// Full traces retained for post-run measurements when output was projected.
+    pub measurement_context: Option<MeasurementContext>,
+    /// Statistics in transient card order.
+    pub tran_stats: Vec<TranStats>,
     /// Statistics in DC card order.
     pub dc_stats: Vec<DcStats>,
     /// Results of every analysis, in netlist order.
@@ -60,6 +93,8 @@ pub struct RunOutput {
 /// before the failure.
 #[derive(Debug, Clone)]
 pub struct RunError {
+    /// Measurement inputs for completed analyses with projected output.
+    pub measurement_context: Option<MeasurementContext>,
     /// All diagnostics, errors first.
     pub diagnostics: Vec<Diagnostic>,
     /// Results completed before the failure.
@@ -135,10 +170,13 @@ fn run_analysis(
     nl: &Netlist,
     opts: &SimOptions,
     card: &AnalysisCard,
-) -> Result<(spx_output::AnalysisResult, Option<DcStats>), Diagnostic> {
+) -> Result<(spx_output::AnalysisResult, Option<Stats>), Diagnostic> {
     let mut stats = None;
     // Retained VA interpreter variables belong to an analysis, never to concurrent analyses.
-    let owned = if !nl.hdl.is_empty() && !matches!(card, AnalysisCard::Dc { .. }) {
+    let owned = if nl.analyses.len() > 1
+        && !nl.hdl.is_empty()
+        && !matches!(card, AnalysisCard::Dc { .. })
+    {
         Some(
             circuit::compile_cached(nl, opts, &ckt.va_modules)
                 .map_err(|ds| {
@@ -171,7 +209,7 @@ fn run_analysis(
                 .0;
             analysis::dc_sweep(&mut own, opts, source, *start, *stop, *step).map(
                 |(analysis, dc)| {
-                    stats = Some(dc);
+                    stats = Some(Stats::Dc(dc));
                     analysis
                 },
             )
@@ -190,7 +228,10 @@ fn run_analysis(
             tmax,
             uic,
             ..
-        } => analysis::tran(ckt, opts, *tstep, *tstop, *tstart, *tmax, *uic),
+        } => analysis::tran(ckt, opts, *tstep, *tstop, *tstart, *tmax, *uic).map(|(a, t)| {
+            stats = Some(Stats::Tran(t));
+            a
+        }),
     }?;
     for (name, index) in &ckt.aliases {
         let points = result.len().max(result.scale_values.len());
@@ -208,6 +249,47 @@ fn run_analysis(
         }
     }
     Ok((result, stats))
+}
+
+/// Project public output in circuit order. The independent scale is always retained.
+fn project_results(full: &mut SimResults, saves: &[String]) -> Option<MeasurementContext> {
+    if saves.is_empty() || saves.iter().any(|s| s == "all") {
+        return None;
+    }
+    let analyses = full
+        .analyses
+        .iter()
+        .map(|a| {
+            let indices: Vec<_> = a
+                .variables
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| saves.iter().any(|s| s.eq_ignore_ascii_case(&v.name)))
+                .map(|(i, _)| i)
+                .collect();
+            use spx_output::Data;
+            spx_output::AnalysisResult {
+                kind: a.kind,
+                scale: a.scale.clone(),
+                scale_values: a.scale_values.clone(),
+                variables: indices.iter().map(|&i| a.variables[i].clone()).collect(),
+                data: match &a.data {
+                    Data::Real { columns } => Data::Real {
+                        columns: indices.iter().map(|&i| columns[i].clone()).collect(),
+                    },
+                    Data::Complex { columns } => Data::Complex {
+                        columns: indices.iter().map(|&i| columns[i].clone()).collect(),
+                    },
+                },
+            }
+        })
+        .collect();
+    let saved = SimResults {
+        title: full.title.clone(),
+        measures: full.measures.clone(),
+        analyses,
+    };
+    Some(MeasurementContext(Box::new(std::mem::replace(full, saved))))
 }
 
 fn card_span(card: &AnalysisCard) -> spx_diag::Span {
@@ -236,6 +318,7 @@ pub fn run_in_current_pool(nl: &Netlist) -> Result<RunOutput, RunError> {
         mut warnings,
     } = check(nl).map_err(|diagnostics| RunError {
         diagnostics,
+        measurement_context: None,
         partial: None,
     })?;
     let outcomes: Vec<_> = nl
@@ -248,18 +331,24 @@ pub fn run_in_current_pool(nl: &Netlist) -> Result<RunOutput, RunError> {
         title: nl.title.clone(),
         analyses: Vec::new(),
     };
+    let mut tran_stats = vec![];
     let mut dc_stats = vec![];
     for (card, r) in nl.analyses.iter().zip(outcomes) {
         match r {
             Ok((a, stats)) => {
                 results.analyses.push(a);
-                dc_stats.extend(stats);
+                match stats {
+                    Some(Stats::Dc(s)) => dc_stats.push(s),
+                    Some(Stats::Tran(s)) => tran_stats.push(s),
+                    None => {}
+                }
             }
             Err(d) => {
                 let mut diagnostics = vec![d.with_span(card_span(card))];
                 diagnostics.extend(warnings);
                 return Err(RunError {
                     diagnostics,
+                    measurement_context: project_results(&mut results, &nl.saves),
                     partial: Some(results),
                 });
             }
@@ -274,9 +363,12 @@ pub fn run_in_current_pool(nl: &Netlist) -> Result<RunOutput, RunError> {
             ));
         }
     }
+    let measurement_context = project_results(&mut results, &nl.saves);
     Ok(RunOutput {
+        measurement_context,
         results,
         warnings,
         dc_stats,
+        tran_stats,
     })
 }

@@ -522,3 +522,28 @@ fn ihp_corner_transfer_and_inverter_switching() {
     assert!(interp(a, "v(out)", 1.5e-9) > 1.15);
     assert!((1e-12..200e-12).contains(&tran.measures[0].value.unwrap()));
 }
+
+#[test]
+fn parallel_va_assembly_is_bit_identical() {
+    let mut text = String::from("VA fanout\n.hdl resistor.va\n.model r vares\nV1 in 0 1\n");
+    for i in 0..96 {
+        text.push_str(&format!("N{i} in out r r={}\n", 1000 + i));
+    }
+    text.push_str("C1 out 0 1p\nR1 out 0 1k\n.tran 1n 10n\n");
+    let nl = deck(&text);
+    let reference = run_with(&nl, &RunConfig { threads: 1 }).unwrap().results;
+    for threads in [2, 5] {
+        let result = run_with(&nl, &RunConfig { threads }).unwrap().results;
+        let expected = &reference.analyses[0];
+        let actual = &result.analyses[0];
+        assert_eq!(expected.variables, actual.variables);
+        let bits = |xs: &[f64]| xs.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&expected.scale_values), bits(&actual.scale_values));
+        for v in &expected.variables {
+            assert_eq!(
+                bits(expected.real(&v.name).unwrap()),
+                bits(actual.real(&v.name).unwrap())
+            );
+        }
+    }
+}

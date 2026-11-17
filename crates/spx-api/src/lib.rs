@@ -177,6 +177,7 @@ struct Loaded {
 
 #[derive(Debug)]
 struct Job {
+    measurement_context: Option<spx_engine::MeasurementContext>,
     circuit_id: String,
     results: Option<SimResults>,
     summary: JobSummary,
@@ -370,9 +371,19 @@ impl Session {
         let job_id = format!("j{id}");
         let input_hash = hash::netlist(nl);
         let (opts, _) = spx_engine::SimOptions::from_cards(&nl.options);
-        let (results, diagnostics, status) = match out {
-            Ok(o) => (Some(o.results), o.warnings, Status::Ok),
-            Err(e) => (e.partial, sorted(e.diagnostics), Status::Error),
+        let (results, measurement_context, diagnostics, status) = match out {
+            Ok(o) => (
+                Some(o.results),
+                o.measurement_context,
+                o.warnings,
+                Status::Ok,
+            ),
+            Err(e) => (
+                e.partial,
+                e.measurement_context,
+                sorted(e.diagnostics),
+                Status::Error,
+            ),
         };
         let summary = summary::job(
             summary::JobMeta {
@@ -391,6 +402,7 @@ impl Session {
         self.jobs.insert(
             id,
             Job {
+                measurement_context,
                 circuit_id: circuit_id.to_string(),
                 results,
                 summary: summary.clone(),
@@ -466,7 +478,10 @@ impl Session {
         if nl.measures.is_empty() {
             return Err(ApiError::input("no measurement given"));
         }
-        Ok(spx_engine::measure(&nl.measures, r))
+        Ok(job.measurement_context.as_ref().map_or_else(
+            || spx_engine::measure(&nl.measures, r),
+            |context| context.measure(&nl.measures),
+        ))
     }
 
     /// Apply parameter changes to a loaded circuit. All changes are validated first; on

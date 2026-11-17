@@ -64,6 +64,8 @@ pub struct Netlist {
     pub options: Vec<OptionCard>,
     /// `.model` cards in source order.
     pub models: Vec<ModelCard>,
+    /// Requested output vector names across all `.save` cards (empty means all).
+    pub saves: Vec<String>,
     /// `.meas` cards in source order.
     pub measures: Vec<MeasureCard>,
     /// `.ic` node voltages.

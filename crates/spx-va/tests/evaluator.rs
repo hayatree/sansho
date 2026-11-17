@@ -806,3 +806,22 @@ fn switching_bindings_restarts_instance_initialization() {
         assert_eq!(out.f, [tnom]);
     }
 }
+
+#[test]
+fn collecting_loop_temporaries_preserves_caller_gradients() {
+    let m = compile(
+        r#"module accum(p,a,b,c,d,e,f,g);
+      electrical p,a,b,c,d,e,f,g;
+      analog function real sum; input v; real v,t; integer j;
+        begin t=0; for(j=0;j<5000;j=j+1) t=t+v+v+v+v+v+v+v+v; sum=t; end
+      endfunction
+      analog I(p)<+2.0*V(p)+sum(V(p));
+    endmodule"#,
+    );
+    let b = m.bind(&[]).unwrap();
+    for bias in [0.5, -1.] {
+        let out = run(&m, &b, &[bias; 8]);
+        assert_eq!(out.f[0], 40002. * bias);
+        assert_eq!(out.df[0], 40002.);
+    }
+}

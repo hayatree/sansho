@@ -1,6 +1,6 @@
 # Verilog-A compact-model compiler (`spx-va`)
 
-VA-4b runs production IHP corner circuits through DC, AC and transient analyses. Section 11 gives the circuit coverage, multiplier semantics and reference commands.
+VA-5 specializes IHP compact-model equations to register instructions. Section 11 describes the reference circuits and §12 reports timings, solver work and the remaining gap to OSDI.
 
 ## 1. Purpose and constraints
 
@@ -38,7 +38,8 @@ Crate layout (`crates/spx-va`, depends only on `spx-diag`):
 | `ast.rs` | Syntax tree (see §3) |
 | `parser.rs` | Recursive descent with precedence climbing for expressions |
 | `sema.rs` | Symbol resolution, type checks, branch/port mapping, linear `ddt` validation |
-| `ir.rs`, `eval.rs`, `dual.rs`, `limit.rs` | Resolved typed tree, dense dynamic AD interpreter, parameter binding, limiting |
+| `ir.rs`, `eval.rs`, `dual.rs`, `math.rs`, `limit.rs` | Resolved typed tree, general interpreter, scratch-backed gradients, shared math, binding and limiting |
+| `eval/program.rs`, `eval/program/` | Binding specialization, register lowering, liveness, constant folding and execution |
 | `eval/topology.rs` | Binding-time constant propagation, node equivalence and compact unknown numbering |
 | `spx-devices/src/va.rs` | `DeviceGroup` adapter for compiled modules |
 
@@ -130,7 +131,7 @@ N1 a k dmod                           * ngspice OSDI-style instance letter `N`
 | VA-3 (done) | Device integration, `.hdl`, `N` instances | VA diode/resistor match built-ins; engine tests pass |
 | VA-4a (done) | Compact-model coverage, parameter kinds, per-instance collapse | IHP model smoke and Jacobian tests, PSP103 engine DC sweep |
 | VA-4b (done) | Black-box comparison with ngspice + OpenVAF | 10/10 IHP decks pass; with tight Newton tolerances PSP103 I-V matches to ~1e-14 relative |
-| VA-5 | Performance (hoisting, JIT) | Within 2× of OSDI-compiled models in ngspice |
+| VA-5 (interpreter implemented) | Binding specialization, register execution and parallel assembly | Five-stage ring analysis takes 6.9× the OSDI reference time. The 2× target remains open. |
 
 
 ## 8. VA-2 library API and execution contract
@@ -154,8 +155,8 @@ parameters cannot be externally overridden. Invalid bindings report `E-VA-PARAM`
 workspace. `eval_with_scratch(&bound, &input, state, &mut scratch, &mut output)` permits multiple
 instances or threads to share immutable bindings with separate `Scratch::default()` workspaces.
 `Bound` and `CompiledModule` are Send + Sync. Reusing a scratch with a different binding resets
-its retained variables. Output buffers and variable storage are reused; expression temporaries
-still allocate dynamic gradient vectors. Hoisting and allocation optimization remain VA-5 work.
+its retained variables. Scratch also owns the specialized instructions, reusable value and gradient
+rows, and storage for evaluation of general procedural constructs.
 Treat the public compiled metadata as read-only.
 
 The module numbers ports, internal nodes (including integral states), then branch currents.
@@ -205,7 +206,7 @@ tasks and `$warning` are ignored. Error/finish/fatal tasks populate `output.erro
   integers beyond the exact f64 range are not represented exactly.
 - Noise generators return zero. Reaching a `$rdist_*` call produces a spanned
   `E-VA-UNSUPPORTED` diagnostic. Informational tasks, `$bound_step` and `$discontinuity` have
-  no simulator side effects. General expression hoisting and JIT remain VA-5 work.
+  no simulator side effects.
 
 The authored evaluator regression suite checks analytic resistor stamps, diode and nonlinear
 MOS-like charge Jacobians against central finite differences at relative tolerance `1e-6`,
@@ -224,7 +225,7 @@ synthetic HDL paths in the engine use the built-in headers and their aliases.
 
 Each file is compiled once during elaboration, all its modules are cached, and compiled modules
 are shared across analysis circuits. Duplicate module names are errors. Bindings and retained
-interpreter variables belong to individual instances and analyses. Fixed chunks of 64 instances,
+interpreter variables belong to individual instances and analyses. Fixed chunks of two VA instances,
 dense private stamps and ordered gather preserve thread-count determinism.
 
 `.model name module parameter=value ...` selects a loaded module. Module and numeric parameter
@@ -242,8 +243,7 @@ VA devices inject no independent AC excitation. They contribute their conductanc
 Jacobians to small-signal assembly. No implicit gmin conductance is added: a model can use
 `$simparam("gmin", default)` explicitly.
 
-Limitations: the interpreter remains allocation-heavy and every VA instance is classified as
-nonlinear. Topology lint treats all terminals as DC-connected. AC performs a DC operating-point
+The simulator classifies every VA instance as nonlinear. Topology lint treats all terminals as DC-connected. AC performs a DC operating-point
 solve and then exposes `analysis("ac")` during linearization. Initial-step and final-step events
 can execute on multiple Newton evaluations at their respective analysis points. Includes are read from
 the filesystem at elaboration; exported decks retain HDL paths and require those files.
@@ -341,7 +341,7 @@ iterations per point on average, including the initial bias solve. Each point
 converged on its first solve. The CLI prints the counts, also available as
 `RunOutput::dc_stats`. These runs use the VA-4a limiter and gmin handling.
 
-The Docker comparison awaits reference generation. The typical-corner
+The typical-corner
 netlist evaluator supports disabled statistical variation in `agauss`.
 Active random mismatch and Monte Carlo corners remain unsupported.
 
@@ -354,3 +354,75 @@ below 1e-11; isolated points differ by up to 1e-3 because the two simulators sto
 different iterates. With `.option reltol=1e-7 abstol=1e-15 vntol=1e-9` on both sides the maximum
 relative difference is 2.4e-11 (Id-Vg) and 7.9e-15 (Id-Vd), i.e. the model evaluation agrees to
 rounding.
+
+## 12. VA-5 evaluation and performance
+
+On the first call, the general evaluator initializes the instance, including retained
+variables and startup events. On the next call, the scalar compiler specializes the typed
+tree for the binding, compact unknown layout, temperature and multiplier. Changing the
+temperature or input multiplier rebuilds the program. A new binding resets the workspace.
+
+The compiler resolves parameter reads, folds math, prunes constant branches, inlines scalar
+functions and unrolls small loops with known bounds. Each assignment gets a register.
+At a dynamic branch the executed arm supplies the value at the join. The compiler shares
+pure arithmetic within basic blocks and removes unused computations. Live-in analysis
+identifies the final variable values that a later invocation may read before writing them.
+Voltage, current, simulator parameter callbacks, time, analysis, event flags and stateful
+operators retain their runtime semantics. The program preserves contribution order.
+
+Register values and gradient rows are preallocated in scratch. Only registers that can carry
+a derivative get rows, with one column per bound unknown and a final column for the limiting
+displacement. The charge channel can often be folded to zero. Runtime checks protect this
+optimization at exceptional floating-point inputs. If a check fails, the evaluator uses the
+full charge equations, reusing the simulator query results from the guarded call.
+
+Specialization is conservative. Bindings with remaining array accesses, dynamic loops,
+unsupported scalar instructions or reachable error tasks use the general interpreter. That
+interpreter keeps numeric derivatives in a reusable arena, including across nested function
+calls. It can reclaim temporary rows during long loops. The JIT remains unimplemented.
+
+### Release measurements
+
+Each wall time is the median of three launches of `target/release/spx run <deck>` on an AMD
+Ryzen AI Max+ 395 with the default thread pool and local IHP inputs. The before binary was
+built from `4441f0f`. Wall time includes input, compilation, binding, analysis and CLI output.
+The eval count includes converged-point evaluations outside Newton.
+
+| PSP deck | Before (s) | VA-5 (s) | Points | Newton iterations | Instance evals |
+|---|---:|---:|---:|---:|---:|
+| psp_cs_ac | 0.095 | 0.100 | 81 | 4 (OP) | 5 |
+| psp_inverter_dc | 0.351 | 0.125 | 121 | 370 | 740 |
+| psp_inverter_tran | 0.577 | 0.133 | 219 | 479 | 1,396 |
+| psp_nmos_idvd | 0.201 | 0.116 | 151 | 317 | 317 |
+| psp_nmos_idvd_1v2 | 0.202 | 0.102 | 151 | 319 | 319 |
+| psp_nmos_idvg | 0.203 | 0.108 | 121 | 317 | 317 |
+| psp_pmos_idvg | 0.197 | 0.112 | 121 | 313 | 313 |
+| psp_ring5 | 4.410 | 0.248 | 307 | 917 | 12,240 |
+| benches/psp_ring21 | 22.604 | 0.468 | 307 | 917 | 51,408 |
+
+Separate timing probes around transient analysis, the L1 device loop and LU gave the following
+wall-time breakdown. Each column is the median of three runs. L1 includes scheduling and slot
+writes. The remaining time includes ordered matrix assembly, integration and solver bookkeeping.
+
+| Transient | Analysis (ms) | Device evaluation (ms) | LU factor and solve (ms) | Accepted steps | Rejected | Assemblies |
+|---|---:|---:|---:|---:|---:|---:|
+| Inverter | 29.5 | 28.1 | 0.8 | 218 | 0 | 698 |
+| Ring, 5 stages | 131.4 | 116.2 | 10.3 | 306 | 0 | 1,224 |
+| Ring, 21 stages | 290.2 | 228.0 | 32.2 | 306 | 0 | 1,224 |
+
+The five-stage ring takes **6.9×** the maintainer's 19 ms ngspice+OSDI analysis time.
+Its 4 ps maximum step requires at least 300 advances over 1.2 ns. spx takes 306 and the
+cached reference has 307 advances (308 points including time zero). The inverter reference
+has 220 points versus 219 in spx. These runs follow the same step sequence as VA-4b.
+The cached raw files contain no Newton counts. There is no cached 21-stage reference or
+local executable available for an independent OSDI timing of the larger benchmark.
+
+In a single-worker ring run, time inside the VA adapter divided by instance calls fell
+from **358 to 20.9 µs** on ring5. Ring21 averaged 24.4 µs per call. The lighter six-unknown
+standalone PSP103 smoke bias took 7.6 µs warm in release and 153 µs in debug. The smoke
+test reports initialization, specialization and the median of 11 warm evaluations separately.
+
+With all vectors selected, the CLI results for the ten IHP decks and the 21-stage benchmark
+matched VA-4b, including every returned floating-point bit. The PSP103 smoke test also checks
+the cold and warm residual and Jacobian bits at its bias point. The cached reference suites
+passed 14/14 standard and 10/10 IHP decks.

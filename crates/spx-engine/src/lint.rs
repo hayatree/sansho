@@ -26,8 +26,15 @@ pub(crate) fn lint(nl: &Netlist, ckt: &Circuit, opts: &SimOptions) -> Vec<Diagno
 
 fn unused_models(nl: &Netlist, out: &mut Vec<Diagnostic>) {
     let used: HashSet<&str> = nl.elements.iter().filter_map(|e| e.kind.model()).collect();
+    let source = |m: &spx_netlist::ModelCard| (m.span.line, m.span.col);
+    let mut seen: HashSet<_> = nl
+        .models
+        .iter()
+        .filter(|m| m.span.file == 0 && used.contains(m.name.as_str()))
+        .map(source)
+        .collect();
     for m in &nl.models {
-        if !used.contains(m.name.as_str()) {
+        if m.span.file == 0 && seen.insert(source(m)) {
             out.push(
                 Diagnostic::warning(
                     "W-LINT-UNUSED-MODEL",

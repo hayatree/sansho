@@ -3,7 +3,6 @@
 * and ngspice-models/cornerHBT.lib with sg13g2_hbt_mod.lib.
 * ngspice uses its native level-9 Q device. spx uses five-terminal VBIC 1.3.
 * The ngspice voltage-limit warnings are advisory.
-* .save selects reference signals. spx records all unknowns.
 * Provenance: original SG13G2 test circuit.
 .lib "../../va-models/ihp/ngspice-models/cornerHBT.lib" hbt_typ
 .hdl "vbic_5t.va"

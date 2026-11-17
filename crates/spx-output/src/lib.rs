@@ -121,6 +121,9 @@ pub struct AnalysisResult {
 impl AnalysisResult {
     /// Number of points.
     pub fn len(&self) -> usize {
+        if self.scale.is_some() {
+            return self.scale_values.len();
+        }
         match &self.data {
             Data::Real { columns } => columns.first().map_or(0, Vec::len),
             Data::Complex { columns } => columns.first().map_or(0, Vec::len),
@@ -134,8 +137,9 @@ impl AnalysisResult {
 
     /// Index of a variable by (case-insensitive) name.
     pub fn index_of(&self, name: &str) -> Option<usize> {
-        let name = name.to_ascii_lowercase();
-        self.variables.iter().position(|v| v.name == name)
+        self.variables
+            .iter()
+            .position(|v| v.name.eq_ignore_ascii_case(name))
     }
 
     /// Real column of a variable.

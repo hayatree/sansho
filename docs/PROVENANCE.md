@@ -111,3 +111,12 @@ files or new third-party dependencies. No ported code requires a NOTICE addition
 | Binding and branch collapse | `spx-va/src/eval/topology.rs`, `sema.rs`, `eval.rs`, `spx-engine/src/circuit.rs` | Original constant propagation, union-find and MNA stamping from general compiler and circuit literature. Port current probes use an ideal series voltage source. Integration introduces a DAE state. |
 | Collapse fixture | `spx-va/tests/models/collapse.va` | Authored from Ohm's law and the Shockley diode equation. |
 | Local model verification | `spx-va/tests/production.rs`, `spx-engine/tests/verilog_a.rs` | Original finite-difference harness and DC transfer test. Third-party models are external test inputs. |
+
+### Verilog-A VA-5
+
+The register compiler in `spx-va/src/eval/program.rs` and `eval/program/` is an original
+implementation of forward constant propagation, control-flow joins, local value numbering
+and backwards liveness analysis from general compiler literature (Aho et al., *Compilers*).
+The dense gradient rows, scratch arena and scalar chain-rule factors in `dual.rs` and
+`math.rs` use forward-mode AD as described by Griewank and Walther, *Evaluating Derivatives*.
+The 21-stage benchmark in `benches/psp_ring21.cir` extends the project's authored CMOS ring.

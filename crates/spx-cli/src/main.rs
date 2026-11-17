@@ -250,6 +250,12 @@ fn run(
             }
             print_diags(&out.warnings);
             summary(&out.results);
+            for t in &out.tran_stats {
+                println!(
+                    "Transient: {} accepted steps, {} rejected, {} Newton iterations, {} assemblies",
+                    t.accepted_steps, t.rejected_steps, t.iterations, t.assemblies
+                );
+            }
             for dc in &out.dc_stats {
                 println!(
                     "DC {}: {:.2} Newton iterations/point ({} iterations, {} extra solves)",

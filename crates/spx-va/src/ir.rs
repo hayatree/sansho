@@ -26,7 +26,7 @@ pub(crate) struct Expr {
 #[derive(Debug, Clone)]
 pub(crate) enum E {
     Num(f64),
-    Str(String),
+    Str(std::sync::Arc<str>),
     Param(usize),
     Var(usize),
     Index(usize, Box<Expr>),
@@ -121,6 +121,7 @@ pub struct CompiledModule {
     pub(crate) variables: Vec<(usize, Variable)>,
     pub(crate) functions: Vec<Function>,
     pub(crate) body: Vec<Stmt>,
+    pub(crate) history: Vec<usize>,
     pub(crate) slots: usize,
     pub(crate) function_writes: std::collections::BTreeSet<usize>,
     pub(crate) states: usize,

@@ -167,7 +167,7 @@ impl Propagation<'_, '_> {
                     let values = &mut self.runtime.scratch.slots[i].values;
                     values.clear();
                     if let Some(v) = v {
-                        values.push(v.cast(a.ty));
+                        values.push(v.cast(a.ty, &mut self.runtime.scratch.gradients));
                     }
                 }
             }

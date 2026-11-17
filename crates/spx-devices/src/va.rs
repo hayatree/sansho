@@ -5,7 +5,7 @@ use crate::{
     DeviceGroup, EvalCtx, Mode, Node, SlotOffsets, Slots, StampBuilder, StateRef, Unknowns, volt,
 };
 use spx_diag::Diagnostic;
-use spx_va::{Analysis, Bound, CompiledModule, EvalInput, EvalOutput, StateIo};
+use spx_va::{Analysis, Bound, CompiledModule, EvalInput, EvalOutput, Scratch, StateIo};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -15,6 +15,7 @@ struct Instance {
     ports: Vec<Node>,
     model: Arc<Bound>,
     bound: Bound,
+    copies: f64,
     port_count: usize,
     swept: bool,
     params: Vec<(String, f64)>,
@@ -23,8 +24,16 @@ struct Instance {
 /// All instances of one compiled module, in fixed netlist order.
 #[derive(Debug, Default)]
 pub struct VaGroup {
+    buffers: std::sync::Mutex<Buffers>,
     module: Option<Arc<CompiledModule>>,
     instances: Vec<Instance>,
+}
+
+#[derive(Debug, Default)]
+struct Buffers {
+    scratch: Vec<Scratch>,
+    values: Vec<f64>,
+    result: EvalOutput,
 }
 
 /// Resolve SPICE's case-insensitive parameter names to the declared VA spelling.
@@ -91,6 +100,7 @@ impl VaGroup {
         let params = parameter_names(&module, params);
         let port_count = nodes.len();
         let bound = module.bind_connected_instance(&model, &params, port_count)?;
+        let copies = module.parallel_copies(&bound);
         self.module = Some(module);
         self.instances.push(Instance {
             name: name.into(),
@@ -99,6 +109,7 @@ impl VaGroup {
             model,
             bound,
             port_count,
+            copies,
             swept: false,
             params,
         });
@@ -157,15 +168,26 @@ impl DeviceGroup for VaGroup {
     fn eval(&self, ctx: &EvalCtx, x: &[f64], state: StateRef<'_>, out: &mut Slots) {
         let Some(m) = &self.module else { return };
         let mut at = SlotOffsets::default();
-        let mut values = Vec::with_capacity(m.unknown_len());
-        let mut result = EvalOutput::default();
+        let Ok(mut buffers) = self.buffers.lock() else {
+            out.error = Some(Diagnostic::error(
+                "E-VA-EVAL",
+                "VA group workspace is poisoned",
+            ));
+            return;
+        };
+        let Buffers {
+            values,
+            result,
+            scratch,
+        } = &mut *buffers;
+        scratch.resize_with(self.len(), Scratch::default);
         for (k, i) in self.instances.iter().enumerate() {
             values.clear();
             values.extend(i.nodes.iter().map(|&n| volt(x, n)));
             let start = k * m.state_len();
             let end = start + m.state_len();
             let input = EvalInput {
-                x: &values,
+                x: values,
                 temperature: ctx.temp,
                 analysis: match ctx.mode {
                     Mode::Dc => Analysis::Dc,
@@ -180,16 +202,17 @@ impl DeviceGroup for VaGroup {
                 simparams: &|_| None,
                 mfactor: 1.,
             };
-            // Each binding owns its reusable interpreter variables. No implicit gmin stamp:
+            // Per-instance variables and specialization live in the chunk workspace. No implicit gmin stamp:
             // models opt in through $simparam("gmin").
-            m.eval(
+            m.eval_with_scratch(
                 &i.bound,
                 &input,
                 StateIo {
                     accepted: &state.accepted[start..end],
                     current: &mut state.current[start..end],
                 },
-                &mut result,
+                &mut scratch[k],
+                result,
             );
             if let Some(d) = result.diagnostic.take() {
                 out.error = Some(d.with_note(format!("VA instance {}", i.name)));
@@ -204,7 +227,7 @@ impl DeviceGroup for VaGroup {
             }
             // Branch currents and internal equations describe one copy. External KCL
             // sums its terminal flows, including displacement current, over all copies.
-            let copies = m.parallel_copies(&i.bound);
+            let copies = i.copies;
             if copies != 1. {
                 let n = i.nodes.len();
                 for (row, &rep) in i.bound.layout().representatives().iter().enumerate() {
@@ -242,6 +265,7 @@ impl DeviceGroup for VaGroup {
                 if i.swept {
                     bound.retain_sweep_layout();
                 }
+                i.copies = m.parallel_copies(&bound);
                 i.bound = bound;
                 i.params = params;
                 true

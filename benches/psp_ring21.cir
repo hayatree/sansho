@@ -1,0 +1,38 @@
+* Twenty-one-stage capacitively loaded CMOS ring
+* Requires va-models/ihp/psp103/{psp103,psp103_nqs}.va with adjacent includes,
+* and ngspice-models/cornerMOSlv.lib with sg13g2_moslv_{mod,parm}.lib.
+* Provenance: original SG13G2 test circuit.
+.lib "../va-models/ihp/ngspice-models/cornerMOSlv.lib" mos_tt
+.hdl "../va-models/ihp/psp103/psp103.va"
+.hdl "../va-models/ihp/psp103/psp103_nqs.va"
+Vdd vdd 0 1.2
+.subckt inv in out vdd
+Xn out in 0 0 sg13_lv_nmos w=1u l=0.13u
+Xp out in vdd vdd sg13_lv_pmos w=2u l=0.13u
+Cl out 0 10f
+.ends
+X0 n20 n0 vdd inv
+X1 n0 n1 vdd inv
+X2 n1 n2 vdd inv
+X3 n2 n3 vdd inv
+X4 n3 n4 vdd inv
+X5 n4 n5 vdd inv
+X6 n5 n6 vdd inv
+X7 n6 n7 vdd inv
+X8 n7 n8 vdd inv
+X9 n8 n9 vdd inv
+X10 n9 n10 vdd inv
+X11 n10 n11 vdd inv
+X12 n11 n12 vdd inv
+X13 n12 n13 vdd inv
+X14 n13 n14 vdd inv
+X15 n14 n15 vdd inv
+X16 n15 n16 vdd inv
+X17 n16 n17 vdd inv
+X18 n17 n18 vdd inv
+X19 n18 n19 vdd inv
+X20 n19 n20 vdd inv
+.ic v(n0)=1.2 v(n1)=0 v(n2)=1.2 v(n3)=0 v(n4)=1.2 v(n5)=0 v(n6)=1.2 v(n7)=0 v(n8)=1.2 v(n9)=0 v(n10)=1.2 v(n11)=0 v(n12)=1.2 v(n13)=0 v(n14)=1.2 v(n15)=0 v(n16)=1.2 v(n17)=0 v(n18)=1.2 v(n19)=0 v(n20)=1.2
+.tran 4p 1.2n
+.save v(n0)
+.end

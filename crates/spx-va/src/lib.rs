@@ -8,6 +8,7 @@ mod eval;
 mod ir;
 pub mod lexer;
 mod limit;
+mod math;
 mod parser;
 mod sema;
 pub use eval::{Analysis, BindOptions, Bound, EvalInput, EvalOutput, Layout, Scratch, StateIo};
