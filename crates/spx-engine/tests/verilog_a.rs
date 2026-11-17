@@ -1,0 +1,367 @@
+//! Verilog-A integration against authored models, built-ins and analytic circuit theory.
+//! Provenance: original tests; Accellera LRM 2.4 and repository diode/junction equations.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use spx_engine::{RunConfig, run_with};
+use spx_netlist::{Netlist, SourceLoader, parse_with};
+use spx_output::{AnalysisResult, SimResults};
+
+struct Models;
+impl SourceLoader for Models {
+    fn load(&self, path: &str, _: Option<&str>) -> Result<(String, String), String> {
+        let text = match path {
+            "resistor.va" => include_str!("va/resistor.va"),
+            "capacitor.va" => include_str!("va/capacitor.va"),
+            "diode.va" => include_str!("va/diode.va"),
+            "init.va" => {
+                r#"module init(p,n); electrical p,n; real r;
+                analog begin @(initial_step) r=1000; I(p,n)<+V(p,n)/r; end endmodule"#
+            }
+            "bad.va" => {
+                r#"module bad(p,n); electrical p,n; analog $error("authored failure"); endmodule"#
+            }
+            _ => return Err(format!("unknown test source {path}")),
+        };
+        Ok((path.into(), text.into()))
+    }
+}
+fn deck(text: &str) -> Netlist {
+    parse_with(text, &Models).unwrap_or_else(|d| panic!("{d:#?}"))
+}
+fn simulate(text: &str) -> SimResults {
+    run_with(&deck(text), &RunConfig { threads: 1 })
+        .unwrap_or_else(|e| panic!("{:#?}", e.diagnostics))
+        .results
+}
+fn close(a: f64, b: f64, rel: f64, abs: f64) {
+    assert!((a - b).abs() <= abs + rel * b.abs(), "{a:e} != {b:e}");
+}
+fn interp(a: &AnalysisResult, signal: &str, t: f64) -> f64 {
+    let v = a.real(signal).unwrap();
+    let k = a.scale_values.partition_point(|x| *x < t);
+    if k == 0 {
+        return v[0];
+    }
+    if k == v.len() {
+        return v[k - 1];
+    }
+    let lo = a.scale_values[k - 1];
+    let hi = a.scale_values[k];
+    v[k - 1] + (v[k] - v[k - 1]) * (t - lo) / (hi - lo)
+}
+
+#[test]
+fn resistor_op_dc_subcircuit_and_overrides() {
+    let va = simulate(
+        "va
+.subckt cell a b
+.model local vares r=3k
+N1 a mid local r=1k
+N2 mid b local
+.ends
+V1 in 0 2
+X1 in 0 cell
+.hdl resistor.va
+.op
+.dc v1 -1 2 0.1
+",
+    );
+    let builtin = simulate(
+        "builtin
+V1 in 0 2
+R1 in mid 1k
+R2 mid 0 3k
+.op
+.dc v1 -1 2 0.1
+",
+    );
+    for (a, b) in va.analyses.iter().zip(&builtin.analyses) {
+        for signal in ["i(v1)"] {
+            for (&x, &y) in a.real(signal).unwrap().iter().zip(b.real(signal).unwrap()) {
+                close(x, y, 1e-9, 1e-12);
+            }
+        }
+    }
+    close(
+        va.analyses[0].real("v(x1.mid)").unwrap()[0],
+        1.5,
+        1e-9,
+        1e-12,
+    );
+}
+
+#[test]
+fn rc_transient_and_ac() {
+    let va = simulate(
+        "va rc
+.hdl resistor.va
+.hdl capacitor.va
+.model r vares r=1k
+.model c vacap c=1n
+V1 in 0 AC 1 PULSE(0 1 0 1n 1n 1 2)
+N1 in out r
+N2 out 0 c
+.options reltol=1e-7
+.tran 1n 5u 0 1n
+.ac dec 5 1 1meg
+",
+    );
+    let builtin = simulate(
+        "rc
+V1 in 0 AC 1 PULSE(0 1 0 1n 1n 1 2)
+R1 in out 1k
+C1 out 0 1n
+.options reltol=1e-7
+.tran 1n 5u 0 1n
+.ac dec 5 1 1meg
+",
+    );
+    let a = &va.analyses[0];
+    for (&t, &v) in a.scale_values.iter().zip(a.real("v(out)").unwrap()) {
+        let tau = 1e-6;
+        let tr = 1e-9;
+        let exact = if t <= tr {
+            (t - tau * (1. - (-t / tau).exp())) / tr
+        } else {
+            1. - (tau / tr) * ((tr / tau).exp() - 1.) * (-t / tau).exp()
+        };
+        close(v, exact, 0., 1e-6);
+        close(v, interp(&builtin.analyses[0], "v(out)", t), 1e-6, 1e-9);
+    }
+    for (&x, &y) in va.analyses[1]
+        .complex("v(out)")
+        .unwrap()
+        .iter()
+        .zip(builtin.analyses[1].complex("v(out)").unwrap())
+    {
+        close(x.0, y.0, 1e-9, 1e-12);
+        close(x.1, y.1, 1e-9, 1e-12);
+    }
+}
+
+#[test]
+fn diode_op_and_dc_match_builtin() {
+    for rs in [0., 2., 100.] {
+        let cards = ".op
+.dc v1 -1 1 0.02
+.options reltol=1e-10 abstol=1e-15 vntol=1e-12
+";
+        let va = simulate(&format!(
+            "va diode
+.hdl diode.va
+.model dm vadiode IS=1e-14 N=1.2 RS={rs} TT=1n CJ0=2p
+V1 in 0 1
+R1 in out 1k
+N1 out 0 dm
+{cards}"
+        ));
+        let builtin = simulate(&format!(
+            "diode
+.model dm d is=1e-14 n=1.2 rs={rs} tt=1n cj0=2p
+V1 in 0 1
+R1 in out 1k
+D1 out 0 dm
+{cards}"
+        ));
+        for (a, b) in va.analyses.iter().zip(&builtin.analyses) {
+            for signal in ["v(out)", "i(v1)"] {
+                for (&x, &y) in a.real(signal).unwrap().iter().zip(b.real(signal).unwrap()) {
+                    close(x, y, 1e-9, 1e-12);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn rectifier_transient_matches_builtin() {
+    let common = "V1 in 0 SIN(0 1 1meg)
+R1 in out 1k
+C1 out 0 10p
+.options reltol=1e-8 abstol=1e-16 chgtol=1e-20
+.tran 0.1n 2u 0 0.1n
+";
+    let va = simulate(&format!(
+        "va
+.hdl diode.va
+.model dm vadiode IS=1e-14 N=1 RS=2 TT=1n CJ0=2p
+N1 out 0 dm
+{common}"
+    ));
+    let builtin = simulate(&format!(
+        "builtin
+.model dm d is=1e-14 n=1 rs=2 tt=1n cj0=2p
+D1 out 0 dm
+{common}"
+    ));
+    for (&t, &v) in va.analyses[0]
+        .scale_values
+        .iter()
+        .zip(va.analyses[0].real("v(out)").unwrap())
+    {
+        close(v, interp(&builtin.analyses[0], "v(out)", t), 1e-6, 1e-9);
+    }
+}
+
+#[test]
+fn parallel_determinism_and_independent_initialization() {
+    let mut text = String::from(
+        "parallel
+.hdl init.va
+.model r init
+V1 in 0 2
+",
+    );
+    for k in 0..260 {
+        text.push_str(&format!(
+            "N{k} in n{k} r
+R{k} n{k} 0 1k
+"
+        ));
+    }
+    text.push_str(
+        ".op
+.dc v1 0 2 0.5
+.tran 1n 3n
+",
+    );
+    let nl = deck(&text);
+    let a = run_with(&nl, &RunConfig { threads: 1 }).unwrap().results;
+    let b = run_with(&nl, &RunConfig { threads: 4 }).unwrap().results;
+    assert_eq!(a, b);
+    close(a.analyses[0].real("v(n0)").unwrap()[0], 1., 1e-9, 1e-12);
+}
+
+#[test]
+fn structured_errors() {
+    for (model, instance) in [
+        ("missing", "N1 a 0 dm"),
+        ("vares", "N1 a 0 b dm"),
+        ("vares r=-1", "N1 a 0 dm"),
+        ("vares", "N1 a 0 dm r=0"),
+    ] {
+        let nl = deck(&format!(
+            "errors
+.hdl resistor.va
+.model dm {model}
+V1 a 0 1
+{instance}
+.op
+"
+        ));
+        let ds = spx_engine::check(&nl).unwrap_err();
+        assert_eq!(ds[0].code, "E-ELAB-PARAM");
+        assert!(ds[0].span.is_some());
+    }
+    let nl = deck(
+        "runtime
+.hdl bad.va
+.model dm bad
+V1 a 0 1
+N1 a 0 dm
+.op
+",
+    );
+    let error = spx_engine::run(&nl).unwrap_err();
+    assert_eq!(error.diagnostics[0].code, "E-VA-EVAL");
+    assert!(error.diagnostics[0].message.contains("authored failure"));
+}
+
+#[test]
+fn va_dc_parameter_rebinding() {
+    // DC sweeps address the conventional "dc" parameter; the group rebinds the instance.
+    struct Loader;
+    impl SourceLoader for Loader {
+        fn load(&self, _: &str, _: Option<&str>) -> Result<(String, String), String> {
+            Ok(("source.va".into(), "module source(p,n); electrical p,n; parameter real dc=1; analog V(p,n)<+dc; endmodule".into()))
+        }
+    }
+    let nl = parse_with(
+        "sweep
+.hdl source.va
+.model src source
+N1 a 0 src
+R1 a 0 1k
+.dc n1 0 2 0.5
+",
+        &Loader,
+    )
+    .unwrap();
+    let r = spx_engine::run(&nl).unwrap().results;
+    assert_eq!(r.analyses[0].real("v(a)").unwrap(), &[0., 0.5, 1., 1.5, 2.]);
+}
+
+#[test]
+fn limiter_states_internal_unknowns_and_parallel_chunks() {
+    let mut text = String::from(
+        "diode chunks\n.hdl diode.va\n.hdl diode.va\n.model d vadiode RS=2\nV1 in 0 1\n",
+    );
+    for k in 0..260 {
+        text.push_str(&format!("R{k} in n{k} 1k\nN{k} n{k} 0 d\n"));
+    }
+    text.push_str(".op\n.dc v1 0 1 0.5\n");
+    let nl = deck(&text);
+    let a = run_with(&nl, &RunConfig { threads: 1 }).unwrap().results;
+    let b = run_with(&nl, &RunConfig { threads: 4 }).unwrap().results;
+    assert_eq!(a, b);
+    let a = &a.analyses[0];
+    assert!(a.real("v(n0#j)").unwrap()[0] > 0.5);
+    close(
+        a.real("i(n0#series)").unwrap()[0],
+        a.real("i(n259#series)").unwrap()[0],
+        0.,
+        0.,
+    );
+}
+
+#[test]
+fn multiple_modules_and_va_diagnostic_locations() {
+    struct Loader;
+    impl SourceLoader for Loader {
+        fn load(&self, path: &str, _: Option<&str>) -> Result<(String, String), String> {
+            let text = match path {
+                "two.va" => {
+                    "module a(p,n); electrical p,n; analog I(p,n)<+V(p,n)/1000; endmodule\nmodule b(p,n); electrical p,n; analog I(p,n)<+V(p,n)/2000; endmodule"
+                }
+                "invalid.va" => {
+                    "module bad(p,n); electrical p,n; analog I(p,n)<+missing; endmodule"
+                }
+                _ => return Err("no source".into()),
+            };
+            Ok((path.into(), text.into()))
+        }
+    }
+    let nl = parse_with(
+        "two\n.hdl two.va\n.model a1 a\n.model b1 b\nV1 in 0 1\nN1 in 0 a1\nN2 in 0 b1\n.op\n",
+        &Loader,
+    )
+    .unwrap();
+    let r = spx_engine::run(&nl).unwrap().results;
+    close(
+        r.analyses[0].real("i(v1)").unwrap()[0],
+        -0.0015,
+        1e-9,
+        1e-12,
+    );
+    let nl = parse_with("invalid\n.hdl invalid.va\nV1 a 0 1\n.op\n", &Loader).unwrap();
+    let d = spx_engine::check(&nl).unwrap_err();
+    assert_eq!(d[0].code, "E-VA-SEMA");
+    assert_eq!(d[0].span.unwrap().line, 2);
+    assert!(d[0].notes.iter().any(|n| n.contains("invalid.va:1:")));
+    let mut duplicate = nl.clone();
+    duplicate.hdl = vec![
+        spx_netlist::HdlSource {
+            path: "a.va".into(),
+            text: "module a(p); electrical p; endmodule".into(),
+            span: spx_netlist::Span::new(2, 1),
+        },
+        spx_netlist::HdlSource {
+            path: "b.va".into(),
+            text: "module a(p); electrical p; endmodule".into(),
+            span: spx_netlist::Span::new(3, 1),
+        },
+    ];
+    let d = spx_engine::check(&duplicate).unwrap_err();
+    assert_eq!(d[0].code, "E-VA-SEMA");
+    assert!(d[0].message.contains("duplicate"));
+}

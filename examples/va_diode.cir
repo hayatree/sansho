@@ -1,0 +1,11 @@
+Verilog-A diode rectifier
+.hdl "va/diode.va"
+.model junction vadiode IS=1e-14 N=1 RS=2 TT=1n CJ0=2p
+V1 in 0 SIN(0 1 1meg)
+R1 in out 1k
+N1 out 0 junction
+C1 out 0 10p
+.op
+.dc v1 0 1 0.1
+.tran 1n 2u
+.end

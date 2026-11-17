@@ -8,6 +8,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | Code | Severity | Summary |
 |---|---|---|
 | [`E-VA-SEMA`](#e-va-sema) | error | Invalid Verilog-A semantics |
+| [`E-VA-EVAL`](#e-va-eval) | error | Verilog-A evaluation failed |
 | [`E-VA-PARAM`](#e-va-param) | error | Invalid Verilog-A parameter binding |
 | [`E-VA-SYNTAX`](#e-va-syntax) | error | Invalid Verilog-A syntax |
 | [`E-VA-UNSUPPORTED`](#e-va-unsupported) | error | Unsupported Verilog-A construct |
@@ -64,6 +65,12 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Invalid Verilog-A semantics.** A name, type, assignment, branch access, or function call is invalid.
 
 - Check declarations, argument counts, types and contribution targets at the reported span.
+
+## E-VA-EVAL
+
+**Verilog-A evaluation failed.** The model requested an error or its interpreter could not complete evaluation.
+
+- Check the model message, array bounds, loops and runtime conditions.
 
 ## E-VA-PARAM
 

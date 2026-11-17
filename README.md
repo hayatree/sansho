@@ -5,7 +5,7 @@ A fast, agent-native SPICE circuit simulator written in Rust.
 > **Status:** pre-alpha. R, C, L, V, I, E, F, G, H, diodes, BJTs (Gummel–Poon) and level-1
 > MOSFETs; `.op`, `.dc`, `.ac`, `.tran` (trapezoidal or BDF2 with LTE control), `.meas`, `.model`,
 > `.options`, `.param`/expressions/`.func`, `.subckt`, `.include`/`.lib`, model binning, `.ic`,
-> `.nodeset`, UIC. Results are checked against ngspice (`verify/`). Session API and MCP server for
+> `.nodeset`, UIC; compiled Verilog-A modules through `.hdl` and `N` instances (VA-3). Results are checked against ngspice (`verify/`). Session API and MCP server for
 > AI agents; pre-run lint and structured diagnostics ([`docs/diagnostics.md`](docs/diagnostics.md));
 > bit-deterministic multithreading. See [`docs/architecture.md`](docs/architecture.md).
 
@@ -37,7 +37,7 @@ units, and include input/result hashes for reproducibility.
   session API and a built-in MCP server
 - **Parallel and GPU**: bit-deterministic multithreading; GPU batch evaluation for sweeps and Monte Carlo
 - **Compatibility**: ngspice-dialect netlists, open PDKs (SKY130, GF180MCU, IHP SG13G2),
-  Verilog-A models via OSDI
+  Verilog-A models through the built-in clean-room compiler (VA-1–VA-3 implemented; `.hdl` / `N` instances)
 
 ## Repository layout
 

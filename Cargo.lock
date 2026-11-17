@@ -1211,6 +1211,7 @@ version = "0.0.0"
 dependencies = [
  "spx-diag",
  "spx-netlist",
+ "spx-va",
 ]
 
 [[package]]
@@ -1231,6 +1232,7 @@ dependencies = [
  "spx-netlist",
  "spx-output",
  "spx-sparse",
+ "spx-va",
 ]
 
 [[package]]

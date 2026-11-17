@@ -71,6 +71,12 @@ pub const CODES: &[CodeInfo] = &[
         ],
     ),
     e(
+        "E-VA-EVAL",
+        "Verilog-A evaluation failed",
+        "The model requested an error or its interpreter could not complete evaluation.",
+        &["Check the model message, array bounds, loops and runtime conditions."],
+    ),
+    e(
         "E-VA-PARAM",
         "Invalid Verilog-A parameter binding",
         "A parameter name is unknown, cannot be overridden, or violates its declared type or range.",

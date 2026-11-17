@@ -1,6 +1,6 @@
 # Verilog-A compact-model compiler (`spx-va`)
 
-Status: VA-1 and VA-2 implemented (M4). Simulator integration begins in VA-3.
+Status: VA-1, VA-2 and VA-3 implemented (M4). Compiled modules run in OP, DC, AC and transient analyses.
 
 ## 1. Purpose and constraints
 
@@ -39,7 +39,7 @@ Crate layout (`crates/spx-va`, depends only on `spx-diag`):
 | `parser.rs` | Recursive descent with precedence climbing for expressions |
 | `sema.rs` | Symbol resolution, type checks, branch/port mapping, linear `ddt` validation |
 | `ir.rs`, `eval.rs`, `dual.rs`, `limit.rs` | Resolved typed tree, dense dynamic AD interpreter, parameter binding, limiting |
-| `device.rs` | (phase 3) `DeviceGroup` implementation for compiled modules |
+| `spx-devices/src/va.rs` | VA-3 `DeviceGroup` adapter for compiled modules |
 
 ## 3. Supported language subset (target: BSIM4, PSP103, BSIM-CMG, HICUM/L2 sources)
 
@@ -123,7 +123,7 @@ N1 a k dmod                           * ngspice OSDI-style instance letter `N`
 |---|---|---|
 | VA-1 (done) | Preprocessor, lexer, parser, AST, diagnostics | Parses hand-written test models covering §3; robust errors |
 | VA-2 (done) | Semantic analysis, IR, AD interpreter | Evaluates test models; Jacobians match finite differences |
-| VA-3 | Device integration, `.hdl`, `N` instances | VA diode/resistor match built-ins; engine tests pass |
+| VA-3 (done) | Device integration, `.hdl`, `N` instances | VA diode/resistor match built-ins; engine tests pass |
 | VA-4 | Coverage for real models, `$limit`, hoisting, node collapsing | User-supplied BSIM4/PSP103 parse and simulate; match ngspice+OpenVAF |
 | VA-5 | Performance (hoisting, JIT) | Within 2× of OSDI-compiled models in ngspice |
 
@@ -166,7 +166,10 @@ Newton value from `current` (falling back to `accepted` for a non-finite history
 writes the new value into `current`, including when limiting is disabled. The simulator must
 copy accepted state into current on rollback. Limiting retains the incoming voltage gradient:
 its Jacobian is the device linearization at the limited point, rather than a derivative of the
-limiting algorithm. `noncon` is set for a change larger than `1e-14 * (1 + abs(vnew))`.
+limiting algorithm. A separate forward-mode tangent accumulates the displacement from each
+limited argument and propagates through the model equations. Residuals include that tangent,
+so `f = i(v_lim) + g(v_lim)*(v_actual-v_lim)` (and likewise for charge), while the Jacobians
+remain evaluated at the limited point. `noncon` is set for a change larger than `1e-14 * (1 + abs(vnew))`.
 User limiters are called as `(vnew, vold, extra_args...)`. `fetlim` clamps a step to
 `0.5 + 0.5 * abs(vold - threshold)` volts. `limexp` equals `exp` through 80, with the tangent
 line continued above 80. Piecewise derivatives follow the active arm (first argument at min/max
@@ -191,10 +194,53 @@ tasks and `$warning` are ignored. Error/finish/fatal tasks populate `output.erro
   array function arguments and their initializers are unsupported. Function nesting and
   semantic expression nesting are capped at 128. Integer arithmetic uses f64 storage, so
   integers beyond the exact f64 range are not represented exactly.
-- Noise generators return zero. There is no simulator integration, node collapsing, general
-  expression hoisting or JIT in this phase.
+- Noise generators return zero. Node collapsing, general expression hoisting and JIT remain deferred.
 
 The authored evaluator regression suite checks analytic resistor stamps, diode and nonlinear
 MOS-like charge Jacobians against central finite differences at relative tolerance `1e-6`,
 voltage-source signs/orientation, limiting state, ranges, integer arithmetic, arrays/control
 flow/functions, environment queries, initialization, runtime failure paths and spanned errors.
+
+
+## 9. VA-3 simulator integration
+
+Load a deck with `spx run examples/va_diode.cir` or `Session::load_file`. Both quoted
+and unquoted `.hdl path.va` cards use the existing netlist source loader, relative to the
+including deck. Text-only parsing with `NoFiles` rejects them with `E-PARSE-INCLUDE`.
+The netlist retains the resolved HDL path and text. External Verilog-A includes resolve
+relative to the HDL file (and nested include files) when that path identifies a real file;
+synthetic source loaders have only the built-in `disciplines.vams` and `constants.vams`.
+
+Each file is compiled once during elaboration, all its modules are cached, and compiled modules
+are shared across analysis circuits. Duplicate module names are errors. Bindings and retained
+interpreter variables belong to individual instances and analyses. Fixed chunks of 64 instances,
+dense private stamps and ordered gather preserve thread-count determinism.
+
+`.model name module parameter=value ...` selects a loaded module. Module and numeric parameter
+names at the SPICE boundary are case-insensitive; original VA source identifiers retain their
+language semantics. Instance overrides follow model overrides. `Nname nodes... model
+parameter=value ...` connects terminals in module port order; ground is supported. Subcircuits
+rename N terminals and local model references. Internal nodes appear as `v(n1#net)`, branch
+currents as `i(n1#branch)`. Wrong port counts, unknown modules and invalid bindings report
+`E-ELAB-PARAM`; VA compiler errors retain their VA code, point to the HDL card, and carry a
+VA source location note. Runtime failures report `E-VA-EVAL`.
+
+Instance numeric parameters support session alterations and group rebinding; a VA parameter
+named `dc` can be swept with the engine's existing `.dc instance start stop step` interface.
+VA devices inject no independent AC excitation. They contribute their conductance and charge
+Jacobians to small-signal assembly. No implicit gmin conductance is added: a model can use
+`$simparam("gmin", default)` explicitly.
+
+Limitations: the interpreter remains allocation-heavy and every VA instance is classified as
+nonlinear. All terminals are conservatively treated as DC-connected by topology lint. AC
+linearization uses the existing DC evaluation context, so `analysis("ac")` is not yet exposed
+through this adapter. Initialization events follow `init_junctions` and transient time zero;
+they may execute on multiple Newton evaluations at the initial point. Includes are read from
+the filesystem at elaboration; exported decks retain HDL paths and require those files.
+Rollback restores limiter state; retained procedural variables are not separately snapshotted.
+Models should recompute voltage-dependent quantities on every evaluation.
+
+Integration tests cover built-in diode agreement (IS, N, RS, depletion charge and transit time),
+resistor/capacitor OP/DC/AC/transient behavior, analytic RC response, hierarchical instances,
+parameter overrides, initialization, runtime errors and bit-identical 1/4-thread results.
+No network, external code, interface headers or new third-party dependencies were used.

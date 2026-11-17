@@ -312,7 +312,7 @@ impl Session {
         let stats = summary::stats(&nl, &checked.circuit);
         let id = self.next_circuit;
         self.next_circuit += 1;
-        let input_hash = hash::text(&spx_netlist::write(&nl));
+        let input_hash = hash::netlist(&nl);
         self.circuits.insert(id, Loaded { netlist: nl });
         Ok(LoadReport {
             circuit_id: format!("c{id}"),
@@ -368,7 +368,7 @@ impl Session {
         let id = self.next_job;
         self.next_job += 1;
         let job_id = format!("j{id}");
-        let input_hash = hash::text(&spx_netlist::write(nl));
+        let input_hash = hash::netlist(nl);
         let (opts, _) = spx_engine::SimOptions::from_cards(&nl.options);
         let (results, diagnostics, status) = match out {
             Ok(o) => (Some(o.results), o.warnings, Status::Ok),
@@ -480,7 +480,7 @@ impl Session {
         spx_engine::check(&nl).map_err(|d| ApiError {
             diagnostics: sorted(d),
         })?;
-        let input_hash = hash::text(&spx_netlist::write(&nl));
+        let input_hash = hash::netlist(&nl);
         if let Some(k) = parse_id(circuit_id, 'c')
             && let Some(l) = self.circuits.get_mut(&k)
         {

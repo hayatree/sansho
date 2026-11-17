@@ -19,6 +19,7 @@ mod linear;
 pub mod model;
 pub mod mos1;
 mod sources;
+pub mod va;
 pub mod waveform;
 
 pub use bjt::Bjts;
@@ -252,6 +253,8 @@ pub struct Slots {
     /// Set by nonlinear devices when Newton limiting changed a controlling voltage, which means
     /// the iteration must not be declared converged.
     pub noncon: bool,
+    /// Runtime model failure, consumed by the Newton solver.
+    pub error: Option<Diagnostic>,
 }
 
 impl Slots {
@@ -300,6 +303,19 @@ impl Slots {
         at.q += N;
     }
 
+    /// Write an already linearized dynamic dense core in row-major order.
+    pub fn core_dyn(&mut self, at: &mut SlotOffsets, f: &[f64], q: &[f64], df: &[f64], dq: &[f64]) {
+        let n = f.len();
+        self.f[at.f..at.f + n].copy_from_slice(f);
+        self.q[at.q..at.q + n].copy_from_slice(q);
+        self.g[at.g..at.g + n * n].copy_from_slice(df);
+        self.c[at.c..at.c + n * n].copy_from_slice(dq);
+        at.f += n;
+        at.q += n;
+        at.g += n * n;
+        at.c += n * n;
+    }
+
     /// Allocate zeroed slots matching a layout.
     pub fn for_layout(l: &StampLayout) -> Self {
         Self {
@@ -309,6 +325,7 @@ impl Slots {
             q: vec![0.0; l.q.len()],
             b: vec![0.0; l.b.len()],
             noncon: false,
+            error: None,
         }
     }
 }

@@ -317,6 +317,18 @@ impl CompiledModule {
             Err(diagnostics)
         }
     }
+    /// Numeric value of a bound parameter, including aliases.
+    pub fn param(&self, bound: &Bound, name: &str) -> Option<f64> {
+        if bound.identity != self.identity() {
+            return None;
+        }
+        self.params
+            .iter()
+            .position(|p| p.name == name || p.aliases.iter().any(|a| a == name))
+            .and_then(|i| bound.values.get(i))
+            .filter(|v| v.text.is_none())
+            .map(|v| v.f.v)
+    }
     fn identity(&self) -> u64 {
         self.identity
     }
@@ -374,6 +386,8 @@ impl CompiledModule {
         // Retained numeric variables are history, independent of this call's unknowns.
         for slot in &mut scratch.slots {
             for v in &mut slot.values {
+                v.f.t = 0.;
+                v.q.t = 0.;
                 v.f.d.fill(0.);
                 v.q.d.fill(0.);
             }
@@ -542,8 +556,8 @@ impl Runtime<'_, '_> {
     }
     fn stamp(&mut self, row: Option<usize>, v: &Value, sign: f64) {
         if let Some(i) = row {
-            self.out.f[i] += sign * v.f.v;
-            self.out.q[i] += sign * v.q.v;
+            self.out.f[i] += sign * (v.f.v + v.f.t);
+            self.out.q[i] += sign * (v.q.v + v.q.t);
             for j in 0..self.n {
                 self.out.df[i * self.n + j] += sign * v.f.d[j];
                 self.out.dq[i * self.n + j] += sign * v.q.d[j];
@@ -780,6 +794,7 @@ impl Runtime<'_, '_> {
                     self.out.noncon = true;
                 }
                 let mut v = v.clone();
+                v.f.t += new - limited;
                 v.f.v = limited;
                 v
             }
@@ -957,7 +972,7 @@ impl Runtime<'_, '_> {
             "pow" => {
                 let v = x.powf(y);
                 let dx = if y == 0. { 0. } else { y * x.powf(y - 1.) };
-                let dy = if a[1].f.d.iter().all(|d| *d == 0.) {
+                let dy = if a[1].f.t == 0. && a[1].f.d.iter().all(|d| *d == 0.) {
                     0.
                 } else {
                     v * x.ln()

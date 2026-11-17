@@ -89,7 +89,12 @@ fn solve_op_chain(
         }
         Err(e) => e,
     };
-    if ckt.linear || matches!(first, crate::solve::NewtonError::Singular) {
+    if ckt.linear
+        || matches!(
+            first,
+            crate::solve::NewtonError::Singular | crate::solve::NewtonError::Device(_)
+        )
+    {
         return Err(newton_diagnostic(ckt, &first, code, analysis).with_attempts(["newton"]));
     }
     let mut attempts = vec!["newton"];

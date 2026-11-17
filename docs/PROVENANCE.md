@@ -89,3 +89,16 @@ Reference simulators (ngspice) are only ever executed as external programs on ou
 
 VA-2 was implemented without network access, new dependencies, external source code, generated
 model code, or interface headers. There is no third-party code port requiring a NOTICE addition.
+
+
+### Verilog-A VA-3
+
+| Component | Files | Provenance |
+|---|---|---|
+| Limiting linearization tangent | `spx-va/src/dual.rs`, `eval.rs` | Original chain-rule AD implementation; first-order SPICE linearization from Nagel (1975) |
+| Simulator adapter and dense stamping | `spx-devices/src/va.rs`, `lib.rs`; `spx-engine/src/circuit.rs` | Original repository DAE/MNA integration, Ho, Ruehli & Brennan (1975), Accellera Verilog-AMS LRM 2.4 |
+| HDL cards, N instances and hierarchy | `spx-netlist/src` | Original parser/writer work from the requested syntax and existing source-loader/flattening interfaces |
+| Models and integration tests | `spx-engine/tests/verilog_a.rs`, `tests/va/*`; `examples/va/diode.va`, `examples/va_diode.cir`; `spx-api/tests/session.rs` | Authored resistor/capacitor and junction equations from repository built-ins, Nagel (1975), Antognetti & Massobrio (1993); analytic RC response |
+
+Implemented without network access, external source implementations, interface headers, PDK
+files or new third-party dependencies. No ported code requires a NOTICE addition.

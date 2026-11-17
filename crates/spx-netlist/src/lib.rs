@@ -56,6 +56,8 @@ pub struct Netlist {
     pub title: String,
     /// Circuit elements in source order.
     pub elements: Vec<Element>,
+    /// Loaded Verilog-A translation units.
+    pub hdl: Vec<HdlSource>,
     /// Analysis requests in source order.
     pub analyses: Vec<AnalysisCard>,
     /// `.options` entries.
@@ -73,6 +75,17 @@ pub struct Netlist {
     pub sources: Vec<String>,
     /// Non-fatal diagnostics (warnings).
     pub warnings: Vec<Diagnostic>,
+}
+
+/// A Verilog-A source loaded through the netlist source loader.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HdlSource {
+    /// Resolved source path.
+    pub path: String,
+    /// Source text retained for compilation.
+    pub text: String,
+    /// Location of the HDL card in the netlist.
+    pub span: Span,
 }
 
 /// A node voltage from `.ic` or `.nodeset`.
@@ -101,6 +114,15 @@ pub struct Element {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ElementKind {
+    /// Compiled Verilog-A instance: Nname nodes... model [key=value ...].
+    Va {
+        /// Ordered terminal connections.
+        nodes: Vec<String>,
+        /// Model card name.
+        model: String,
+        /// Numeric instance overrides.
+        params: Vec<(String, f64)>,
+    },
     /// `Rxxx n+ n- value`
     Resistor {
         /// Positive node.
@@ -248,9 +270,10 @@ impl ElementKind {
     /// Model name for semiconductor devices.
     pub fn model(&self) -> Option<&str> {
         match self {
-            Self::Diode { model, .. } | Self::Bjt { model, .. } | Self::Mosfet { model, .. } => {
-                Some(model)
-            }
+            Self::Va { model, .. }
+            | Self::Diode { model, .. }
+            | Self::Bjt { model, .. }
+            | Self::Mosfet { model, .. } => Some(model),
             _ => None,
         }
     }
@@ -273,6 +296,7 @@ impl ElementKind {
     /// Terminal nodes of the element (output and controlling nodes).
     pub fn nodes(&self) -> Vec<&str> {
         match self {
+            Self::Va { nodes, .. } => nodes.iter().map(String::as_str).collect(),
             Self::Resistor { p, n, .. }
             | Self::Capacitor { p, n, .. }
             | Self::Inductor { p, n, .. }

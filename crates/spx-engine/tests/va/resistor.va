@@ -1,0 +1,6 @@
+// Provenance: original model from Ohm's law and Accellera Verilog-AMS LRM 2.4.
+module vares(p,n);
+inout p,n; electrical p,n;
+parameter real r=1000 from (0:inf);
+analog I(p,n) <+ V(p,n)/r;
+endmodule

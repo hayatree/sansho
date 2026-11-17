@@ -192,3 +192,61 @@ fn model_and_option_alterations() {
     let i1 = j.analyses[0].values[1].value;
     assert!((i1 / i0 - 2.0).abs() < 1e-3, "{i0} {i1}");
 }
+
+#[test]
+fn load_hdl_file_and_alter_instance() {
+    let dir = std::env::temp_dir().join(format!("spx-api-va-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("models/nested")).unwrap();
+    std::fs::write(
+        dir.join("models/nested/params.va"),
+        "parameter real r=1000 from (0:inf);",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("models/resistor.va"),
+        r#"
+        `include "disciplines.vams"
+        module resistor(p,n); electrical p,n;
+        `include "nested/params.va"
+        analog I(p,n)<+V(p,n)/r; endmodule
+    "#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("included.cir"), ".hdl \"models/resistor.va\"\n").unwrap();
+    let path = dir.join("deck.cir");
+    std::fs::write(
+        &path,
+        "va\n.include included.cir\n.model rm resistor r=2k\nV1 a 0 1\nN1 a 0 rm\n.op\n",
+    )
+    .unwrap();
+    let mut s = session(1);
+    let loaded = s.load_file(&path).unwrap();
+    let first = s.simulate(&loaded.circuit_id, None).unwrap();
+    assert_eq!(first.status, Status::Ok);
+    let current = first.analyses[0]
+        .values
+        .iter()
+        .find(|v| v.name == "i(v1)")
+        .unwrap()
+        .value;
+    assert!((current + 0.0005).abs() < 1e-12);
+    s.alter(
+        &loaded.circuit_id,
+        &[Change {
+            target: "n1".into(),
+            param: "r".into(),
+            value: 1000.,
+        }],
+    )
+    .unwrap();
+    let second = s.simulate(&loaded.circuit_id, None).unwrap();
+    assert_eq!(second.status, Status::Ok);
+    let current = second.analyses[0]
+        .values
+        .iter()
+        .find(|v| v.name == "i(v1)")
+        .unwrap()
+        .value;
+    assert!((current + 0.001).abs() < 1e-12);
+    std::fs::remove_dir_all(dir).unwrap();
+}

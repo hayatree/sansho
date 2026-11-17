@@ -121,6 +121,21 @@ fn run_analysis(
     opts: &SimOptions,
     card: &AnalysisCard,
 ) -> Result<spx_output::AnalysisResult, Diagnostic> {
+    // Retained VA interpreter variables belong to an analysis, never to concurrent analyses.
+    let owned = if !nl.hdl.is_empty() && !matches!(card, AnalysisCard::Dc { .. }) {
+        Some(
+            circuit::compile_cached(nl, opts, &ckt.va_modules)
+                .map_err(|ds| {
+                    ds.into_iter().next().unwrap_or_else(|| {
+                        Diagnostic::error("E-ELAB-INTERNAL", "VA analysis elaboration failed")
+                    })
+                })?
+                .0,
+        )
+    } else {
+        None
+    };
+    let ckt = owned.as_ref().unwrap_or(ckt);
     match card {
         AnalysisCard::Op { .. } => analysis::op(ckt, opts),
         AnalysisCard::Dc {
@@ -131,7 +146,7 @@ fn run_analysis(
             ..
         } => {
             // A sweep modifies a source value, so it works on its own copy of the circuit.
-            let mut own = compile(nl, opts)
+            let mut own = circuit::compile_cached(nl, opts, &ckt.va_modules)
                 .map_err(|d| {
                     d.into_iter().next().unwrap_or_else(|| {
                         Diagnostic::error("E-ELAB-INTERNAL", "recompilation failed")

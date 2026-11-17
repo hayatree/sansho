@@ -151,6 +151,7 @@ pub(crate) fn assemble(
     let par = ckt.parallel && rayon::current_num_threads() > 1;
     let eval = |((group, s), (current, accepted)): EvalItem<'_>| {
         s.noncon = false;
+        s.error = None;
         group.eval(ctx, x, StateRef { accepted, current }, s);
     };
     let states = ws.state.iter_mut().zip(ws.accepted.iter());
@@ -253,6 +254,8 @@ pub(crate) enum NewtonError {
     Singular,
     /// Other solver failure.
     Solver(SolverError),
+    /// Runtime device-model diagnostic.
+    Device(Box<Diagnostic>),
 }
 
 /// Newton–Raphson iteration on `x` (updated in place). Returns the number of iterations.
@@ -283,6 +286,9 @@ pub(crate) fn newton(
             ctx.init_junctions = false;
         }
         assemble(ckt, &ctx, x, ws, opts, gshunt);
+        if let Some(d) = ws.slots.iter().find_map(|s| s.error.clone()) {
+            return Err(NewtonError::Device(Box::new(d)));
+        }
         let a = &ws.asm;
         for k in 0..ws.jac.len() {
             ws.jac[k] = a.g[k] + integ.a0 * a.c[k];
@@ -351,6 +357,7 @@ pub(crate) fn newton_diagnostic(
     analysis: &str,
 ) -> Diagnostic {
     match err {
+        NewtonError::Device(d) => (**d).clone(),
         NewtonError::Singular => {
             let mut d = Diagnostic::error(
                 "E-SOLVE-SINGULAR",

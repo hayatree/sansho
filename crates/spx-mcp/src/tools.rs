@@ -23,7 +23,7 @@ struct Tool {
 
 const NETLIST: &str = "SPICE netlist text (ngspice syntax; the first line is the title)";
 const PATH: &str = "path of a netlist file on the server's machine (use instead of `netlist` \
-                    when the deck uses .include / .lib)";
+                    when the deck uses .include / .lib / .hdl)";
 
 const TOOLS: &[Tool] = &[
     Tool {

@@ -90,6 +90,7 @@ pub(crate) fn apply(nl: &mut Netlist, c: &Change) -> Result<Applied, Diagnostic>
     if let Some(e) = nl.elements.iter_mut().find(|e| e.name == target) {
         let allowed = device_params(&e.kind);
         let old = match &mut e.kind {
+            ElementKind::Va { params, .. } => return Ok(done(set_param(params, &param, value))),
             ElementKind::Resistor { value: v, .. }
                 if matches!(param.as_str(), "value" | "r" | "resistance") =>
             {

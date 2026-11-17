@@ -4,7 +4,9 @@
 //! branches) are standard MNA well-posedness conditions; see Ho, Ruehli & Brennan (1975).
 //! See `docs/PROVENANCE.md`.
 
-use std::collections::HashMap;
+use spx_devices::va::{VaGroup, parameter_names};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use spx_devices::bjt::BjtModel;
 use spx_devices::diode::DiodeModel;
@@ -25,6 +27,7 @@ pub(crate) const DISCARD: usize = usize::MAX;
 /// A compiled, immutable circuit.
 #[derive(Debug)]
 pub struct Circuit {
+    pub(crate) va_modules: BTreeMap<String, Arc<spx_va::CompiledModule>>,
     pub(crate) unknowns: Unknowns,
     pub(crate) num_nodes: usize,
     pub(crate) groups: Vec<Box<dyn DeviceGroup>>,
@@ -233,10 +236,106 @@ impl UnionFind {
     }
 }
 
+/// Include loader rooted at the HDL file; synthetic source loaders get built-ins only.
+struct HdlLoader<'a> {
+    path: &'a str,
+}
+impl spx_va::VaLoader for HdlLoader<'_> {
+    fn load(&self, path: &str, from: Option<&str>) -> Result<(String, String), String> {
+        if !std::path::Path::new(self.path).is_file() {
+            return Err(format!(
+                "external VA includes unavailable for {}",
+                self.path
+            ));
+        }
+        let from = from.filter(|p| *p != "<input>").unwrap_or(self.path);
+        let base = std::path::Path::new(from)
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
+        let full = base.join(path);
+        let text =
+            std::fs::read_to_string(&full).map_err(|e| format!("{}: {e}", full.display()))?;
+        Ok((full.display().to_string(), text))
+    }
+}
+
+fn hdl_diagnostic(mut d: Diagnostic, h: &spx_netlist::HdlSource, sources: &[String]) -> Diagnostic {
+    if let Some(span) = d.span {
+        let path = if span.file == 0 {
+            h.path.as_str()
+        } else {
+            sources
+                .get(span.file as usize)
+                .map_or("VA include", String::as_str)
+        };
+        d = d.with_note(format!("Verilog-A {path}:{}:{}", span.line, span.col));
+    }
+    d.with_span(h.span)
+}
+
+fn compile_hdl(
+    nl: &Netlist,
+) -> Result<BTreeMap<String, Arc<spx_va::CompiledModule>>, Vec<Diagnostic>> {
+    let mut modules = BTreeMap::new();
+    let mut seen = HashSet::new();
+    let mut errors = Vec::new();
+    for h in &nl.hdl {
+        if !seen.insert(&h.path) {
+            continue;
+        }
+        match spx_va::parse_va(&h.text, &HdlLoader { path: &h.path }) {
+            Err(ds) => errors.extend(ds.into_iter().map(|d| hdl_diagnostic(d, h, &[]))),
+            Ok(source) => {
+                for module in &source.modules {
+                    match spx_va::compile_module(&source, Some(&module.name.name)) {
+                        Ok(compiled) => {
+                            let key = compiled.name.to_ascii_lowercase();
+                            if let std::collections::btree_map::Entry::Vacant(entry) =
+                                modules.entry(key)
+                            {
+                                entry.insert(Arc::new(compiled));
+                            } else {
+                                errors.push(hdl_diagnostic(
+                                    Diagnostic::error(
+                                        "E-VA-SEMA",
+                                        format!("duplicate module {}", compiled.name),
+                                    )
+                                    .with_span(module.span),
+                                    h,
+                                    &source.sources,
+                                ));
+                            }
+                        }
+                        Err(ds) => errors.extend(
+                            ds.into_iter()
+                                .map(|d| hdl_diagnostic(d, h, &source.sources)),
+                        ),
+                    }
+                }
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(modules)
+    } else {
+        Err(errors)
+    }
+}
+
 /// Compile a netlist. Returns the circuit and warnings, or all diagnostics on failure.
 pub fn compile(
     nl: &Netlist,
     opts: &SimOptions,
+) -> Result<(Circuit, Vec<Diagnostic>), Vec<Diagnostic>> {
+    let va_modules = compile_hdl(nl)?;
+    compile_cached(nl, opts, &va_modules)
+}
+
+/// Re-elaborate with immutable compiled modules shared by all analyses of this run.
+pub(crate) fn compile_cached(
+    nl: &Netlist,
+    opts: &SimOptions,
+    va_modules: &BTreeMap<String, Arc<spx_va::CompiledModule>>,
 ) -> Result<(Circuit, Vec<Diagnostic>), Vec<Diagnostic>> {
     let mut diags: Vec<Diagnostic> = Vec::new();
 
@@ -337,9 +436,19 @@ pub fn compile(
     for e in &nl.elements {
         let (p, n) = {
             let ns = e.kind.nodes();
-            (g_id(node(ns[0])), g_id(node(ns[1])))
+            (
+                ns.first().map_or(nn, |n| g_id(node(n))),
+                ns.get(1).map_or(nn, |n| g_id(node(n))),
+            )
         };
         match &e.kind {
+            ElementKind::Va { nodes, .. } => {
+                if let Some(first) = nodes.first() {
+                    for n in &nodes[1..] {
+                        dc.union(g_id(node(first)), g_id(node(n)));
+                    }
+                }
+            }
             ElementKind::Resistor { .. } | ElementKind::Diode { .. } => {
                 dc.union(p, n);
             }
@@ -413,11 +522,73 @@ pub fn compile(
     let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
     let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
     let mut mos1 = Chunked::<Mos1s>::new(CHUNK_NONLINEAR);
+    let mut va: BTreeMap<String, Chunked<VaGroup>> = BTreeMap::new();
+    let mut va_models: HashMap<String, Arc<spx_va::Bound>> = HashMap::new();
     let mut nonlinear_count = 0usize;
     let mut model_cache = ModelCache::new(&nl.models, opts);
     let mut errors = Vec::new();
     for e in &nl.elements {
         match &e.kind {
+            ElementKind::Va {
+                nodes,
+                model,
+                params,
+            } => {
+                let Some(card) = nl.models.iter().find(|m| m.name == *model) else {
+                    errors.push(
+                        Diagnostic::error(
+                            "E-ELAB-PARAM",
+                            format!("{}: unknown model {model}", e.name),
+                        )
+                        .with_span(e.span),
+                    );
+                    continue;
+                };
+                let Some(module) = va_modules.get(&card.kind) else {
+                    errors.push(
+                        Diagnostic::error(
+                            "E-ELAB-PARAM",
+                            format!("{}: unknown Verilog-A module {}", e.name, card.kind),
+                        )
+                        .with_span(card.span),
+                    );
+                    continue;
+                };
+                let bound = if let Some(bound) = va_models.get(model) {
+                    Arc::clone(bound)
+                } else {
+                    match module.bind(&parameter_names(module, &card.params)) {
+                        Ok(bound) => {
+                            let bound = Arc::new(bound);
+                            va_models.insert(model.clone(), Arc::clone(&bound));
+                            bound
+                        }
+                        Err(ds) => {
+                            errors.extend(ds.into_iter().map(|d| {
+                                Diagnostic::error("E-ELAB-PARAM", d.message).with_span(card.span)
+                            }));
+                            continue;
+                        }
+                    }
+                };
+                let group = va
+                    .entry(card.kind.clone())
+                    .or_insert_with(|| Chunked::new(CHUNK_NONLINEAR));
+                match group.cur().push(
+                    Arc::clone(module),
+                    &e.name,
+                    nodes.iter().map(|n| node(n)).collect(),
+                    bound,
+                    params,
+                ) {
+                    Ok(()) => nonlinear_count += 1,
+                    Err(ds) => {
+                        errors.extend(ds.into_iter().map(|d| {
+                            Diagnostic::error("E-ELAB-PARAM", d.message).with_span(e.span)
+                        }))
+                    }
+                }
+            }
             ElementKind::Resistor { p, n, value } => {
                 res.cur().push(&e.name, node(p), node(n), *value)
             }
@@ -543,6 +714,9 @@ pub fn compile(
     diodes.into_groups(&mut groups);
     bjts.into_groups(&mut groups);
     mos1.into_groups(&mut groups);
+    for group in va.into_values() {
+        group.into_groups(&mut groups);
+    }
 
     // --- Unknowns and stamps ---
     let mut unknowns = Unknowns::with_nodes(node_names.iter().map(String::as_str));
@@ -631,6 +805,7 @@ pub fn compile(
 
     Ok((
         Circuit {
+            va_modules: va_modules.clone(),
             unknowns,
             num_nodes: nn,
             groups,

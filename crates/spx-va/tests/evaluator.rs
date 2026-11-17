@@ -390,7 +390,7 @@ fn user_and_fet_limiters() {
     );
     assert!(out.error.is_none(), "{:?}", out.error);
     assert_eq!(state, [0.2, 0.75]);
-    assert_eq!(out.f, [0.95]);
+    assert_eq!(out.f, [6.]);
     assert_eq!(out.df, [2.]);
     assert!(out.noncon);
     // Non-finite caller history must not cause f64::clamp to panic.
@@ -570,4 +570,45 @@ fn static_block_locals_and_output_index_capture() {
     );
     let b = m.bind(&[]).unwrap();
     assert_eq!(run(&m, &b, &[0.]).f, [5.]);
+}
+
+#[test]
+fn limited_diode_is_linearized_at_actual_voltage() {
+    let m = compile(
+        r#"module d(a,k); electrical a,k; real v;
+        analog begin v=$limit(V(a,k),"pnjlim",0.02585,0.6);
+        I(a,k)<+1e-14*(exp(v/0.02585)-1)+ddt(1e-9*1e-14*(exp(v/0.02585)-1));
+        end endmodule"#,
+    );
+    let b = m.bind(&[]).unwrap();
+    let mut current = [0.5];
+    let mut out = EvalOutput::default();
+    m.eval(
+        &b,
+        &EvalInput {
+            x: &[2., 0.],
+            temperature: 300.,
+            analysis: Analysis::Dc,
+            initial_step: false,
+            abstime: 0.,
+            gmin: 0.,
+            limit: true,
+            simparams: &|_| None,
+            mfactor: 1.,
+        },
+        StateIo {
+            accepted: &[0.5],
+            current: &mut current,
+        },
+        &mut out,
+    );
+    let v = current[0];
+    let exponential = (v / 0.02585).exp();
+    let i = 1e-14 * (exponential - 1.);
+    let g = 1e-14 * exponential / 0.02585;
+    let expected = i + g * (2. - v);
+    assert!(out.noncon && out.error.is_none());
+    assert!((out.f[0] - expected).abs() <= 4. * f64::EPSILON * expected.abs());
+    assert!((out.df[0] - g).abs() <= 4. * f64::EPSILON * g.abs());
+    assert!((out.q[0] - 1e-9 * expected).abs() <= 4. * f64::EPSILON * (1e-9 * expected).abs());
 }

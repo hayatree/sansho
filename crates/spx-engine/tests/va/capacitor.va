@@ -1,0 +1,6 @@
+// Provenance: original model from q=C*V and Accellera Verilog-AMS LRM 2.4.
+module vacap(p,n);
+inout p,n; electrical p,n;
+parameter real c=1n from [0:inf);
+analog I(p,n) <+ ddt(c*V(p,n));
+endmodule

@@ -76,6 +76,7 @@ pub(crate) struct Expanded {
     pub title: String,
     pub lines: Vec<Line>,
     pub sources: Vec<String>,
+    pub hdl: Vec<crate::HdlSource>,
     pub diags: Vec<Diagnostic>,
 }
 
@@ -240,6 +241,7 @@ fn num_text(v: f64) -> String {
 
 struct Pre<'l> {
     loader: &'l dyn SourceLoader,
+    hdl: Vec<crate::HdlSource>,
     sources: Vec<String>,
     diags: Vec<Diagnostic>,
 }
@@ -278,6 +280,20 @@ impl Pre<'_> {
         while let Some(line) = it.next() {
             let h = head(&line);
             match h.as_str() {
+                ".hdl" => {
+                    if let Some(p) = line.tokens.get(1) {
+                        match self.loader.load(unquote(&p.text), from) {
+                            Ok((path, text)) => self.hdl.push(crate::HdlSource {
+                                path,
+                                text,
+                                span: line.span(),
+                            }),
+                            Err(e) => self.error("E-PARSE-INCLUDE", e, line.span()),
+                        }
+                    } else {
+                        self.error("E-PARSE-INCLUDE", "missing HDL file name", line.span());
+                    }
+                }
                 ".end" => break,
                 ".control" => {
                     self.diags.push(
@@ -530,6 +546,12 @@ impl Flat<'_> {
             let node_slots: Vec<usize> = match letter {
                 'r' | 'c' | 'l' | 'v' | 'i' | 'd' | 'f' | 'h' => (1..3.min(n)).collect(),
                 'e' | 'g' | 'm' => (1..5.min(n)).collect(),
+                'n' => {
+                    let end = (1..n)
+                        .find(|&i| toks.get(i + 1).is_some_and(Token::is_eq))
+                        .unwrap_or(n);
+                    (1..end.saturating_sub(1)).collect()
+                }
                 'q' => {
                     let fourth_is_model = toks
                         .get(4)
@@ -551,8 +573,8 @@ impl Flat<'_> {
                     t.text = ctx.element(&t.text);
                 }
                 // Model reference of D/Q/M: the first positional token after the nodes.
-                if matches!(letter, 'd' | 'q' | 'm') {
-                    let at = node_slots.last().map_or(0, |&i| i + 1);
+                if matches!(letter, 'd' | 'q' | 'm' | 'n') {
+                    let at = node_slots.last().map_or(1, |&i| i + 1);
                     if let Some(t) = toks.get_mut(at)
                         && !t.is_eq()
                     {
@@ -848,6 +870,7 @@ pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
     let lexed = lex_source(text, 0, true);
     let mut pre = Pre {
         loader,
+        hdl: Vec::new(),
         sources: vec![String::new()],
         diags: Vec::new(),
     };
@@ -903,6 +926,7 @@ pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
     flat.run(&top, &ctx, &global, 0);
     diags.extend(flat.diags);
     Expanded {
+        hdl: pre.hdl,
         title: lexed.title,
         lines: flat.out,
         sources: pre.sources,

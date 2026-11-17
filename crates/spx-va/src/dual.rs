@@ -3,11 +3,17 @@
 #[derive(Debug, Clone)]
 pub(crate) struct Dual {
     pub v: f64,
+    /// Limiting displacement propagated independently of the Jacobian.
+    pub t: f64,
     pub d: Vec<f64>,
 }
 impl Dual {
     pub fn constant(v: f64, n: usize) -> Self {
-        Self { v, d: vec![0.; n] }
+        Self {
+            v,
+            t: 0.,
+            d: vec![0.; n],
+        }
     }
     pub fn variable(v: f64, n: usize, i: usize) -> Self {
         let mut a = Self::constant(v, n);
@@ -19,6 +25,7 @@ impl Dual {
     pub fn map(&self, v: f64, s: f64) -> Self {
         Self {
             v,
+            t: if self.t == 0. { 0. } else { self.t * s },
             d: self
                 .d
                 .iter()
@@ -29,6 +36,8 @@ impl Dual {
     pub fn combine(&self, b: &Self, v: f64, sa: f64, sb: f64) -> Self {
         Self {
             v,
+            t: (if self.t == 0. { 0. } else { self.t * sa })
+                + (if b.t == 0. { 0. } else { b.t * sb }),
             d: self
                 .d
                 .iter()

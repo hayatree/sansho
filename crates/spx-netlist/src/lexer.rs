@@ -109,12 +109,12 @@ fn tokenize(text: &str, line_no: u32, col_offset: u32, out: &mut Vec<Token>) {
             continue;
         }
         match ch {
-            '{' | '\'' => {
+            '{' | '\'' | '"' => {
                 if cur.is_empty() {
                     cur_col = col;
                 }
                 cur.push(ch);
-                close = Some(if ch == '{' { '}' } else { '\'' });
+                close = Some(if ch == '{' { '}' } else { ch });
                 depth = 0;
             }
             c if c.is_whitespace() || c == ',' || c == '(' || c == ')' => {

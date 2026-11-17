@@ -207,10 +207,21 @@ pub fn write(nl: &Netlist) -> String {
     let mut out = String::new();
     let title = nl.title.lines().next().unwrap_or("");
     let _ = writeln!(out, "{}", if title.is_empty() { "*" } else { title });
+    for h in &nl.hdl {
+        let _ = writeln!(out, ".hdl \"{}\"", h.path);
+    }
     for e in &nl.elements {
         let name = &e.name;
         let mut l = String::new();
         match &e.kind {
+            ElementKind::Va {
+                nodes,
+                model,
+                params: ps,
+            } => {
+                let _ = write!(l, "{name} {} {model}", nodes.join(" "));
+                params(&mut l, ps);
+            }
             ElementKind::Resistor { p, n, value }
             | ElementKind::Capacitor { p, n, value }
             | ElementKind::Inductor { p, n, value } => {
@@ -347,6 +358,34 @@ mod tests {
             assert_eq!(crate::parse_number(&num(v)), Some(v), "{v}");
         }
         assert_eq!(num(1.0), "1");
+    }
+
+    #[test]
+    fn hdl_and_va_round_trip() {
+        struct Loader;
+        impl crate::SourceLoader for Loader {
+            fn load(&self, path: &str, _: Option<&str>) -> Result<(String, String), String> {
+                Ok((
+                    path.into(),
+                    "module r(p,n); electrical p,n; endmodule".into(),
+                ))
+            }
+        }
+        let src = "va roundtrip\n.hdl \"model dir/r.va\"\n.model rm r r=2k\nN1 a 0 rm r=1k\n";
+        let a = crate::parse_with(src, &Loader).unwrap();
+        let once = write(&a);
+        let b = crate::parse_with(&once, &Loader).unwrap();
+        assert_eq!(write(&b), once);
+        assert_eq!(a.elements[0].kind, b.elements[0].kind);
+        assert_eq!(a.hdl[0].path, "model dir/r.va");
+        assert_eq!(a.hdl[0].text, b.hdl[0].text);
+        assert_eq!(crate::parse(src).unwrap_err()[0].code, "E-PARSE-INCLUDE");
+        assert!(
+            crate::parse("t\n.model m unknown\n")
+                .unwrap_err()
+                .iter()
+                .any(|d| d.code == "E-PARSE-MODEL")
+        );
     }
 
     #[test]

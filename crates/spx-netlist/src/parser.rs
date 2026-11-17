@@ -28,6 +28,7 @@ pub fn parse(text: &str) -> Result<Netlist, Vec<Diagnostic>> {
 pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<Diagnostic>> {
     let pre = preprocess(text, loader);
     let mut p = Parser {
+        has_hdl: !pre.hdl.is_empty(),
         diags: pre.diags,
         ..Parser::default()
     };
@@ -46,6 +47,7 @@ pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<
         return Err(p.diags);
     }
     Ok(Netlist {
+        hdl: pre.hdl,
         title: pre.title,
         sources: pre.sources,
         initial_conditions: p.ics,
@@ -61,6 +63,7 @@ pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<
 
 #[derive(Default)]
 struct Parser {
+    has_hdl: bool,
     elements: Vec<Element>,
     analyses: Vec<AnalysisCard>,
     options: Vec<OptionCard>,
@@ -186,6 +189,7 @@ impl Parser {
             Some(b'd') => self.diode(line),
             Some(b'q') => self.bjt(line),
             Some(b'm') => self.mosfet(line),
+            Some(b'n') => self.va(line),
             _ => {
                 self.err(
                     "E-PARSE-ELEMENT",
@@ -493,6 +497,33 @@ impl Parser {
         Some(())
     }
 
+    fn va(&mut self, line: &Line) -> Option<ElementKind> {
+        let t = self.need(line, 2, "Nname nodes... model [key=value ...]")?;
+        let end = (1..t.len())
+            .find(|&i| t.get(i + 1).is_some_and(Token::is_eq))
+            .unwrap_or(t.len());
+        if end < 2 {
+            return self.arity(line, "Nname nodes... model [key=value ...]");
+        }
+        let nodes = t[1..end - 1].iter().map(node_name).collect();
+        let model = t[end - 1].lower();
+        let mut params = Vec::new();
+        let mut i = end;
+        while i < t.len() {
+            if !t.get(i + 1).is_some_and(Token::is_eq) || t.get(i + 2).is_none() {
+                self.err("E-PARSE-ARITY", "expected key=value", t[i].span);
+                return None;
+            }
+            params.push((t[i].lower(), self.number(&t[i + 2], "VA parameter")?));
+            i += 3;
+        }
+        Some(ElementKind::Va {
+            nodes,
+            model,
+            params,
+        })
+    }
+
     fn diode(&mut self, line: &Line) -> Option<ElementKind> {
         let usage = "Dname n+ n- model [area] [off]";
         let mut f = self.device_fields(line)?;
@@ -689,6 +720,7 @@ impl Parser {
             let expected: &[&str] = match e.kind {
                 ElementKind::Diode { .. } => &["d"],
                 ElementKind::Bjt { .. } => &["npn", "pnp"],
+                ElementKind::Va { .. } => &[],
                 _ => &["nmos", "pmos"],
             };
             match self.models.iter().find(|m| m.name == name) {
@@ -699,18 +731,19 @@ impl Parser {
                     )
                     .with_span(e.span),
                 ),
-                Some(m) if !expected.contains(&m.kind.as_str()) => errs.push(
-                    Diagnostic::error(
-                        "E-PARSE-MODEL",
-                        format!(
-                            "`{}` needs a model of type {}, but `{name}` is of type `{}`",
-                            e.name,
-                            expected.join("/"),
-                            m.kind
-                        ),
-                    )
-                    .with_span(e.span),
-                ),
+                Some(m) if !expected.is_empty() && !expected.contains(&m.kind.as_str()) => errs
+                    .push(
+                        Diagnostic::error(
+                            "E-PARSE-MODEL",
+                            format!(
+                                "`{}` needs a model of type {}, but `{name}` is of type `{}`",
+                                e.name,
+                                expected.join("/"),
+                                m.kind
+                            ),
+                        )
+                        .with_span(e.span),
+                    ),
                 Some(_) => {}
             }
         }
@@ -723,7 +756,7 @@ impl Parser {
         };
         let name = t[1].lower();
         let kind = t[2].lower();
-        if !MODEL_TYPES.contains(&kind.as_str()) {
+        if !self.has_hdl && !MODEL_TYPES.contains(&kind.as_str()) {
             self.diags.push(
                 Diagnostic::error(
                     "E-PARSE-MODEL",

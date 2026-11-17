@@ -39,6 +39,21 @@ pub(crate) fn text(s: &str) -> String {
     Fnv::new().bytes(s.as_bytes()).hex()
 }
 
+/// Canonical deck plus retained HDL source text; no-HDL decks keep their existing hash.
+pub(crate) fn netlist(nl: &spx_netlist::Netlist) -> String {
+    let deck = spx_netlist::write(nl);
+    if nl.hdl.is_empty() {
+        return text(&deck);
+    }
+    let mut hash = Fnv::new();
+    hash.bytes(deck.as_bytes());
+    for h in &nl.hdl {
+        hash.bytes(&(h.text.len() as u64).to_le_bytes())
+            .bytes(h.text.as_bytes());
+    }
+    hash.hex()
+}
+
 /// Bit-exact hash of all numeric results (independent of thread count by construction).
 pub(crate) fn results(r: &SimResults) -> String {
     let mut h = Fnv::new();
