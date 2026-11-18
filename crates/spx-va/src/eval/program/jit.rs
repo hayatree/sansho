@@ -5,11 +5,12 @@ mod abi;
 mod arithmetic;
 mod guards;
 mod lower;
+mod split;
 
 use super::*;
 use std::io::Write;
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug, serde::Serialize)]
 struct Key {
     parameters: Vec<(u64, Option<Arc<str>>)>,
     given: Vec<bool>,
@@ -17,10 +18,14 @@ struct Key {
     connected: usize,
     temperature: u64,
     multiplier: u64,
+    tnom: u64,
+    gmin: u64,
 }
 
+type Cell = Arc<std::sync::OnceLock<Option<Arc<Kernel>>>>;
+
 #[derive(Debug, Default)]
-pub(crate) struct Cache(Mutex<HashMap<Key, Option<Arc<Kernel>>>>);
+pub(crate) struct Cache(Mutex<HashMap<Key, Cell>>);
 
 #[derive(Debug)]
 struct Kernel {
@@ -29,6 +34,33 @@ struct Kernel {
     queries: Vec<String>,
     stores: Vec<(usize, Ty)>,
     regular: bool,
+}
+
+impl Bound {
+    /// Identify instances that share a native specialization within this module.
+    pub fn specialization_key(
+        &self,
+        temperature: f64,
+        mfactor: f64,
+    ) -> impl std::hash::Hash + Eq + use<> {
+        self.native_key(temperature, mfactor)
+    }
+    fn native_key(&self, temperature: f64, mfactor: f64) -> Key {
+        Key {
+            tnom: self.sim.tnom.to_bits(),
+            gmin: self.sim.gmin.to_bits(),
+            parameters: self
+                .values
+                .iter()
+                .map(|v| (v.f.v.to_bits(), v.text.clone()))
+                .collect(),
+            given: self.given.clone(),
+            layout: self.layout.map.clone(),
+            connected: self.connected_ports,
+            temperature: temperature.to_bits(),
+            multiplier: mfactor.to_bits(),
+        }
+    }
 }
 
 impl CompiledModule {
@@ -60,51 +92,89 @@ impl CompiledModule {
         input: &EvalInput<'_>,
         report: impl FnOnce(Diagnostic),
     ) -> Option<Arc<Kernel>> {
-        let key = Key {
-            parameters: b
-                .values
-                .iter()
-                .map(|v| (v.f.v.to_bits(), v.text.clone()))
-                .collect(),
-            given: b.given.clone(),
-            layout: b.layout.map.clone(),
-            connected: b.connected_ports,
-            temperature: input.temperature.to_bits(),
-            multiplier: input.mfactor.to_bits(),
-        };
+        let key = b.native_key(input.temperature, input.mfactor);
         let mut cache = self.kernels.0.lock().unwrap_or_else(|e| e.into_inner());
-        cache
-            .entry(key)
-            .or_insert_with(|| {
-                let result = Program::compile(self, b, input, self.states == 0)
-                    .ok_or_else(|| "binding requires the general evaluator".to_string())
-                    .and_then(|p| {
-                        let regular = self.states == 0
-                            && !p
-                                .ops
-                                .iter()
-                                .any(|op| matches!(op, Op::Ddx(..) | Op::Remember(..)));
-                        let p = if regular {
-                            Program::compile_channels(self, b, input, true, true)
-                                .ok_or("charge specialization failed")?
-                        } else {
-                            p
-                        };
-                        Kernel::compile(p, b.layout.unknown_len(), self.slots, self.states, regular)
+        let cell = cache.entry(key);
+        if let std::collections::hash_map::Entry::Occupied(ref occupied) = cell
+            && let Some(result) = occupied.get().get()
+        {
+            return result.clone();
+        }
+        let disk = self.artifact.as_ref().and_then(|artifact| {
+            serde_json::to_vec(cell.key())
+                .ok()
+                .map(|bytes| artifact.child(&[&bytes]))
+        });
+        let cell = cell.or_default().clone();
+        drop(cache);
+        cell.get_or_init(|| {
+            let result =
+                self.specialize_native(b, input, disk.as_ref())
+                    .and_then(|(spec, native)| {
+                        let _phase = spx_diag::Phase::start("jit");
+                        Kernel::compile(
+                            spec.program,
+                            b.layout.unknown_len(),
+                            self.slots,
+                            self.states,
+                            spec.regular,
+                            native.as_ref(),
+                        )
                     });
-                match result {
-                    Ok(kernel) => Some(Arc::new(kernel)),
-                    Err(reason) => {
-                        report(Diagnostic::information(
-                            "I-VA-JIT",
-                            format!("{} uses the interpreter: {reason}", self.name),
-                        ));
-                        None
-                    }
+            match result {
+                Ok(kernel) => Some(Arc::new(kernel)),
+                Err(reason) => {
+                    report(Diagnostic::information(
+                        "I-VA-JIT",
+                        format!("{} uses the interpreter: {reason}", self.name),
+                    ));
+                    None
                 }
-            })
-            .clone()
+            }
+        })
+        .clone()
     }
+
+    fn specialize_native(
+        &self,
+        b: &Bound,
+        input: &EvalInput<'_>,
+        disk: Option<&crate::cache::Artifact>,
+    ) -> Result<(Specialization, Option<crate::cache::Artifact>), String> {
+        let _phase = spx_diag::Phase::start("specialize");
+        if let Some(entry) = disk
+            && let Some(bytes) = entry.read()
+            && let Ok(spec) = serde_json::from_slice(&bytes)
+        {
+            return Ok((spec, Some(entry.child(&[b"native", &bytes]))));
+        }
+        let p = Program::compile(self, b, input, self.states == 0)
+            .ok_or("binding requires the general evaluator")?;
+        let regular = self.states == 0
+            && !p
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::Ddx(..) | Op::Remember(..)));
+        let program = if regular {
+            Program::compile_channels(self, b, input, true, true)
+                .ok_or("charge specialization failed")?
+        } else {
+            p
+        };
+        let spec = Specialization { regular, program };
+        let native = disk.and_then(|entry| {
+            let bytes = serde_json::to_vec(&spec).ok()?;
+            entry.write(&bytes);
+            Some(entry.child(&[b"native", &bytes]))
+        });
+        Ok((spec, native))
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Specialization {
+    regular: bool,
+    program: Program,
 }
 
 impl Kernel {
@@ -114,6 +184,7 @@ impl Kernel {
         slots: usize,
         states: usize,
         regular: bool,
+        disk: Option<&crate::cache::Artifact>,
     ) -> Result<Self, String> {
         // Every native displacement is a signed 32-bit byte offset.
         for elements in [
@@ -150,7 +221,7 @@ impl Kernel {
             .collect();
 
         // Some backend resource/ISA failures are reported by Cranelift as unwinds.
-        let code = std::panic::catch_unwind(|| lower::compile(&p, n, regular))
+        let code = std::panic::catch_unwind(|| lower::compile(&p, n, regular, disk))
             .map_err(|_| "native backend failed during compilation".to_string())??;
         Ok(Self {
             code,
@@ -173,6 +244,7 @@ pub(super) struct Instance {
     key: Option<(u64, u64)>,
     kernel: Option<std::sync::Weak<Kernel>>,
     history: Vec<f64>,
+    bridge: Vec<f64>,
     pub(super) replay: Vec<Option<f64>>,
 }
 
@@ -242,15 +314,18 @@ impl Instance {
             log: &mut self.replay,
             panic: None,
         };
-        let ok = kernel.code.run(&mut abi::Frame::new(
-            input,
-            b,
-            state,
-            out,
-            &kernel.constants,
-            &mut self.history,
-            &mut queries,
-        ));
+        let ok = kernel.code.run(
+            &mut abi::Frame::new(
+                input,
+                b,
+                state,
+                out,
+                &kernel.constants,
+                &mut self.history,
+                &mut queries,
+            ),
+            &mut self.bridge,
+        );
         if let Some(payload) = queries.panic {
             std::panic::resume_unwind(payload)
         }

@@ -34,6 +34,11 @@ pub(super) extern "C" fn query(q: &mut Queries<'_>, i: i32, default: f64) -> f64
 
 #[repr(C)]
 pub(super) struct Frame<'a> {
+    pub bridge: *mut f64,
+    pub math: *const [arithmetic::Shim; 3],
+    pub query_fn: extern "C" fn(&mut Queries<'_>, i32, f64) -> f64,
+    pub pn_fn: extern "C" fn(f64, f64, f64, f64) -> f64,
+    pub fet_fn: extern "C" fn(f64, f64, f64, f64) -> f64,
     pub x: *const f64,
     pub constants: *const f64,
     pub history: *mut f64,
@@ -68,6 +73,11 @@ impl<'a> Frame<'a> {
         queries: &'a mut Queries<'_>,
     ) -> Self {
         Self {
+            bridge: std::ptr::null_mut(),
+            math: arithmetic::TABLE.as_ptr(),
+            query_fn: query,
+            pn_fn: lower::pnjlim,
+            fet_fn: lower::fetlim,
             x: input.x.as_ptr(),
             constants: constants.as_ptr(),
             history: history.as_mut_ptr(),
@@ -107,8 +117,11 @@ impl Drop for Pages {
     }
 }
 
+type Entry = unsafe extern "C" fn(&Frame<'_>) -> i32;
+
 pub(super) struct Code {
-    entry: unsafe extern "C" fn(&Frame<'_>) -> i32,
+    entry: Entry,
+    continuation: Option<(Entry, usize)>,
     _pages: Pages,
 }
 impl std::fmt::Debug for Code {
@@ -117,7 +130,12 @@ impl std::fmt::Debug for Code {
     }
 }
 impl Code {
-    pub fn finalize(mut pages: Pages, id: FuncId) -> Result<Self, String> {
+    pub fn finalize(
+        mut pages: Pages,
+        id: FuncId,
+        next: Option<FuncId>,
+        slots: usize,
+    ) -> Result<Self, String> {
         let module = pages
             .0
             .get_mut()
@@ -125,18 +143,29 @@ impl Code {
             .as_mut()
             .ok_or("missing JIT module")?;
         module.finalize_definitions().map_err(|e| e.to_string())?;
-        let ptr = module.get_finalized_function(id);
-        // SAFETY: lower::compile declared this entry with the host C ABI, one
-        // Frame pointer parameter and an i32 result. Pages keeps the code alive.
-        let entry = unsafe {
-            std::mem::transmute::<*const u8, unsafe extern "C" fn(&Frame<'_>) -> i32>(ptr)
+        let entry = |id| {
+            let ptr = module.get_finalized_function(id);
+            // SAFETY: both entries use the host C ABI with one Frame pointer and
+            // an i32 result. Pages owns both for the lifetime of Code.
+            unsafe { std::mem::transmute::<*const u8, Entry>(ptr) }
         };
         Ok(Self {
-            entry,
+            entry: entry(id),
+            continuation: next.map(|id| (entry(id), slots)),
             _pages: pages,
         })
     }
-    pub fn run(&self, frame: &mut Frame<'_>) -> i32 {
+    pub fn run(&self, frame: &mut Frame<'_>, bridge: &mut Vec<f64>) -> i32 {
+        if let Some((next, slots)) = self.continuation {
+            bridge.resize(slots, 0.);
+            frame.bridge = bridge.as_mut_ptr();
+            // SAFETY: the same checked compilation fixes both handoff layouts.
+            // The first half only exports values and both calls borrow this buffer.
+            unsafe {
+                (self.entry)(frame);
+                return next(frame);
+            }
+        }
         // SAFETY: evaluation validated the unknown/state/output lengths against
         // this binding. The compiler bounds displacements by the same layout.
         // All call-local slices and callback borrows live through this call.

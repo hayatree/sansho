@@ -245,6 +245,7 @@ fn source_stepping(
 
 /// `.op`
 pub(crate) fn op(ckt: &Circuit, opts: &SimOptions) -> Result<AnalysisResult, Diagnostic> {
+    let _phase = spx_diag::Phase::start("analysis");
     let mut ws = Workspace::new(ckt);
     let mut x = vec![0.0; ckt.dim()];
     solve_op(
@@ -279,6 +280,7 @@ pub(crate) fn dc_sweep(
     stop: f64,
     step: f64,
 ) -> Result<(AnalysisResult, crate::DcStats), Diagnostic> {
+    let _phase = spx_diag::Phase::start("analysis");
     let Some(original) = ckt.param(source, "dc") else {
         return Err(Diagnostic::error(
             "E-DC-SOURCE",
@@ -377,6 +379,7 @@ pub(crate) fn ac(
     fstart: f64,
     fstop: f64,
 ) -> Result<AnalysisResult, Diagnostic> {
+    let _phase = spx_diag::Phase::start("analysis");
     let n = ckt.dim();
     let mut ws = Workspace::new(ckt);
     let mut x = vec![0.0; n];
@@ -586,6 +589,7 @@ pub(crate) fn tran(
     tmax: Option<f64>,
     uic: bool,
 ) -> Result<(AnalysisResult, crate::TranStats), Diagnostic> {
+    let _phase = spx_diag::Phase::start("analysis");
     let n = ckt.dim();
     let tp = TranParams { tstep, tstop };
     let mut ctx = make_ctx(opts, Mode::Tran, tp);

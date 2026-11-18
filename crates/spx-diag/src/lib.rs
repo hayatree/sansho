@@ -14,7 +14,7 @@ pub use codes::{CODES, CodeInfo, lookup};
 use serde::Serialize;
 
 /// A position in a netlist source (1-based line and column).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, Serialize)]
 pub struct Span {
     /// 1-based line number.
     pub line: u32,
@@ -22,7 +22,7 @@ pub struct Span {
     pub col: u32,
     /// Source file index: 0 is the main netlist, others index the netlist's `sources`
     /// (`.include` / `.lib` files).
-    #[serde(skip_serializing_if = "is_zero")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub file: u32,
 }
 
@@ -274,3 +274,34 @@ fn kind_name(k: CulpritKind) -> &'static str {
 }
 
 impl std::error::Error for Diagnostic {}
+
+/// Optional wall-clock probe for startup and analysis benchmarks.
+#[derive(Debug)]
+pub struct Phase(&'static str, Option<std::time::Instant>);
+
+impl Phase {
+    /// Emit a machine-readable elapsed time on drop when SPX_PROFILE is set.
+    pub fn start(name: &'static str) -> Self {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        Self(
+            name,
+            ENABLED
+                .get_or_init(|| std::env::var_os("SPX_PROFILE").is_some())
+                .then(std::time::Instant::now),
+        )
+    }
+}
+
+impl Drop for Phase {
+    fn drop(&mut self) {
+        if let Some(start) = self.1 {
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "spx-phase {} {:.6}",
+                self.0,
+                start.elapsed().as_secs_f64() * 1000.
+            );
+        }
+    }
+}

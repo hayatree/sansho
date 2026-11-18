@@ -25,6 +25,10 @@ use crate::lexer::{Line, Token, lex_source};
 
 /// Supplies the text of `.include` / `.lib` files.
 pub trait SourceLoader {
+    /// Identify an immutable include during this parse, for lexed-library reuse.
+    fn cache_path(&self, _path: &str, _from: Option<&str>) -> Option<PathBuf> {
+        None
+    }
     /// Load `path` as written in a netlist; `from` is the resolved path of the including
     /// file (`None` for the main netlist). Returns the resolved path and the file text.
     fn load(&self, path: &str, from: Option<&str>) -> Result<(String, String), String>;
@@ -70,6 +74,10 @@ impl FsLoader {
 }
 
 impl SourceLoader for FsLoader {
+    fn cache_path(&self, path: &str, from: Option<&str>) -> Option<PathBuf> {
+        Some(self.resolve(path, from))
+    }
+
     fn load(&self, path: &str, from: Option<&str>) -> Result<(String, String), String> {
         let full = self.resolve(path, from);
         let bytes =
@@ -98,7 +106,7 @@ const MAX_DEPTH: usize = 64;
 struct SubcktDef {
     ports: Vec<String>,
     /// Default parameters (`name = expr`), evaluated in the instance scope.
-    defaults: Vec<(String, Expr)>,
+    defaults: Vec<(String, Rc<Expr>)>,
     /// Body lines for per-instance elaboration.
     body: Vec<Line>,
     span: Span,
@@ -108,7 +116,8 @@ struct SubcktDef {
 struct Scope<'p> {
     parent: Option<&'p Scope<'p>>,
     fixed: HashMap<String, f64>,
-    defs: HashMap<String, Expr>,
+    defs: HashMap<String, Rc<Expr>>,
+    expressions: Rc<RefCell<HashMap<String, Rc<Expr>>>>,
     cache: RefCell<HashMap<String, f64>>,
     busy: RefCell<HashSet<String>>,
 }
@@ -117,6 +126,7 @@ impl<'p> Scope<'p> {
     fn new(parent: Option<&'p Scope<'p>>) -> Self {
         Self {
             parent,
+            expressions: parent.map(|p| p.expressions.clone()).unwrap_or_default(),
             fixed: HashMap::new(),
             defs: HashMap::new(),
             cache: RefCell::new(HashMap::new()),
@@ -147,8 +157,17 @@ impl<'p> Scope<'p> {
         }
     }
 
+    fn expression(&self, text: &str) -> Result<Rc<Expr>, String> {
+        if let Some(e) = self.expressions.borrow().get(text) {
+            return Ok(e.clone());
+        }
+        let e = Rc::new(parse_expr(text)?);
+        self.expressions.borrow_mut().insert(text.into(), e.clone());
+        Ok(e)
+    }
+
     fn eval_text(&self, text: &str, funcs: &Funcs) -> Result<f64, String> {
-        let e = parse_expr(text)?;
+        let e = self.expression(text)?;
         eval(&e, &|n| self.get(n, funcs), funcs)
     }
 }
@@ -251,6 +270,7 @@ fn num_text(v: f64) -> String {
 }
 
 struct Pre<'l> {
+    libraries: HashMap<PathBuf, Rc<Vec<Line>>>,
     loader: &'l dyn SourceLoader,
     hdl: Vec<crate::HdlSource>,
     sources: Vec<String>,
@@ -264,12 +284,20 @@ impl Pre<'_> {
     }
 
     /// Load and lex a file, retaining its resolved path in the span source table.
-    fn load(&mut self, path: &str, from: Option<&str>, span: Span) -> Option<Vec<Line>> {
+    fn load(&mut self, path: &str, from: Option<&str>, span: Span) -> Option<Rc<Vec<Line>>> {
+        let key = self.loader.cache_path(path, from);
+        if let Some(lines) = key.as_ref().and_then(|k| self.libraries.get(k)) {
+            return Some(lines.clone());
+        }
         match self.loader.load(path, from) {
             Ok((resolved, text)) => {
                 let idx = self.sources.len() as u32;
                 self.sources.push(resolved);
-                Some(lex_source(&text, idx, false).lines)
+                let lines = Rc::new(lex_source(&text, idx, false).lines);
+                if let Some(key) = key {
+                    self.libraries.insert(key, lines.clone());
+                }
+                Some(lines)
             }
             Err(e) => {
                 self.diags.push(
@@ -356,7 +384,7 @@ impl Pre<'_> {
                         continue;
                     };
                     if let Some(lines) = self.load(unquote(&p.text), from, line.span()) {
-                        self.expand(lines, depth + 1, out);
+                        self.expand(Rc::unwrap_or_clone(lines), depth + 1, out);
                     }
                 }
                 ".lib" if line.tokens.len() >= 3 => {
@@ -684,7 +712,7 @@ impl Flat<'_> {
                 ".param" if nested == 0 => {
                     let parsed = split_assignments(raw_rest(l)).and_then(|pairs| {
                         for (name, value) in pairs {
-                            scope.defs.insert(name, parse_expr(&value)?);
+                            scope.defs.insert(name, scope.expression(&value)?);
                         }
                         Ok(())
                     });
@@ -971,7 +999,7 @@ fn collect(
                         i += 1;
                     } else if t.get(i + 1).is_some_and(Token::is_eq) {
                         match t.get(i + 2).map(|v| parse_expr(&v.text)) {
-                            Some(Ok(e)) => defaults.push((lower, e)),
+                            Some(Ok(e)) => defaults.push((lower, Rc::new(e))),
                             Some(Err(e)) => diags.push(
                                 Diagnostic::error("E-PARSE-EXPR", format!("`{lower}`: {e}"))
                                     .with_span(t[i].span),
@@ -1053,11 +1081,13 @@ fn collect(
 
 /// Preprocess a netlist: includes, libraries, parameters, functions and subcircuits.
 pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
+    let _phase = spx_diag::Phase::start("netlist_pre");
     let lexed = lex_source(text, 0, true);
     let mut flat = Flat {
         defs: Defs::default(),
         pre: Pre {
             loader,
+            libraries: Default::default(),
             hdl: Vec::new(),
             sources: vec![String::new()],
             diags: vec![],
@@ -1086,6 +1116,8 @@ pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
         ports: HashMap::new(),
         local_models: &empty,
     };
+    drop(_phase);
+    let _phase = spx_diag::Phase::start("flatten");
     flat.run(&top, &ctx, &global, 0);
     flat.diags.extend(flat.pre.diags);
     Expanded {

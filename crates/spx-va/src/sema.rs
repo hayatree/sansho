@@ -52,6 +52,7 @@ pub fn compile_module(
     src: &ast::SourceFile,
     name: Option<&str>,
 ) -> Result<CompiledModule, Vec<Diagnostic>> {
+    let _phase = spx_diag::Phase::start("va_sema_lower");
     let module = match name {
         Some(n) => src.modules.iter().find(|m| m.name.name == n),
         None => src.modules.last(),
@@ -377,6 +378,8 @@ fn lower(m: &ast::Module, potentials: BTreeSet<String>) -> R<CompiledModule> {
     Ok(CompiledModule {
         #[cfg(feature = "jit")]
         kernels: Default::default(),
+        #[cfg(feature = "jit")]
+        artifact: None,
         history,
         optional_ports: l.optional_ports,
         param_index,

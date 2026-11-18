@@ -3,6 +3,7 @@
 use spx_diag::Span;
 
 /// An identifier with its source position.
+#[cfg_attr(feature = "jit", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ident {
     /// Declared identifier.
@@ -101,6 +102,7 @@ pub enum ItemKind {
     },
 }
 /// Placement of external overrides specified by the parameter's type attribute.
+#[cfg_attr(feature = "jit", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamKind {
     /// Explicit model-card parameter.
@@ -127,6 +129,7 @@ pub struct ParamDecl {
     pub span: Span,
 }
 /// A from/exclude interval or singleton constraint.
+#[cfg_attr(feature = "jit", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Range {
     /// Whether matching values are excluded.
@@ -273,6 +276,7 @@ pub enum StmtKind {
     Empty,
 }
 /// An expression with its source position.
+#[cfg_attr(feature = "jit", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
     /// Syntactic form.
@@ -281,12 +285,13 @@ pub struct Expr {
     pub span: Span,
 }
 /// Analog expression variants.
+#[cfg_attr(feature = "jit", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     /// Integer literal.
     Int(i64),
     /// Real literal.
-    Real(f64),
+    Real(#[cfg_attr(feature = "jit", serde(with = "crate::cache::bits"))] f64),
     /// String literal.
     Str(String),
     /// Identifier reference.

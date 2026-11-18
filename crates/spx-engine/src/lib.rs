@@ -308,7 +308,13 @@ fn card_span(card: &AnalysisCard) -> spx_diag::Span {
 pub fn run_with(nl: &Netlist, cfg: &RunConfig) -> Result<RunOutput, RunError> {
     #[cfg(feature = "jit")]
     if !nl.hdl.is_empty() && matches!(nl.analyses.as_slice(), [AnalysisCard::Tran { .. }]) {
-        let checked = check_run(nl)?;
+        // Respect the caller's thread limit during cold parallel compilation as well.
+        let bindings = nl
+            .elements
+            .iter()
+            .filter(|e| matches!(e.kind, spx_netlist::ElementKind::Va { .. }))
+            .count();
+        let checked = parallel::with_threads(cfg.threads.min(bindings.max(1)), || check_run(nl))?;
         let ckt = &checked.circuit;
         // A single transient has at most one ready job per device group or
         // gather chunk. Idle workers otherwise contend on every Newton assembly.

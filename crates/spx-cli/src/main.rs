@@ -148,6 +148,7 @@ fn loader(path: &std::path::Path) -> spx_netlist::FsLoader {
 }
 
 fn read(path: &PathBuf) -> Result<String, ExitCode> {
+    let _phase = spx_diag::Phase::start("read");
     std::fs::read_to_string(path).map_err(|e| {
         eprintln!("error: cannot read {}: {e}", path.display());
         ExitCode::from(2)
@@ -239,6 +240,7 @@ fn run(
     };
     match spx_engine::run_with(&nl, &config(jobs)) {
         Ok(out) => {
+            let _phase = spx_diag::Phase::start("output");
             if let Some(p) = raw {
                 write_raw(p, &out.results)?;
             }

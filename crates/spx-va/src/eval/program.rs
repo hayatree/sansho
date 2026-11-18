@@ -15,12 +15,14 @@ use std::collections::{HashMap, HashSet};
 
 type Reg = usize;
 
+#[cfg_attr(feature = "jit", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Pair {
     f: Reg,
     q: Reg,
 }
 
+#[cfg_attr(feature = "jit", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 enum Op {
     Math(Reg, Math, Reg, Reg),
@@ -66,10 +68,13 @@ pub(super) struct Machine {
     #[cfg(feature = "jit")]
     native: jit::Instance,
 }
+#[cfg_attr(feature = "jit", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Default, Debug)]
 struct Program {
     ops: Vec<Op>,
+    #[cfg_attr(feature = "jit", serde(with = "crate::cache::vector_bits"))]
     values: Vec<f64>,
+    #[cfg_attr(feature = "jit", serde(skip))]
     rows: Vec<f64>,
     gradient_count: usize,
 }

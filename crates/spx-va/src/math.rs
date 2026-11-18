@@ -1,6 +1,7 @@
 //! Scalar math and local chain-rule factors shared by both interpreters.
 //! Provenance: original work from elementary calculus and the Accellera Verilog-AMS LRM.
 
+#[cfg_attr(feature = "jit", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum Math {
     Add,

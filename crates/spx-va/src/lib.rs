@@ -4,6 +4,10 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 pub mod ast;
+#[cfg(feature = "jit")]
+mod cache;
+#[cfg(feature = "jit")]
+pub use cache::compile_source_cached;
 mod dual;
 mod eval;
 mod ir;
@@ -43,7 +47,10 @@ impl VaLoader for NoVaFiles {
 }
 /// Parse analog syntax; call `compile_module` for semantic validation and lowering.
 pub fn parse_va(text: &str, loader: &dyn VaLoader) -> Result<SourceFile, Vec<Diagnostic>> {
+    let pre = spx_diag::Phase::start("va_pre");
     let (source, mut diagnostics) = preproc::preprocess(text, loader);
+    drop(pre);
+    let _phase = spx_diag::Phase::start("va_parse");
     let (tokens, errors) = lexer::lex(&source);
     diagnostics.extend(errors);
     let (tree, errors) = parser::parse(tokens, source.sources);
@@ -60,4 +67,44 @@ pub fn parse_va(text: &str, loader: &dyn VaLoader) -> Result<SourceFile, Vec<Dia
 #[cfg(feature = "jit")]
 pub fn jit_enabled() -> bool {
     std::env::var_os("SPX_VA_JIT").is_none_or(|value| value != "0")
+}
+
+/// A semantically checked translation unit in source order.
+#[derive(Debug)]
+pub struct CompiledSource {
+    /// File names for translating diagnostic spans.
+    pub sources: Vec<String>,
+    /// All module declarations, including validated types unused by the circuit.
+    pub declarations: Vec<(spx_diag::Span, String)>,
+    /// Compiled modules selected for binding.
+    pub modules: Vec<CompiledModule>,
+}
+
+/// Compile every module, preserving source names for diagnostics.
+pub fn compile_source(
+    text: &str,
+    loader: &dyn VaLoader,
+) -> Result<CompiledSource, (Vec<Diagnostic>, Vec<String>)> {
+    let ast = parse_va(text, loader).map_err(|ds| (ds, Vec::new()))?;
+    let mut errors = Vec::new();
+    let mut modules = Vec::new();
+    for module in &ast.modules {
+        match compile_module(&ast, Some(&module.name.name)) {
+            Ok(compiled) => modules.push(compiled),
+            Err(ds) => errors.extend(ds),
+        }
+    }
+    if errors.is_empty() {
+        Ok(CompiledSource {
+            declarations: ast
+                .modules
+                .into_iter()
+                .map(|m| (m.span, m.name.name))
+                .collect(),
+            sources: ast.sources,
+            modules,
+        })
+    } else {
+        Err((errors, ast.sources))
+    }
 }

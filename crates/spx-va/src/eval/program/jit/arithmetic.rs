@@ -20,7 +20,20 @@ macro_rules! shims {
         [primal, left, right]
     }};
 }
-type Shim = extern "C" fn(f64, f64) -> f64;
+pub(super) type Shim = extern "C" fn(f64, f64) -> f64;
+
+macro_rules! math_table {
+    ($($op:ident),+) => {
+        #[derive(Clone, Copy)]
+        #[repr(usize)]
+        enum Row { $($op),+ }
+        pub(super) static TABLE: &[[Shim; 3]] = &[$(shims!($op)),+];
+    }
+}
+math_table!(
+    Exp, Ln, Sqrt, Pow, Min, Max, Limexp, Log, Sin, Cos, Tan, Asin, Acos, Atan, Sinh, Cosh, Tanh,
+    Asinh, Acosh, Atanh, Hypot, Atan2
+);
 
 impl Lower<'_, '_> {
     pub(super) fn math(
@@ -35,7 +48,7 @@ impl Lower<'_, '_> {
         let z = self.num(0.);
         let one = self.num(1.);
         let minus = self.num(-1.);
-        let fns: [Shim; 3] = match m {
+        let row = match m {
             Add => return (self.fb.ins().fadd(x, y), one, one),
             Sub => return (self.fb.ins().fsub(x, y), one, minus),
             Mul => return (self.fb.ins().fmul(x, y), y, x),
@@ -70,33 +83,33 @@ impl Lower<'_, '_> {
                 let sa = self.fb.ins().select(pos, one, sa);
                 return (self.fb.ins().fabs(x), sa, z);
             }
-            Exp => shims!(Exp),
-            Ln => shims!(Ln),
-            Sqrt => shims!(Sqrt),
-            Pow => shims!(Pow),
+            Exp => Row::Exp,
+            Ln => Row::Ln,
+            Sqrt => Row::Sqrt,
+            Pow => Row::Pow,
             Floor => return (self.fb.ins().floor(x), z, z),
             Ceil => return (self.fb.ins().ceil(x), z, z),
             Trunc => return (self.fb.ins().trunc(x), z, z),
-            Min => shims!(Min),
-            Max => shims!(Max),
-            Limexp => shims!(Limexp),
-            Log => shims!(Log),
-            Sin => shims!(Sin),
-            Cos => shims!(Cos),
-            Tan => shims!(Tan),
-            Asin => shims!(Asin),
-            Acos => shims!(Acos),
-            Atan => shims!(Atan),
-            Sinh => shims!(Sinh),
-            Cosh => shims!(Cosh),
-            Tanh => shims!(Tanh),
-            Asinh => shims!(Asinh),
-            Acosh => shims!(Acosh),
-            Atanh => shims!(Atanh),
-            Hypot => shims!(Hypot),
-            Atan2 => shims!(Atan2),
+            Min => Row::Min,
+            Max => Row::Max,
+            Limexp => Row::Limexp,
+            Log => Row::Log,
+            Sin => Row::Sin,
+            Cos => Row::Cos,
+            Tan => Row::Tan,
+            Asin => Row::Asin,
+            Acos => Row::Acos,
+            Atan => Row::Atan,
+            Sinh => Row::Sinh,
+            Cosh => Row::Cosh,
+            Tanh => Row::Tanh,
+            Asinh => Row::Asinh,
+            Acosh => Row::Acosh,
+            Atanh => Row::Atanh,
+            Hypot => Row::Hypot,
+            Atan2 => Row::Atan2,
         };
-        let v = self.call(fns[0] as usize, &[x, y]);
+        let v = self.math_call(row as usize, 0, x, y);
         if !left && !right {
             return (v, z, z);
         }
@@ -111,11 +124,11 @@ impl Lower<'_, '_> {
                     self.fb.ins().fdiv(half, v)
                 }
                 Floor | Ceil | Trunc => z,
-                _ => self.call(fns[1] as usize, &[x, y]),
+                _ => self.math_call(row as usize, 1, x, y),
             }
         };
         let b = if right && matches!(m, Pow | Hypot | Atan2 | Min | Max) {
-            self.call(fns[2] as usize, &[x, y])
+            self.math_call(row as usize, 2, x, y)
         } else {
             z
         };

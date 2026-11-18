@@ -573,3 +573,204 @@ the current build while retaining the bitwise tests. On the default ring21
 pool, gather and LU together take about 49 ms. Precomputing contiguous runs
 of source slots in gather order and reusing the numeric LU pivot order are
 separate experiments for that path.
+
+## 14. Optimization round 1 — startup
+
+A Unix JIT build caches three compiler stages under `$SPX_CACHE_DIR`, defaulting
+to `$XDG_CACHE_HOME/spx` or `~/.cache/spx`. Set `SPX_CACHE=0` or
+`.option va_cache=0` to bypass all disk reads and writes. These settings still
+allow identical bindings to share a kernel within a run. Other platforms use
+in-process compilation.
+
+* The front end records the include requests it actually made, including
+  missing local overrides of built-in headers. On a hit it repeats those
+  lookups and checks resolved names and content digests. The manifest retains
+  the declarations of every validated module. Only bodies referenced by VA
+  model cards in use need to be deserialized. Cold compilation checks unused
+  modules and duplicate declarations too.
+* The second stage stores the optimized scalar program for a binding. Its
+  identity includes input text and includes, parameter bits and strings,
+  explicit-supply flags, port connectivity and layout, temperatures, gmin and
+  multiplier. Floating-point constants retain their IEEE 754 bits.
+* The machine-code key adds the serialized program (including all hoisted
+  constants), the native target, ISA flags, Cranelift settings and frame width.
+  A build fingerprint covers the spx version, VA compiler source, built-in
+  headers, Cargo.lock (including Cranelift), Rust compiler, target and build
+  flags. Math, query and limiter calls load their current addresses from the
+  call frame. A relocation-free code buffer and its required alignment can
+  therefore be installed through Cranelift in a fresh process with ASLR.
+  Functions with outstanding relocations use ordinary JIT finalization.
+* Each immutable entry has a SHA-256 checksum bound to its key. The store
+  pins an owner-controlled directory and checks the opened file's type,
+  owner, write permissions and length. Writers publish completed temporary
+  files with atomic rename. An unreadable or corrupt entry is a miss. Cache
+  files occupy disk until the user removes them.
+* Elaboration deduplicates complete binding keys before handing distinct
+  jobs to Rayon. Indexed collection gives diagnostics a stable order. A
+  per-key initialization cell also protects concurrent lazy callers. Instance
+  history, the order of contributions and the first general evaluation retain
+  their VA-5b semantics. This round uses synchronous preparation. A warm hit
+  can run native code on the first eligible evaluation without a tier switch.
+
+The netlist preprocessor reuses lexed filesystem libraries and parsed
+expressions across subcircuit instances. It evaluates each expression in its
+own parameter scope. Elaboration also shares identical flattened model cards
+by parameter name, order and value bits. The VA macro processor copies runs
+of literal bytes together while preserving diagnostic source positions.
+
+### Reproducing the measurements
+
+Run these commands from the checkout root with the local IHP test inputs installed.
+
+```sh
+cargo build --offline --release -p spx-cli --features jit
+benches/run.py --profile
+benches/compare.py /path/to/HEAD-release-spx target/release/spx
+```
+
+Each table entry is a median of five fresh CLI processes. The benchmark gives
+each cold launch an empty private spx cache and follows it with a warm launch
+of the same deck. The OS file cache remains warm. A separate set of launches
+with `SPX_PROFILE=1` measures internal phases. Wall time uses the ordinary
+CLI summary, with stdout discarded, and runs from process launch to exit.
+The HEAD baseline is e8262638. Its analysis and phase measurements use the same
+monotonic probes applied to the original implementation. The ngspice 44.2
+reference medians are supplied by the maintainer and exclude OpenVAF
+compilation.
+
+### Release timings
+
+AMD Ryzen AI Max+ 395, 32 logical CPUs. All values are milliseconds. HEAD
+recompiles on every launch. The HEAD columns use the second launch of each
+pair. Reference values are the supplied ngspice 44.2 medians.
+
+| Deck | Workers | HEAD analysis | Warm analysis | Ref. analysis | HEAD wall | Cold wall | Warm wall | Ref. wall |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| psp_nmos_idvg | -j1 | 5.15 | 4.88 | 2.5 | 397.62 | 435.14 | 45.09 | 56 |
+| psp_nmos_idvg | default | 5.00 | 4.87 | 2.5 | 406.41 | 429.67 | 53.36 | 56 |
+| psp_inverter_dc | -j1 | 10.69 | 10.64 | 3.3 | 598.77 | 643.60 | 65.30 | 46 |
+| psp_inverter_dc | default | 10.63 | 10.74 | 3.3 | 589.63 | 460.14 | 66.28 | 46 |
+| psp_inverter_tran | -j1 | 17.69 | 17.61 | 4.3 | 569.53 | 648.69 | 75.57 | 42 |
+| psp_inverter_tran | default | 16.88 | 15.42 | 4.3 | 572.16 | 461.70 | 67.78 | 42 |
+| psp_ring5 | -j1 | 141.79 | 141.63 | 17.4 | 779.80 | 761.06 | 212.03 | 72 |
+| psp_ring5 | default | 79.71 | 73.40 | 17.4 | 679.09 | 521.30 | 138.70 | 72 |
+| psp_ring21 | -j1 | 575.52 | 573.34 | 65.4 | 1309.35 | 1273.43 | 687.15 | 127 |
+| psp_ring21 | default | 222.77 | 228.64 | 65.4 | 959.17 | 748.25 | 363.89 | 127 |
+
+The host ran substantially slower during final verification than during the
+initial campaign measurements. The unchanged HEAD binary provides a control.
+The table below gives the earlier medians. That candidate already had the
+three-stage cache and parallel preparation. The final candidate adds splitting
+for long straight-line programs. PSP takes the whole-function path in both.
+Use the final table above for parity counts. The supplied reference executable
+was unavailable for a contemporaneous rerun.
+
+| Earlier run | HEAD wall, -j1 / default | Warm candidate wall, -j1 / default | HEAD / warm candidate analysis, -j1 |
+|---|---:|---:|---:|
+| psp_nmos_idvg | 202.2 / 200.9 | 26.2 / 30.5 | 2.07 / 2.57 |
+| psp_inverter_dc | 298.6 / 297.6 | 38.8 / 29.7 | 4.31 / 5.59 |
+| psp_inverter_tran | 290.4 / 286.0 | 43.1 / 37.3 | 10.28 / 9.21 |
+| psp_ring5 | 352.6 / 332.8 | 98.9 / 68.9 | 62.60 / 57.52 |
+| psp_ring21 | 565.5 / 465.9 | 315.3 / 171.8 | 238.87 / 226.17 |
+
+### Startup profile by deck
+
+Single-worker phase medians from the final table follow. The four netlist
+figures cover the deck read, library expansion, subcircuit flattening and
+parsing flattened cards. The three VA figures cover preprocessing, lexing
+and parsing, and semantic analysis with typed lowering. The VA cache column
+covers include validation, typed IR loading and cold publication. The
+specialization and JIT columns include their own disk activity.
+
+| Deck | Build/cache | Netlist read / expand / flatten / parse | VA preprocess / parse / sema | VA cache | Bind | Specialize | JIT | Output | Other |
+|---|---|---|---|---:|---:|---:|---:|---:|---:|
+| psp_nmos_idvg | HEAD | 0.02 / 0.75 / 2.38 / 0.24 | 44.0 / 63.5 / 62.8 | 0.0 | 3.5 | 6.4 | 181.6 | 0.03 | 35.7 |
+| psp_nmos_idvg | Cold | 0.03 / 0.74 / 2.42 / 0.21 | 37.8 / 64.7 / 62.1 | 40.8 | 3.1 | 8.5 | 184.3 | 0.03 | 28.6 |
+| psp_nmos_idvg | Warm | 0.01 / 0.70 / 2.41 / 0.21 | 0.0 / 0.0 / 0.0 | 30.9 | 2.4 | 2.2 | 1.7 | 0.03 | 7.9 |
+| psp_inverter_dc | HEAD | 0.02 / 0.79 / 4.37 / 0.37 | 42.8 / 67.9 / 61.1 | 0.0 | 6.1 | 13.5 | 359.7 | 0.03 | 35.8 |
+| psp_inverter_dc | Cold | 0.02 / 0.74 / 3.32 / 0.38 | 38.4 / 67.5 / 68.2 | 40.8 | 5.3 | 17.8 | 361.4 | 0.03 | 27.9 |
+| psp_inverter_dc | Warm | 0.02 / 0.73 / 3.33 / 0.38 | 0.0 / 0.0 / 0.0 | 30.2 | 3.9 | 4.2 | 3.2 | 0.02 | 9.2 |
+| psp_inverter_tran | HEAD | 0.03 / 0.76 / 4.28 / 0.37 | 44.0 / 57.8 / 54.7 | 0.0 | 3.9 | 13.2 | 351.1 | 0.02 | 33.4 |
+| psp_inverter_tran | Cold | 0.02 / 0.71 / 3.38 / 0.40 | 37.4 / 66.3 / 59.1 | 41.5 | 2.6 | 17.8 | 349.4 | 0.03 | 31.0 |
+| psp_inverter_tran | Warm | 0.02 / 0.71 / 3.30 / 0.38 | 0.0 / 0.0 / 0.0 | 29.0 | 2.4 | 4.3 | 3.3 | 0.03 | 10.7 |
+| psp_ring5 | HEAD | 0.02 / 0.93 / 22.95 / 2.02 | 45.1 / 57.0 / 55.7 | 0.0 | 9.9 | 13.8 | 351.7 | 0.02 | 41.0 |
+| psp_ring5 | Cold | 0.02 / 0.75 / 9.72 / 1.41 | 36.9 / 65.2 / 66.3 | 41.9 | 5.9 | 18.0 | 354.5 | 0.04 | 32.0 |
+| psp_ring5 | Warm | 0.02 / 0.74 / 9.60 / 1.56 | 0.0 / 0.0 / 0.0 | 29.7 | 6.1 | 4.3 | 3.4 | 0.03 | 14.8 |
+| psp_ring21 | HEAD | 0.02 / 0.83 / 93.39 / 9.67 | 45.4 / 54.2 / 51.2 | 0.0 | 36.9 | 14.1 | 350.9 | 0.02 | 54.7 |
+| psp_ring21 | Cold | 0.02 / 0.77 / 34.29 / 7.46 | 36.6 / 65.0 / 59.0 | 39.4 | 18.3 | 17.7 | 352.8 | 0.02 | 45.7 |
+| psp_ring21 | Warm | 0.03 / 0.78 / 40.26 / 9.46 | 0.0 / 0.0 / 0.0 | 26.2 | 17.3 | 4.2 | 3.3 | 0.02 | 34.2 |
+
+HEAD binding time is the inclusive binding loop less specialization and
+codegen. Other time is the per-process difference between launch-to-exit
+time and disjoint phases, including analysis. It includes startup, pool
+creation, the rest of elaboration, projection and measurements, dropping
+the circuit and exit. Independently medianed columns need not sum.
+
+Ring5 cold preparation took 373.2 ms with one worker and 208.7 ms with default
+workers. Warm preparation took 8.4 and 4.4 ms respectively. On ring21,
+single-worker flattening fell from 93.4 to 40.3 ms.
+
+### Code generation experiments
+
+These ring5 results are medians of five cold `-j1` runs from the earlier
+settings experiment. Set `SPX_CACHE=0 SPX_PROFILE=1` and vary `SPX_CLIF_OPT`
+and `SPX_CLIF_REGALLOC` to reproduce it. Compile time sums both JIT phases.
+The byte counts include each function's constant pool.
+
+| Opt level | Register allocator | Compile (ms) | NMOS bytes | PMOS bytes | Analysis (ms) |
+|---|---|---:|---:|---:|---:|
+| none | backtracking | 177.6 | 287,264 | 287,776 | 58.6 |
+| none | single_pass | 60.0 | 488,240 | 489,296 | 100.2 |
+| speed | backtracking | 589.4 | 859,440 | 860,128 | 129.4 |
+| speed | single_pass | 119.1 | 1,282,048 | 1,282,896 | 247.2 |
+| speed_and_size | backtracking | 475.4 | 859,440 | 860,128 | 126.3 |
+| speed_and_size | single_pass | 109.7 | 1,282,048 | 1,282,896 | 248.9 |
+
+Backtracking with `opt_level=none` remains the default. Single-pass allocation
+saves cold compile time but increases both code size and evaluation time.
+The 332,192-byte VBIC kernel compiled in 55.7 ms while the 287,264-byte PSP
+NMOS took 87.3 ms and the 20,912-byte resistor took 5.0 ms. Size alone is
+a poor predictor across models.
+
+A controlled size probe repeated `y = sin(y) + 0.5 * V(p)` in a single
+analog block. At 128, 256, 512 and 1,024 assignments, whole functions occupied
+16, 32, 63 and 130 KiB and compiled in 3.8, 6.7, 11.9 and 27.4 ms. At 2,048
+and 4,096 they reached 256 and 511 KiB and 76.8 and 171.2 ms. The compiler
+now splits eligible stateless, straight-line programs with at least 8,192
+register instructions into two functions. The first passes live primals,
+partial derivatives and accumulated guard state through per-instance scratch.
+The second rematerializes literals and preserves structural zeroes. The cache
+stores both fragments and their required scratch size in a single entry.
+In paired whole-versus-split measurements, the 2,048-assignment compile
+fell from 108.0 to 99.8 ms and the 4,096-assignment compile from 235.1 to
+217.8 ms. Analysis of the latter sweep took 18.24 versus 18.08 ms. Both
+binaries returned identical results.
+
+A separate two-function PSP prototype split near the middle at a control-flow
+join. Paired pinned ring21 trials reduced cold compilation by 16% but slightly
+increased analysis time. Its two bindings grew from 575,040 to 583,664 total
+bytes. The production PSP kernels keep the single-function path. Cold and
+warm CLI tests of the long straight-line path match the interpreter.
+
+### Remaining parity gaps
+
+In the final pass, NMOS Id–Vg meets the wall target with both worker settings.
+All five warm single-worker analysis medians exceed the supplied references.
+Ring21 spends 573.3 ms in single-worker analysis against a 127 ms total wall
+budget. With default workers it spends 228.6 ms in analysis and 363.9 ms
+overall. Even the short inverter transient spends about 29 ms restoring the
+typed VA front end on one worker.
+
+The next analysis experiment is to shorten live ranges of scalar partials
+through math calls and control-flow joins. The VA-5b device-loop profile
+identifies those evaluations as the dominant single-worker ring cost.
+For startup, measure a compact binary representation of the typed IR and
+reuse substituted PDK model templates across equal wrappers.
+
+Both cached oracle suites passed (14/14 standard and 10/10 IHP). The release
+comparison with HEAD clears each deck's save restriction and checks every
+scale and every real and complex sample, including signed zero. All ten IHP
+decks and ring21 matched on cold and warm runs. Single-worker and default
+cold runs also produced identical artifact filenames and bytes. Cache tests
+cover concurrent publication, separate corruption of each layer, changed
+includes, both disable switches and restored multi-function code.

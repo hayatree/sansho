@@ -136,3 +136,21 @@ each contain LICENSE and ship no NOTICE file. The backend uses their public
 APIs. No Cranelift source was ported into the repository, and NOTICE requires
 no additional attribution for this change. Local IHP model files and circuit
 cards are external test inputs.
+
+### Verilog-A startup and persistent compilation
+
+The VA artifact store, include manifest, binding scheduler and benchmark drivers
+are original repository work. The store uses SHA-256, per-key initialization,
+exclusive file creation and atomic POSIX rename. The native entry uses the
+public Cranelift 0.137.2 code buffer, relocation and JIT module APIs. Math
+callbacks and limiters come from spx. The straight-line partition in `jit/split.rs` uses original SSA
+liveness and register handoff code from general compiler literature. No
+external simulator code, headers,
+model text or precompiled models are part of the change.
+
+The optional JIT build uses the locally cached hmac-sha256 1.1.15 (ISC) for
+SHA-256 and rustix 1.1.6 (permissive Apache/MIT alternatives) for operations
+relative to an open directory descriptor. Typed compiler data uses the
+workspace's serde and serde_json packages. These are Cargo dependencies.
+No code from these packages was ported. The offline license, ban and source
+checks use the workspace deny.toml.

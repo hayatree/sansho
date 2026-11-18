@@ -332,45 +332,82 @@ fn hdl_diagnostic(mut d: Diagnostic, h: &spx_netlist::HdlSource, sources: &[Stri
     d.with_span(h.span)
 }
 
+fn va_model_type(card: &ModelCard) -> &str {
+    if matches!(card.kind.as_str(), "npn" | "pnp")
+        && card.params.iter().any(|(k, v)| k == "level" && *v == 9.)
+    {
+        "vbic13_5t"
+    } else {
+        &card.kind
+    }
+}
+
 fn compile_hdl(
     nl: &Netlist,
+    _cache: bool,
 ) -> Result<BTreeMap<String, Arc<spx_va::CompiledModule>>, Vec<Diagnostic>> {
     let mut modules = BTreeMap::new();
     let mut seen = HashSet::new();
     let mut errors = Vec::new();
+    let mut declared = HashSet::new();
+    #[cfg(feature = "jit")]
+    let used: HashSet<_> = nl
+        .elements
+        .iter()
+        .filter_map(|e| match &e.kind {
+            ElementKind::Va { model, .. } => Some(model.as_str()),
+            _ => None,
+        })
+        .collect();
+    #[cfg(feature = "jit")]
+    let wanted: HashSet<_> = nl
+        .models
+        .iter()
+        .filter(|card| used.contains(card.name.as_str()))
+        .flat_map(|card| {
+            let name = va_model_type(card);
+            [
+                name.to_owned(),
+                name.strip_suffix("_va")
+                    .map(|s| format!("{s}va"))
+                    .unwrap_or_default(),
+            ]
+        })
+        .collect();
     for h in &nl.hdl {
         if !seen.insert(&h.path) {
             continue;
         }
-        match spx_va::parse_va(&h.text, &HdlLoader::new(&h.path)) {
-            Err(ds) => errors.extend(ds.into_iter().map(|d| hdl_diagnostic(d, h, &[]))),
+        let loader = HdlLoader::new(&h.path);
+        #[cfg(feature = "jit")]
+        let source = if _cache {
+            spx_va::compile_source_cached(&h.path, &h.text, &loader, |name| {
+                wanted.contains(&name.to_ascii_lowercase())
+            })
+        } else {
+            spx_va::compile_source(&h.text, &loader)
+        };
+        #[cfg(not(feature = "jit"))]
+        let source = spx_va::compile_source(&h.text, &loader);
+        match source {
+            Err((ds, files)) => errors.extend(ds.into_iter().map(|d| hdl_diagnostic(d, h, &files))),
             Ok(source) => {
-                for module in &source.modules {
-                    match spx_va::compile_module(&source, Some(&module.name.name)) {
-                        Ok(compiled) => {
-                            let key = compiled.name.to_ascii_lowercase();
-                            if let std::collections::btree_map::Entry::Vacant(entry) =
-                                modules.entry(key)
-                            {
-                                entry.insert(Arc::new(compiled));
-                            } else {
-                                errors.push(hdl_diagnostic(
-                                    Diagnostic::error(
-                                        "E-VA-SEMA",
-                                        format!("duplicate module {}", compiled.name),
-                                    )
-                                    .with_span(module.span),
-                                    h,
-                                    &source.sources,
-                                ));
-                            }
-                        }
-                        Err(ds) => errors.extend(
-                            ds.into_iter()
-                                .map(|d| hdl_diagnostic(d, h, &source.sources)),
-                        ),
+                for (span, name) in source.declarations {
+                    if !declared.insert(name.to_ascii_lowercase()) {
+                        errors.push(hdl_diagnostic(
+                            Diagnostic::error("E-VA-SEMA", format!("duplicate module {name}"))
+                                .with_span(span),
+                            h,
+                            &source.sources,
+                        ));
                     }
                 }
+                modules.extend(
+                    source
+                        .modules
+                        .into_iter()
+                        .map(|m| (m.name.to_ascii_lowercase(), Arc::new(m))),
+                );
             }
         }
     }
@@ -386,7 +423,7 @@ pub fn compile(
     nl: &Netlist,
     opts: &SimOptions,
 ) -> Result<(Circuit, Vec<Diagnostic>), Vec<Diagnostic>> {
-    let va_modules = compile_hdl(nl)?;
+    let va_modules = compile_hdl(nl, opts.va_cache)?;
     compile_cached(nl, opts, &va_modules)
 }
 
@@ -433,8 +470,11 @@ pub(crate) fn compile_cached(
         })
         .collect();
     let mut va_models: HashMap<String, Arc<spx_va::Bound>> = HashMap::new();
+    // Flattened subcircuits give identical model cards different hierarchical names.
+    let mut card_bindings = HashMap::new();
     let mut nonlinear_count = 0usize;
 
+    let binding = spx_diag::Phase::start("bind");
     let mut errors = Vec::new();
     for e in &nl.elements {
         if let ElementKind::Va {
@@ -450,9 +490,7 @@ pub(crate) fn compile_cached(
                 );
                 continue;
             };
-            let vbic = matches!(card.kind.as_str(), "npn" | "pnp")
-                && card.params.iter().any(|(k, v)| k == "level" && *v == 9.);
-            let module_name = if vbic { "vbic13_5t" } else { &card.kind };
+            let module_name = va_model_type(card);
             let Some(module) = va_modules.get(module_name).or_else(|| {
                 card.kind
                     .strip_suffix("_va")
@@ -470,31 +508,46 @@ pub(crate) fn compile_cached(
             let bound = if let Some(bound) = va_models.get(model) {
                 Arc::clone(bound)
             } else {
-                let mut values = card.params.clone();
-                if vbic {
-                    // level selects the device. The three SOA limits are ngspice checks.
-                    values.retain(|(k, _)| {
-                        !matches!(k.as_str(), "level" | "vbe_max" | "vce_max" | "vbc_max")
-                    });
-                    values.push(("type".into(), if card.kind == "pnp" { -1. } else { 1. }));
-                }
-                match module.bind_spice_model(
-                    &values,
-                    spx_va::BindOptions {
-                        tnom: opts.tnom,
-                        gmin: opts.gmin,
-                    },
-                ) {
-                    Ok(bound) => {
-                        let bound = Arc::new(bound);
-                        va_models.insert(model.clone(), Arc::clone(&bound));
-                        bound
+                let key = (
+                    card.kind.as_str(),
+                    card.params
+                        .iter()
+                        .map(|(name, v)| (name.as_str(), v.to_bits()))
+                        .collect::<Vec<_>>(),
+                );
+                let bound = match card_bindings.entry(key) {
+                    std::collections::hash_map::Entry::Occupied(entry) => Arc::clone(entry.get()),
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        let mut values = card.params.clone();
+                        if module_name == "vbic13_5t" && matches!(card.kind.as_str(), "npn" | "pnp")
+                        {
+                            // level selects the device. The three SOA limits are ngspice checks.
+                            values.retain(|(k, _)| {
+                                !matches!(k.as_str(), "level" | "vbe_max" | "vce_max" | "vbc_max")
+                            });
+                            values.push(("type".into(), if card.kind == "pnp" { -1. } else { 1. }));
+                        }
+                        match module.bind_spice_model(
+                            &values,
+                            spx_va::BindOptions {
+                                tnom: opts.tnom,
+                                gmin: opts.gmin,
+                            },
+                        ) {
+                            Ok(bound) => {
+                                let bound = Arc::new(bound);
+                                entry.insert(Arc::clone(&bound));
+                                bound
+                            }
+                            Err(ds) => {
+                                errors.extend(ds.into_iter().map(|d| d.with_span(card.span)));
+                                continue;
+                            }
+                        }
                     }
-                    Err(ds) => {
-                        errors.extend(ds.into_iter().map(|d| d.with_span(card.span)));
-                        continue;
-                    }
-                }
+                };
+                va_models.insert(model.clone(), Arc::clone(&bound));
+                bound
             };
             let group = va
                 .entry(card.kind.clone())
@@ -512,18 +565,47 @@ pub(crate) fn compile_cached(
                     if swept.contains(e.name.as_str()) {
                         chunk.prepare_sweep(&e.name);
                     }
-                    #[cfg(feature = "jit")]
-                    if let Some(d) = chunk.prepare_jit(opts.va_jit, opts.temp + 273.15) {
-                        diags.push(d.with_span(e.span));
-                    }
                 }
                 Err(ds) => errors.extend(ds.into_iter().map(|d| d.with_span(e.span))),
             }
         }
     }
+    drop(binding);
     let va_count = nonlinear_count;
     if !errors.is_empty() {
         return Err(errors);
+    }
+    #[cfg(feature = "jit")]
+    if !va.is_empty() {
+        let _phase = spx_diag::Phase::start("jit_wall");
+        let enabled = opts.va_jit && spx_va::jit_enabled();
+        let kelvin = opts.temp + 273.15;
+        let origins: HashMap<_, _> = nl
+            .elements
+            .iter()
+            .map(|e| (e.name.as_str(), e.span))
+            .collect();
+        let mut seen = HashSet::new();
+        let mut jobs = Vec::new();
+        for chunk in va
+            .values_mut()
+            .flat_map(|v| v.done.iter_mut().chain([&mut v.cur]))
+        {
+            for (module, bound, name) in chunk.jit_bindings(enabled) {
+                if enabled && seen.insert((&module.name, bound.specialization_key(kelvin, 1.))) {
+                    jobs.push((module, bound, name));
+                }
+            }
+        }
+        use rayon::prelude::*;
+        let results: Vec<_> = jobs
+            .par_iter()
+            .map(|&(m, b, name)| {
+                m.prepare_jit(b, kelvin, 1.)
+                    .map(|d| d.with_span(origins[name]))
+            })
+            .collect();
+        diags.extend(results.into_iter().flatten());
     }
     let mut aliases = Vec::new();
     if !va.is_empty() {

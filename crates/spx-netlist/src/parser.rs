@@ -27,6 +27,7 @@ pub fn parse(text: &str) -> Result<Netlist, Vec<Diagnostic>> {
 /// Parse netlist text, loading `.include` / `.lib` files through `loader`.
 pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<Diagnostic>> {
     let pre = preprocess(text, loader);
+    let _phase = spx_diag::Phase::start("netlist_parse");
     let mut p = Parser {
         has_hdl: !pre.hdl.is_empty(),
         diags: pre.diags,

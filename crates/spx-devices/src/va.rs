@@ -60,6 +60,20 @@ impl VaGroup {
         None
     }
 
+    /// Configure all instances and enumerate their final layouts for parallel preparation.
+    #[cfg(feature = "jit")]
+    pub fn jit_bindings(
+        &mut self,
+        enabled: bool,
+    ) -> impl Iterator<Item = (&CompiledModule, &Bound, &str)> {
+        self.disable_jit = !enabled;
+        self.module.as_deref().into_iter().flat_map(|m| {
+            self.instances
+                .iter()
+                .map(move |i| (m, &i.bound, i.name.as_str()))
+        })
+    }
+
     /// Reserve every possible branch equation for an in-place DC parameter sweep.
     pub fn prepare_sweep(&mut self, name: &str) {
         if let Some(i) = self.instances.iter_mut().find(|i| i.name == name) {

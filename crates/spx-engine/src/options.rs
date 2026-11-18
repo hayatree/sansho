@@ -9,6 +9,8 @@ use spx_netlist::OptionCard;
 /// Numerical options.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SimOptions {
+    /// Reuse validated on-disk VA compiler artifacts.
+    pub va_cache: bool,
     /// Enable native Verilog-A kernels in JIT builds.
     pub va_jit: bool,
     /// Relative tolerance.
@@ -62,6 +64,7 @@ pub enum Method {
 impl Default for SimOptions {
     fn default() -> Self {
         Self {
+            va_cache: true,
             va_jit: cfg!(feature = "jit"),
             reltol: 1e-3,
             abstol: 1e-12,
@@ -92,6 +95,10 @@ impl SimOptions {
         let mut warnings = Vec::new();
         for c in cards {
             let ok = match (c.name.as_str(), c.value) {
+                ("va_cache", Some(v @ (0.0 | 1.0))) => {
+                    o.va_cache = v == 1.;
+                    true
+                }
                 ("va_jit", Some(v @ (0.0 | 1.0))) => {
                     o.va_jit = v == 1.;
                     true

@@ -173,14 +173,18 @@ forwards to spx-va. The scalar specializer lowers into the same register program
 used by the interpreter. Cranelift compiles the bias-dependent equations into a
 host function with one scalar SSA value per live partial. A compiled module owns
 its finalized code and specialization cache. The device adapter prepares kernels
-during elaboration. Each instance supplies its own voltages, retained history,
+in parallel for distinct bindings during elaboration. Unix JIT builds can restore
+validated typed modules, specialized register programs and relocatable native code
+from a per-user disk cache. Long straight-line kernels can span two functions
+with per-instance scratch. Each instance supplies its own voltages, retained history,
 limiter state and output slots. This preserves the ordered gather in D4.
 
 For a single native transient, the standalone run pool uses at most the larger
 of the device-group count and the number of gather chunks. An embedding that
 supplies a Rayon pool retains control of its workers. Section 13 of
 [the Verilog-A design](verilog-a.md#13-va-5b-native-evaluation) covers the ABI,
-backend selection, exceptional-value replay and measurements.
+backend selection and exceptional-value replay. Section 14 covers cache identity,
+publication, startup profiles and current measurements.
 
 ---
 

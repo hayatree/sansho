@@ -263,6 +263,11 @@ impl Processor<'_> {
         }
     }
     fn expand_emit(&mut self, s: &str, span: Span, positions: &[Span]) {
+        if !s.contains('`') {
+            self.out.text.push_str(s);
+            self.out.positions.extend_from_slice(positions);
+            return;
+        }
         let before = self.errors.len();
         let expanded = self.expand(s, span, 0);
         for e in &mut self.errors[before..] {
@@ -288,7 +293,10 @@ impl Processor<'_> {
             self.error("E-VA-PREPROC", "macro recursion exceeds 64", span);
             return String::new();
         }
-        let mut out = String::new();
+        if depth > 0 && !s.contains('`') {
+            return s.to_owned();
+        }
+        let mut out = String::with_capacity(s.len());
         let mut i = 0;
         let mut quoted = false;
         let mut mapping = Vec::new();
@@ -423,9 +431,14 @@ impl Processor<'_> {
                         invocation,
                     );
                 }
-            } else if let Some(c) = tail.chars().next() {
-                out.push(c);
-                i += c.len_utf8();
+            } else {
+                // Copy a literal run in one operation; mapped bytes still point at their own columns.
+                let first = tail.chars().next().map_or(0, char::len_utf8);
+                let end = tail[first..]
+                    .find(['`', '"', '\\'])
+                    .map_or(tail.len(), |i| i + first);
+                out.push_str(&tail[..end]);
+                i += end;
             }
         }
         if depth == 0 {
