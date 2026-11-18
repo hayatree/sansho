@@ -8,3 +8,6 @@
 
 # Third-party Verilog-A model sources used only as local test input (never committed)
 /va-models/
+
+# Parameter-check log that ngspice BSIM4 writes into its working directory
+bsim4.out
