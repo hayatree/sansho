@@ -54,8 +54,11 @@ impl Lower<'_, '_> {
             Mul => return (self.fb.ins().fmul(x, y), y, x),
             Div => {
                 let v = self.fb.ins().fdiv(x, y);
-                let a = self.fb.ins().fdiv(one, y);
-                let square = self.fb.ins().fmul(y, y);
+                let (a, square) = if let Some(divisor) = self.constant(y) {
+                    (self.num(1. / divisor), self.num(divisor * divisor))
+                } else {
+                    (self.fb.ins().fdiv(one, y), self.fb.ins().fmul(y, y))
+                };
                 let neg = self.fb.ins().fneg(x);
                 let b = self.fb.ins().fdiv(neg, square);
                 return (v, a, b);

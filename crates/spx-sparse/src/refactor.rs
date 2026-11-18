@@ -83,6 +83,10 @@ struct Column {
 #[derive(Debug, Default)]
 struct Plan {
     cols: Vec<Column>,
+    // Columns with only one active input need no scatter or elimination.
+    direct: Vec<(usize, usize)>,
+    coupled: Vec<usize>,
+    forward: Vec<usize>,
     // CSC entries that were zero when the symbolic update schedule was recorded.
     zero_mask: Vec<u64>,
     input: Vec<(usize, usize)>,
@@ -217,7 +221,8 @@ impl Sparse {
             *v = rhs[r];
         }
         let p = &self.plan;
-        for (j, c) in p.cols.iter().enumerate() {
+        for &j in &p.forward {
+            let c = &p.cols[j];
             let v = x[j];
             subtract_rows(
                 x,
@@ -281,6 +286,9 @@ impl Plan {
             );
         }
         self.cols.clear();
+        self.direct.clear();
+        self.coupled.clear();
+        self.forward.clear();
         self.lower_row.clear();
         self.lower.clear();
         self.upper_row.clear();
@@ -346,6 +354,18 @@ impl Plan {
                 .find_map(|(i, &v)| (i == j).then_some(v))
                 .unwrap_or(0.);
             self.diagonal.push(1. / diag);
+            if lower != self.lower.len() {
+                self.forward.push(j);
+            }
+            if lower == self.lower.len()
+                && upper == self.upper.len()
+                && let [(src, row)] = self.input[start..]
+                && row == j
+            {
+                self.direct.push((j, src));
+            } else {
+                self.coupled.push(j);
+            }
             self.cols.push(Column {
                 input: start..self.input.len(),
                 lower: lower..self.lower.len(),
@@ -379,8 +399,16 @@ impl Plan {
         {
             return false;
         }
+        for &(j, src) in &self.direct {
+            let diag = values[src];
+            if !diag.is_normal() || diag.abs() > growth_limit {
+                return false;
+            }
+            self.diagonal[j] = 1. / diag;
+        }
         x.fill(0.);
-        for (j, c) in self.cols.iter().enumerate() {
+        for &j in &self.coupled {
+            let c = &self.cols[j];
             for &(src, dst) in &self.input[c.input.clone()] {
                 x[dst] = values[src];
             }

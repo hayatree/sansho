@@ -375,10 +375,10 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 | G1 | GPU batch | Same topology × N instances (MC): device eval on GPU; LU as CPU batch or cuDSS uniform batch | M5 |
 | G2 | GPU-resident single run | Assembly through LU entirely on GPU. Research track | TBD |
 
-- All levels run on a rayon pool. `run_with` creates one with `threads` workers;
+- All levels run on a rayon pool. `run_with` uses up to `threads` workers.
   `run_in_current_pool` uses the pool the caller installed (to avoid clashing with agent-side
   parallelism), and a `Session` keeps one pool for its lifetime.
-- L1 and L2 use the circuit-size thresholds in §4. The standalone VA benchmark and timings are in Verilog-A §12.
+- L1 and L2 use the circuit-size thresholds in §4. The [performance report](performance.md) describes the VA benchmarks and timings.
 - Measured (M3, 1001-stage MOS1 ring oscillator, 1595 Newton iterations): assembly 466 ms on 1
   thread, 219 ms on 4, 194 ms on 8; LU (serial until M5) ≈ 145 ms. Results are bit-identical.
 

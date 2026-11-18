@@ -11,6 +11,12 @@ pub struct CircuitPair {
     tnom: f64,
 }
 
+#[derive(Debug)]
+pub(super) struct BatchCode {
+    code: abi::Code,
+    constants: Vec<[f64; 2]>,
+}
+
 impl CompiledModule {
     /// Prepare a packed evaluation for a pure, bias-dependent circuit specialization.
     pub fn prepare_circuit_pair(&self, b: &Bound, temperature: f64) -> Option<CircuitPair> {
@@ -49,6 +55,19 @@ impl CompiledModule {
                         .map(|bytes| a.child(&[&bytes]))
                 });
                 let (spec, native) = self.specialize_native(b, &input, disk.as_ref()).ok()?;
+                // Share one packed entry per bit pattern, in first-register order.
+                let mut indices = HashMap::new();
+                let mut constants = Vec::new();
+                for &x in &spec.program.values {
+                    indices.entry(x.to_bits()).or_insert_with(|| {
+                        let i = constants.len();
+                        constants.push([x, x]);
+                        i
+                    });
+                }
+                if constants.len() > i32::MAX as usize / 16 {
+                    return None;
+                }
                 std::panic::catch_unwind(|| {
                     lower::compile(
                         &spec.program,
@@ -56,7 +75,7 @@ impl CompiledModule {
                         true,
                         native.as_ref(),
                         Some(stamp),
-                        true,
+                        Some(&indices),
                     )
                 })
                 .ok()?
@@ -66,6 +85,7 @@ impl CompiledModule {
                     }
                 })
                 .ok()
+                .map(|code| BatchCode { code, constants })
             })
             .as_ref()?;
         Some(CircuitPair {
@@ -104,7 +124,7 @@ impl CircuitPair {
             v.clear();
             v.resize(len, 0.);
         }
-        let Some(code) = self.kernel.batch.get().and_then(Option::as_ref) else {
+        let Some(batch) = self.kernel.batch.get().and_then(Option::as_ref) else {
             return false;
         };
         let input = EvalInput {
@@ -141,11 +161,11 @@ impl CircuitPair {
             self.tnom,
             &mut state,
             &mut stamp,
-            &self.kernel.constants,
+            batch.constants.as_flattened(),
             &mut [],
             &mut queries,
         );
-        let ok = code.run(&mut frame, &mut Vec::new());
+        let ok = batch.code.run(&mut frame, &mut Vec::new());
         ok == 1 && finite_output(out)
     }
 }

@@ -190,3 +190,14 @@ constant propagation, SSA liveness and replay through the existing scalar evalua
 The block sampler uses Cranelift's public block map, POSIX interval timers and Linux
 signal contexts. All implementations are original. The model files served as inputs,
 and no new dependencies were introduced.
+
+### Verilog-A optimization round 5
+
+The packed literal pool, constant folding of chain-rule factors, per-instance
+binding reuse and analysis worker limits are original implementations using
+the existing simulator and Cranelift public APIs. The direct-pivot schedule
+specializes the existing Gilbert–Peierls refactorization. The cache checksum
+accelerator implements FIPS PUB 180-4, sections 5 and 6.2, using the SHA,
+SSSE3 and SSE4.1 instruction semantics exposed by Rust's x86-64 intrinsics.
+The portable path uses the existing hmac-sha256 dependency. No third-party
+source or model text was incorporated.

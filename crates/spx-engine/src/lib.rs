@@ -238,6 +238,11 @@ fn run_analysis(
             a
         }),
     }?;
+    add_aliases(ckt, &mut result);
+    Ok((result, stats))
+}
+
+fn add_aliases(ckt: &Circuit, result: &mut spx_output::AnalysisResult) {
     for (name, index) in &ckt.aliases {
         let points = result.len().max(result.scale_values.len());
         result.variables.push(spx_output::Variable {
@@ -253,7 +258,6 @@ fn run_analysis(
             }
         }
     }
-    Ok((result, stats))
 }
 
 /// Project public output in circuit order. The independent scale is always retained.
@@ -311,17 +315,26 @@ fn card_span(card: &AnalysisCard) -> spx_diag::Span {
 /// Analyses run concurrently (L0) and large circuits evaluate devices and assemble the matrix
 /// in parallel (L1/L2); the results do not depend on the thread count.
 pub fn run_with(nl: &Netlist, cfg: &RunConfig) -> Result<RunOutput, RunError> {
+    if cfg.threads <= 1 {
+        return parallel::with_threads(1, || run_in_current_pool(nl));
+    }
+    if nl.hdl.is_empty() && nl.elements.len() < circuit::PARALLEL_MIN_NONLINEAR {
+        let jobs = cfg.threads.min(nl.analyses.len().max(1));
+        return parallel::with_threads(jobs, || run_in_current_pool(nl));
+    }
     #[cfg(feature = "jit")]
-    if !nl.hdl.is_empty() && matches!(nl.analyses.as_slice(), [AnalysisCard::Tran { .. }]) {
-        // Respect the caller's thread limit during cold parallel compilation as well.
+    if !nl.hdl.is_empty() && nl.analyses.len() == 1 {
         let bindings = nl
             .elements
             .iter()
             .filter(|e| matches!(e.kind, spx_netlist::ElementKind::Va { .. }))
             .count();
-        let checked = parallel::with_threads(cfg.threads.min(bindings.max(1)), || check_run(nl))?;
+        // Preparation queues at most one job per VA instance. Large circuits
+        // can also use workers for other device groups during the analysis.
+        let preparation_threads = cfg.threads.min(bindings.max(1));
+        let checked = parallel::with_threads(preparation_threads, || check_run(nl))?;
         let ckt = &checked.circuit;
-        // A single transient has at most one ready job per device group or
+        // A single analysis has at most one ready job per device group or
         // gather chunk. Idle workers otherwise contend on every Newton assembly.
         let jobs = if checked.options.va_jit && spx_va::jit_enabled() {
             if ckt.parallel {
@@ -355,15 +368,37 @@ fn check_run(nl: &Netlist) -> Result<Checked, RunError> {
 
 fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
     let Checked {
-        circuit: ckt,
+        circuit: mut ckt,
         options: opts,
         mut warnings,
     } = checked;
-    let outcomes: Vec<_> = nl
-        .analyses
-        .par_iter()
-        .map(|card| run_analysis(&ckt, nl, &opts, card))
-        .collect();
+    let outcomes: Vec<_> = match nl.analyses.as_slice() {
+        // A lone sweep owns the already elaborated DC circuit. Concurrent
+        // analysis cards still need private mutable devices for each sweep.
+        [
+            AnalysisCard::Dc {
+                source,
+                start,
+                stop,
+                step,
+                ..
+            },
+        ] => {
+            vec![
+                analysis::dc_sweep(&mut ckt, &opts, source, *start, *stop, *step).map(
+                    |(mut result, stats)| {
+                        add_aliases(&ckt, &mut result);
+                        (result, Some(Stats::Dc(stats)))
+                    },
+                ),
+            ]
+        }
+        [card] => vec![run_analysis(&ckt, nl, &opts, card)],
+        cards => cards
+            .par_iter()
+            .map(|card| run_analysis(&ckt, nl, &opts, card))
+            .collect(),
+    };
     let mut results = SimResults {
         measures: Vec::new(),
         title: nl.title.clone(),

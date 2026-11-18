@@ -115,10 +115,10 @@ const CHUNK_LINEAR: usize = 1024;
 const CHUNK_NONLINEAR: usize = 64;
 /// Interpreted models have substantially more work per instance than built-in devices.
 const CHUNK_VA_SMALL: usize = 4;
-const CHUNK_VA_LARGE: usize = 8;
+const CHUNK_VA_LARGE: usize = 16;
 const PARALLEL_MIN_VA: usize = 8;
 /// Minimum number of nonlinear instances for parallel evaluation.
-const PARALLEL_MIN_NONLINEAR: usize = 256;
+pub(crate) const PARALLEL_MIN_NONLINEAR: usize = 256;
 
 /// A device group split into fixed-size chunks (the unit of parallel evaluation, L1).
 ///

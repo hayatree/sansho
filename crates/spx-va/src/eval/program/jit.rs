@@ -38,7 +38,7 @@ pub(crate) struct Cache(Mutex<HashMap<Key, Cell>>);
 struct Kernel {
     bias_only: bool,
     code: abi::Code,
-    batch: std::sync::OnceLock<Option<abi::Code>>,
+    batch: std::sync::OnceLock<Option<batch::BatchCode>>,
     constants: Vec<f64>,
     queries: Vec<String>,
     stores: Vec<(usize, Ty)>,
@@ -234,7 +234,7 @@ impl Kernel {
 
         // Some backend resource/ISA failures are reported by Cranelift as unwinds.
         let code = std::panic::catch_unwind(|| {
-            lower::compile(&p, n, regular, disk, circuit.filter(|_| regular), false)
+            lower::compile(&p, n, regular, disk, circuit.filter(|_| regular), None)
         })
         .map_err(|_| "native backend failed during compilation".to_string())??;
         let bias_only = regular

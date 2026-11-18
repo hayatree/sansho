@@ -18,6 +18,17 @@ use std::{
     path::PathBuf,
 };
 
+#[cfg(target_arch = "x86_64")]
+mod sha256;
+
+fn checksum(bytes: &[u8]) -> Digest {
+    #[cfg(target_arch = "x86_64")]
+    if let Some(sum) = sha256::accelerated(bytes) {
+        return sum;
+    }
+    Hash::hash(bytes)
+}
+
 type Digest = [u8; 32];
 
 #[derive(Debug, Clone)]
@@ -30,7 +41,12 @@ fn digest(parts: &[&[u8]]) -> Digest {
     let mut hash = Hash::new();
     for part in parts {
         hash.update((part.len() as u64).to_le_bytes());
-        hash.update(part);
+        // Hash large parts independently, keeping the length and part order in the key.
+        if part.len() >= 1024 {
+            hash.update(checksum(part));
+        } else {
+            hash.update(part);
+        }
     }
     hash.finalize()
 }
@@ -180,7 +196,7 @@ impl Recording<'_> {
             path: path.into(),
             from: from.map(String::from),
             standard,
-            resolved: value.map(|(name, text)| (name.clone(), Hash::hash(text.as_bytes()))),
+            resolved: value.map(|(name, text)| (name.clone(), checksum(text.as_bytes()))),
         });
     }
 }
@@ -213,7 +229,7 @@ impl Include {
         };
         match (result, &self.resolved) {
             (Ok(Some((path, text))), Some((name, sum))) => {
-                &path == name && Hash::hash(text.as_bytes()) == *sum
+                &path == name && checksum(text.as_bytes()) == *sum
             }
             (Ok(None), None) => true,
             _ => false,

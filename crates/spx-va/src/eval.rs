@@ -204,6 +204,23 @@ struct CircuitStamp {
 }
 
 impl Bound {
+    /// Start an independent instance with the same validated parameters and port count.
+    /// Circuit connections and evaluation history are instance-specific.
+    pub fn new_instance(&self) -> Self {
+        Self {
+            #[cfg(feature = "jit")]
+            circuit: None,
+            sim: self.sim,
+            layout: self.layout.clone(),
+            connected_ports: self.connected_ports,
+            values: self.values.clone(),
+            given: self.given.clone(),
+            scratch: Mutex::new(Scratch::default()),
+            identity: Arc::clone(&self.identity),
+            workspace_key: Arc::new(()),
+        }
+    }
+
     /// Specialize native stamps for a circuit adapter. Grounded rows and columns
     /// are unused, and DC-only clients also discard the reactive stamp.
     #[cfg(feature = "jit")]

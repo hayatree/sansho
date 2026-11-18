@@ -3,7 +3,7 @@
 use super::*;
 
 /// Compact unknown order and projection from the module's uncollapsed numbering.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Layout {
     pub(super) map: Vec<Option<usize>>,
     representatives: Vec<usize>,

@@ -355,7 +355,21 @@ impl VaGroup {
         }
         let params = parameter_names(&module, params);
         let port_count = nodes.len();
-        let bound = module.bind_connected_instance(&model, &params, port_count)?;
+        let matching = self.instances.iter().rev().find(|i| {
+            !i.swept
+                && i.port_count == port_count
+                && Arc::ptr_eq(&model, &i.model)
+                && i.params.len() == params.len()
+                && i.params
+                    .iter()
+                    .zip(&params)
+                    .all(|((a, x), (b, y))| a == b && x.to_bits() == y.to_bits())
+        });
+        let bound = if let Some(i) = matching {
+            i.bound.new_instance()
+        } else {
+            module.bind_connected_instance(&model, &params, port_count)?
+        };
         let copies = module.parallel_copies(&bound);
         self.module = Some(module);
         self.instances.push(Instance {

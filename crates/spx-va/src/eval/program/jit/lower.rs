@@ -43,6 +43,8 @@ pub(super) struct Lower<'a, 'b> {
     literals: HashMap<u64, V>,
     fields: HashMap<usize, V>,
     constants: HashMap<Reg, V>,
+    loaded_constants: HashMap<V, f64>,
+    packed_constants: Option<&'b HashMap<u64, usize>>,
     noncon: Variable,
     query_index: i64,
     regular: bool,
@@ -59,8 +61,9 @@ pub(super) fn compile(
     regular: bool,
     disk: Option<&crate::cache::Artifact>,
     circuit: Option<&CircuitStamp>,
-    batch: bool,
+    packed_constants: Option<&HashMap<u64, usize>>,
 ) -> Result<abi::Code, String> {
+    let batch = packed_constants.is_some();
     let profile_blocks = std::env::var_os("SPX_PROFILE_VA_BLOCKS").is_some();
     let mut flags = settings::builder();
     let opt = std::env::var("SPX_CLIF_OPT").unwrap_or_else(|_| "none".into());
@@ -152,7 +155,7 @@ pub(super) fn compile(
             range,
             &mut handoff,
             circuit,
-            batch,
+            packed_constants,
         )?;
         module
             .define_function(func, &mut ctx)
@@ -243,8 +246,9 @@ fn emit(
     range: Range<usize>,
     handoff: &mut split::Handoff,
     circuit: Option<&CircuitStamp>,
-    batch: bool,
+    packed_constants: Option<&HashMap<u64, usize>>,
 ) -> Result<(), String> {
+    let batch = packed_constants.is_some();
     let ptr = config.pointer_type();
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut fb = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
@@ -307,6 +311,8 @@ fn emit(
         literals: HashMap::new(),
         fields: HashMap::new(),
         constants: HashMap::new(),
+        loaded_constants: HashMap::new(),
+        packed_constants,
         noncon,
         query_index: 0,
         regular,
@@ -391,6 +397,23 @@ impl Lower<'_, '_> {
         if x.abs() == 1. || x == 0. {
             return self.num(x);
         }
+        if let Some(indices) = self.packed_constants {
+            let Some(&i) = indices.get(&x.to_bits()) else {
+                return self.num(x);
+            };
+            let base = self.field(self.ptr, offset_of!(Frame, constants));
+            let v = self.fb.ins().load(
+                F64X2,
+                MemFlagsData::new()
+                    .with_notrap()
+                    .with_readonly()
+                    .with_can_move(),
+                base,
+                (i * 16) as i32,
+            );
+            self.loaded_constants.insert(v, x);
+            return v;
+        }
         if let Some(&v) = self.constants.get(&r) {
             return v;
         }
@@ -418,7 +441,11 @@ impl Lower<'_, '_> {
     }
     pub(super) fn constant(&self, v: V) -> Option<f64> {
         let dfg = &self.fb.func.dfg;
-        let inst = dfg.value_def(dfg.resolve_aliases(v)).inst()?;
+        let v = dfg.resolve_aliases(v);
+        if let Some(&x) = self.loaded_constants.get(&v) {
+            return Some(x);
+        }
+        let inst = dfg.value_def(v).inst()?;
         match dfg.insts[inst] {
             ir::InstructionData::Unary {
                 opcode: ir::Opcode::Splat,
