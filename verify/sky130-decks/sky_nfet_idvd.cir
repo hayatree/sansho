@@ -1,0 +1,13 @@
+* SKY130 nfet_01v8 Id-Vd with body bias and multiple fingers
+* Requires the open_pdks/volare SKY130 build under va-models/volare-sky130 (sky130A).
+* Provenance: original SKY130 test circuit.
+.lib "../../va-models/volare-sky130/sky130A/libs.tech/ngspice/sky130.lib.spice" tt
+vd d 0 0
+vg1 g1 0 0.9
+vg2 g2 0 1.8
+vb b 0 -0.4
+xm1 d g1 0 b sky130_fd_pr__nfet_01v8 w=2 l=0.15 nf=2 ad=0.29 as=0.29 pd=2.58 ps=2.58
+xm2 d g2 0 b sky130_fd_pr__nfet_01v8 w=2 l=0.15 nf=2 ad=0.29 as=0.29 pd=2.58 ps=2.58
+xm3 d g2 0 b sky130_fd_pr__nfet_01v8_lvt w=1 l=0.35
+.dc vd 0 1.8 10m
+.end

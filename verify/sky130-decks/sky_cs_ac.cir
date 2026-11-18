@@ -1,0 +1,12 @@
+* SKY130 common-source amplifier with active load, AC response
+* Requires the open_pdks/volare SKY130 build under va-models/volare-sky130 (sky130A).
+* Provenance: original SKY130 test circuit.
+.lib "../../va-models/volare-sky130/sky130A/libs.tech/ngspice/sky130.lib.spice" tt
+vdd vdd 0 1.8
+vin g 0 dc 0.7 ac 1
+vbp bp 0 1.0
+xn d g 0 0 sky130_fd_pr__nfet_01v8 w=2 l=0.5
+xp d bp vdd vdd sky130_fd_pr__pfet_01v8 w=4 l=0.5
+cl d 0 50f
+.ac dec 20 1e5 1e10
+.end

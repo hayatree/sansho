@@ -1,0 +1,12 @@
+* SKY130 inverter driving a fan-out of four, transient
+* Requires the open_pdks/volare SKY130 build under va-models/volare-sky130 (sky130A).
+* Provenance: original SKY130 test circuit.
+.lib "../../va-models/volare-sky130/sky130A/libs.tech/ngspice/sky130.lib.spice" tt
+vdd vdd 0 1.8
+vin in 0 pulse(0 1.8 100p 80p 80p 1n 2n)
+xp1 out in vdd vdd sky130_fd_pr__pfet_01v8 w=2 l=0.15 ad=0.58 as=0.58 pd=4.58 ps=4.58
+xn1 out in 0 0 sky130_fd_pr__nfet_01v8 w=1 l=0.15 ad=0.29 as=0.29 pd=2.58 ps=2.58
+xp2 o2 out vdd vdd sky130_fd_pr__pfet_01v8 w=2 l=0.15 mult=4
+xn2 o2 out 0 0 sky130_fd_pr__nfet_01v8 w=1 l=0.15 mult=4
+.tran 2p 4n
+.end

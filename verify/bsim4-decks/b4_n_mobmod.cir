@@ -1,0 +1,89 @@
+* BSIM4 NMOS Id-Vg for mobmod 0, 1 and 2
+* Provenance: original BSIM4 test circuit; generic parameter values chosen for spx.
+.model m0 nmos
++ level=54 version=4.8 binunit=1 paramchk=1 mobmod=0 capmod=2
++ igcmod=0 igbmod=0 geomod=0 diomod=1 rdsmod=0 rbodymod=0
++ rgatemod=0 permod=1 acnqsmod=0 trnqsmod=0 tempmod=0 tnom=27
++ toxe=2.6e-09 toxp=2.1e-09 toxm=2.6e-09 dtox=5e-10 epsrox=3.9 xj=1e-07
++ ndep=2.2e+18 ngate=1e+20 nsd=1e+20 vth0=0.36 k1=0.48 k2=0.015
++ k3=0 k3b=0 w0=2.5e-06 lpe0=6e-08 lpeb=0 dvt0=2.2
++ dvt1=0.53 dvt2=-0.032 dvt0w=0 dvt1w=5300000.0 dvt2w=-0.032 dsub=0.45
++ eta0=0.075 etab=-0.07 u0=0.032 ua=1.1e-09 ub=1.2e-18 uc=-2.5e-11
++ vsat=110000.0 a0=1.3 ags=0.22 a1=0 a2=1 b0=0
++ b1=0 keta=-0.035 rdsw=160 rdswmin=0 prwg=0.1 prwb=-0.05
++ wr=1 pclm=1.1 pdiblc1=0.32 pdiblc2=0.0055 pdiblcb=-0.02 drout=0.56
++ pvag=0.6 delta=0.012 fprout=0.2 pdits=0.1 pditsd=0.2 pditsl=1000000.0
++ nfactor=1.25 cit=0 cdsc=0.00024 cdscd=0.0001 cdscb=0 voff=-0.11
++ voffl=0 minv=0.05 lint=1.2e-08 wint=6e-09 xl=0 xw=0
++ dwg=0 dwb=0 cgso=2.1e-10 cgdo=2.1e-10 cgbo=0 cgsl=3e-11
++ cgdl=3e-11 ckappas=0.6 ckappad=0.6 cf=8e-11 clc=1e-07 cle=0.6
++ dlc=1.2e-08 dwc=6e-09 vfbcv=-1 noff=1.1 voffcv=-0.02 acde=0.6
++ moin=15 alpha0=2e-06 alpha1=0 beta0=22 agidl=2e-09 bgidl=2200000000.0
++ cgidl=0.4 egidl=0.75 jss=2e-06 jsws=2e-12 jswgs=1e-12 njs=1.02
++ xtis=3 bvs=9 xjbvs=1 cjs=0.0011 mjs=0.42 cjsws=1.1e-10
++ mjsws=0.32 cjswgs=2.2e-10 mjswgs=0.35 pbs=0.82 pbsws=0.78 pbswgs=0.85
++ kt1=-0.24 kt1l=0 kt2=-0.028 ute=-1.45 ua1=1.1e-09 ub1=-1.5e-18
++ uc1=-4e-11 at=32000.0 prt=10 tpb=0.0015 tpbsw=0.0014 tpbswg=0.0014
++ tcj=0.0008 tcjsw=0.0006 tcjswg=0.0006 rsh=6 xpart=0 ef=1
++ noia=6e+41 noib=1.5e+25 noic=880000000.0 em=41000000.0 af=1 kf=0
+.model m1 nmos
++ level=54 version=4.8 binunit=1 paramchk=1 mobmod=1 capmod=2
++ igcmod=0 igbmod=0 geomod=0 diomod=1 rdsmod=0 rbodymod=0
++ rgatemod=0 permod=1 acnqsmod=0 trnqsmod=0 tempmod=0 tnom=27
++ toxe=2.6e-09 toxp=2.1e-09 toxm=2.6e-09 dtox=5e-10 epsrox=3.9 xj=1e-07
++ ndep=2.2e+18 ngate=1e+20 nsd=1e+20 vth0=0.36 k1=0.48 k2=0.015
++ k3=0 k3b=0 w0=2.5e-06 lpe0=6e-08 lpeb=0 dvt0=2.2
++ dvt1=0.53 dvt2=-0.032 dvt0w=0 dvt1w=5300000.0 dvt2w=-0.032 dsub=0.45
++ eta0=0.075 etab=-0.07 u0=0.032 ua=1.1e-09 ub=1.2e-18 uc=-0.05
++ vsat=110000.0 a0=1.3 ags=0.22 a1=0 a2=1 b0=0
++ b1=0 keta=-0.035 rdsw=160 rdswmin=0 prwg=0.1 prwb=-0.05
++ wr=1 pclm=1.1 pdiblc1=0.32 pdiblc2=0.0055 pdiblcb=-0.02 drout=0.56
++ pvag=0.6 delta=0.012 fprout=0.2 pdits=0.1 pditsd=0.2 pditsl=1000000.0
++ nfactor=1.25 cit=0 cdsc=0.00024 cdscd=0.0001 cdscb=0 voff=-0.11
++ voffl=0 minv=0.05 lint=1.2e-08 wint=6e-09 xl=0 xw=0
++ dwg=0 dwb=0 cgso=2.1e-10 cgdo=2.1e-10 cgbo=0 cgsl=3e-11
++ cgdl=3e-11 ckappas=0.6 ckappad=0.6 cf=8e-11 clc=1e-07 cle=0.6
++ dlc=1.2e-08 dwc=6e-09 vfbcv=-1 noff=1.1 voffcv=-0.02 acde=0.6
++ moin=15 alpha0=2e-06 alpha1=0 beta0=22 agidl=2e-09 bgidl=2200000000.0
++ cgidl=0.4 egidl=0.75 jss=2e-06 jsws=2e-12 jswgs=1e-12 njs=1.02
++ xtis=3 bvs=9 xjbvs=1 cjs=0.0011 mjs=0.42 cjsws=1.1e-10
++ mjsws=0.32 cjswgs=2.2e-10 mjswgs=0.35 pbs=0.82 pbsws=0.78 pbswgs=0.85
++ kt1=-0.24 kt1l=0 kt2=-0.028 ute=-1.45 ua1=1.1e-09 ub1=-1.5e-18
++ uc1=-4e-11 at=32000.0 prt=10 tpb=0.0015 tpbsw=0.0014 tpbswg=0.0014
++ tcj=0.0008 tcjsw=0.0006 tcjswg=0.0006 rsh=6 xpart=0 ef=1
++ noia=6e+41 noib=1.5e+25 noic=880000000.0 em=41000000.0 af=1 kf=0
+.model m2 nmos
++ level=54 version=4.8 binunit=1 paramchk=1 mobmod=2 capmod=2
++ igcmod=0 igbmod=0 geomod=0 diomod=1 rdsmod=0 rbodymod=0
++ rgatemod=0 permod=1 acnqsmod=0 trnqsmod=0 tempmod=0 tnom=27
++ toxe=2.6e-09 toxp=2.1e-09 toxm=2.6e-09 dtox=5e-10 epsrox=3.9 xj=1e-07
++ ndep=2.2e+18 ngate=1e+20 nsd=1e+20 vth0=0.36 k1=0.48 k2=0.015
++ k3=0 k3b=0 w0=2.5e-06 lpe0=6e-08 lpeb=0 dvt0=2.2
++ dvt1=0.53 dvt2=-0.032 dvt0w=0 dvt1w=5300000.0 dvt2w=-0.032 dsub=0.45
++ eta0=0.075 etab=-0.07 u0=0.032 ua=0.3 ub=1.0 uc=0.05
++ vsat=110000.0 a0=1.3 ags=0.22 a1=0 a2=1 b0=0
++ b1=0 keta=-0.035 rdsw=160 rdswmin=0 prwg=0.1 prwb=-0.05
++ wr=1 pclm=1.1 pdiblc1=0.32 pdiblc2=0.0055 pdiblcb=-0.02 drout=0.56
++ pvag=0.6 delta=0.012 fprout=0.2 pdits=0.1 pditsd=0.2 pditsl=1000000.0
++ nfactor=1.25 cit=0 cdsc=0.00024 cdscd=0.0001 cdscb=0 voff=-0.11
++ voffl=0 minv=0.05 lint=1.2e-08 wint=6e-09 xl=0 xw=0
++ dwg=0 dwb=0 cgso=2.1e-10 cgdo=2.1e-10 cgbo=0 cgsl=3e-11
++ cgdl=3e-11 ckappas=0.6 ckappad=0.6 cf=8e-11 clc=1e-07 cle=0.6
++ dlc=1.2e-08 dwc=6e-09 vfbcv=-1 noff=1.1 voffcv=-0.02 acde=0.6
++ moin=15 alpha0=2e-06 alpha1=0 beta0=22 agidl=2e-09 bgidl=2200000000.0
++ cgidl=0.4 egidl=0.75 jss=2e-06 jsws=2e-12 jswgs=1e-12 njs=1.02
++ xtis=3 bvs=9 xjbvs=1 cjs=0.0011 mjs=0.42 cjsws=1.1e-10
++ mjsws=0.32 cjswgs=2.2e-10 mjswgs=0.35 pbs=0.82 pbsws=0.78 pbswgs=0.85
++ kt1=-0.24 kt1l=0 kt2=-0.028 ute=-1.45 ua1=1.1e-09 ub1=-1.5e-18
++ uc1=-4e-11 at=32000.0 prt=10 tpb=0.0015 tpbsw=0.0014 tpbswg=0.0014
++ tcj=0.0008 tcjsw=0.0006 tcjswg=0.0006 rsh=6 xpart=0 ef=1
++ noia=6e+41 noib=1.5e+25 noic=880000000.0 em=41000000.0 af=1 kf=0
++ eu=1.67
+vd d 0 0.1
+vg g 0 0
+vb b 0 -0.3
+m1 d g 0 b m0 w=1u l=0.2u
+m2 d g 0 b m1 w=1u l=0.2u
+m3 d g 0 b m2 w=1u l=0.2u
+.dc vg 0 1.2 10m
+.end

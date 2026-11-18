@@ -1,0 +1,12 @@
+* SKY130 pfet_01v8 and pfet_01v8_hvt Id-Vg
+* Requires the open_pdks/volare SKY130 build under va-models/volare-sky130 (sky130A).
+* Provenance: original SKY130 test circuit.
+.lib "../../va-models/volare-sky130/sky130A/libs.tech/ngspice/sky130.lib.spice" tt
+vs s 0 1.8
+vd d 0 0
+vg g 0 1.8
+xm1 d g s s sky130_fd_pr__pfet_01v8 w=2 l=0.15
+xm2 d g s s sky130_fd_pr__pfet_01v8_hvt w=2 l=0.15
+xm3 d g s s sky130_fd_pr__pfet_01v8 w=3 l=0.5 mult=2
+.dc vg 1.8 0 -10m
+.end

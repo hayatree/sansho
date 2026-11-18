@@ -1,0 +1,3 @@
+* ngspice settings for the SkyWater SKY130 libraries (reference runs only).
+set ngbehavior=hsa
+set ng_nomodcheck

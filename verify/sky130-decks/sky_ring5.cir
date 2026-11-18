@@ -1,0 +1,17 @@
+* SKY130 five-stage ring oscillator
+* Requires the open_pdks/volare SKY130 build under va-models/volare-sky130 (sky130A).
+* Provenance: original SKY130 test circuit.
+.lib "../../va-models/volare-sky130/sky130A/libs.tech/ngspice/sky130.lib.spice" tt
+.subckt inv in out vdd
+xp out in vdd vdd sky130_fd_pr__pfet_01v8 w=1 l=0.15 ad=0.29 as=0.29 pd=2.58 ps=2.58
+xn out in 0 0 sky130_fd_pr__nfet_01v8 w=0.5 l=0.15 ad=0.145 as=0.145 pd=1.58 ps=1.58
+.ends
+vdd vdd 0 1.8
+x1 a b vdd inv
+x2 b c vdd inv
+x3 c d vdd inv
+x4 d e vdd inv
+x5 e a vdd inv
+.ic v(a)=0 v(b)=1.8 v(c)=0 v(d)=1.8 v(e)=0
+.tran 2p 3n uic
+.end
