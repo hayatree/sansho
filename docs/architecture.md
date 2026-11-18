@@ -86,7 +86,7 @@
 | `spx-elab` | Subcircuit flattening, parameter resolution, model binning, node numbering, topology checks (floating nodes, V loops, I cutsets) | — |
 | `spx-ir` | Post-elaboration circuit IR. JSON schema via serde (also accepted as agent input) | serde, schemars |
 | `spx-sparse` | CSC pattern, AMD/COLAMD, BTF, LU (real & complex), refactor, triangular solves, `LinearSolver` trait | faer (initial backend) |
-| `spx-devices` | `DeviceGroup` trait. Built-ins (R/L/C/K/V/I/E/F/G/H/switches/diode/BJT (GP)/MOS1/later BSIM4) | — |
+| `spx-devices` | `DeviceGroup` trait. Built-ins (R/L/C/K/V/I/E/F/G/H/switches/diode/BJT (GP)/MOS1/BSIM4) | — |
 | `spx-va` | Clean-room Verilog-A analog subset, binding specialization, register interpretation and optional native evaluation | Cranelift (optional) |
 | `spx-osdi` | OSDI 0.3/0.4 loader (independently implemented from the spec); exposes `.osdi` models as `DeviceGroup` | libloading |
 | `spx-engine` | MNA assembly, Newton, homotopy, time integration, analyses | rayon |
@@ -443,9 +443,12 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
   cards accumulate selections. The independent scale and circuit ordering are preserved, and
   `.save all` exports all vectors. Both deck measurements and later session measurements have
   access to the complete traces. Raw files use the ngspice format readable by Xschem.
-- **Models**: built-ins start at Level 1. BSIM4 is ported from the Berkeley distribution into a
-  separate crate (`spx-model-bsim4`, under its original license; see §11). Production Verilog-A models are compiled by spx-va. Verification loads
-  OSDI models into the external reference simulator. PDKs are not bundled.
+- Built-in MOS levels 1 and 54 use the same nonlinear slot assembly. Level 54 specializes
+  the silicon model at binding time and differentiates terminal current and charge during
+  evaluation. Its optional resistance networks allocate internal unknowns during setup.
+  The parser binds selected geometry bins in the lexical scope of each instance.
+  The coverage and SKY130 dialect rules are in [the BSIM4 model notes](bsim4.md).
+  Production Verilog-A models are compiled by spx-va.
 
 ---
 
@@ -457,8 +460,7 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
   ngspice; manual text of commercial tools.
 - Each module starts with a `// Provenance:` comment listing its references; these are collected in
   `docs/PROVENANCE.md`.
-- `cargo-deny` restricts dependency licenses. Models with conditional licenses (BSIM4, etc.) live in
-  separate crates and are excluded from default builds (feature flag).
+- `cargo-deny` restricts dependency licenses. The built-in BSIM4 equations are original Rust derived from the published manual. The SKY130 PDK is supplied externally.
 
 ---
 
@@ -470,7 +472,7 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 | M1 | Linear circuits: basic parser, elaboration, MNA, OP/DC/AC/TRAN (trapezoidal), faer LU, raw output | RC/RLC match analytic solutions and ngspice |
 | M2 | Nonlinear: diode, BJT (GP), MOS1, Newton + limiting, gmin/source stepping, BDF2, LTE step control, `.meas`, L0 parallelism, JSON output | Small-circuit benchmarks within RMS error ≤ 1 vs ngspice (done: `verify/decks`) |
 | M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP (done: `spx-mcp/tests/stdio.rs`) |
-| M4 | OSDI loader and PDKs: IHP SG13G2 (PSP103, ...), SKY130 (ported BSIM4 or OSDI), broader ngspice dialect | PDK testbenches match ngspice (dialect part done: `verify/decks/{subckt_ring,lib_include,nodeset_latch,uic_rlc}`) |
+| M4 | OSDI loader and PDKs: IHP SG13G2 (PSP103, ...), SKY130 (built-in level 54), broader ngspice dialect | PDK testbenches match ngspice (dialect part done: `verify/decks/{subckt_ring,lib_include,nodeset_latch,uic_rlc}`) |
 | M5 | Performance: own KLU-style solver, bypass, parallel LU, GPU batch (G1) | ≥ 1.x× ngspice on C6288 single-core; further gains multi-core |
 | M6 | Extensions: noise, sensitivity, PSS/HB, HSPICE dialect, Python | — |
 
@@ -481,6 +483,6 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 1. Final project name (trademark and crates.io checks)
 2. MSRV (proposal: latest stable − 2)
 3. ~~Choice of Rust MCP SDK~~ — resolved in M3: own implementation of the stdio transport (see §7.4)
-4. SKY130 BSIM4: port and build in, or OSDI only? (license conditions vs performance)
+4. ~~SKY130 BSIM4 delivery~~ — level 54 is a clean-room built-in in `spx-devices`.
 5. First GPU backend: wgpu (portability) or CUDA (performance)
 6. Spilling the waveform store to disk for large transients (Arrow / Parquet?)

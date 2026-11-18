@@ -66,6 +66,22 @@ pub struct Mos1Model {
 }
 
 impl Mos1Model {
+    /// Combine parallel copies with identical terminal voltages and geometry.
+    pub fn multiply(&mut self, copies: f64) {
+        self.kp *= copies;
+        self.is *= copies;
+        self.js *= copies;
+        self.rd /= copies;
+        self.rs /= copies;
+        self.cbd = self.cbd.map(|v| v * copies);
+        self.cbs = self.cbs.map(|v| v * copies);
+        self.cj *= copies;
+        self.cjsw *= copies;
+        self.cgso *= copies;
+        self.cgdo *= copies;
+        self.cgbo *= copies;
+        self.cox *= copies;
+    }
     /// Build from `.model` parameters. Returns the model and the names of ignored parameters.
     pub fn from_params(p: &ModelParams, polarity: f64) -> (Self, Vec<String>) {
         let cox = p.get("tox", 0.0);
@@ -226,7 +242,7 @@ impl Mos1s {
 
 /// Clamp a Newton step of a FET control voltage. The allowed step grows with the distance
 /// from the threshold region so that strongly-on devices are not slowed down.
-fn limit_step(vnew: f64, vold: f64, scale: f64) -> (f64, bool) {
+pub(crate) fn limit_step(vnew: f64, vold: f64, scale: f64) -> (f64, bool) {
     let dmax = 0.5 + 0.5 * scale.abs();
     let d = vnew - vold;
     if d.abs() > dmax {

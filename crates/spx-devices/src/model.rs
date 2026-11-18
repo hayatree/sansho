@@ -19,21 +19,44 @@ pub struct ParamSpec {
 #[derive(Debug, Default)]
 pub struct ModelParams {
     entries: Vec<(String, f64, Cell<bool>)>,
+    // Large compact-model cards are queried hundreds of times during elaboration.
+    sorted: Vec<usize>,
 }
 
 impl ModelParams {
     /// Wrap parameter pairs (names are expected in lower case). Later entries override earlier
     /// ones.
     pub fn new(pairs: &[(String, f64)]) -> Self {
-        Self {
-            entries: pairs
-                .iter()
-                .map(|(k, v)| (k.clone(), *v, Cell::new(false)))
-                .collect(),
+        let entries: Vec<_> = pairs
+            .iter()
+            .map(|(k, v)| (k.clone(), *v, Cell::new(false)))
+            .collect();
+        let mut sorted = Vec::new();
+        if entries.len() > 16 {
+            sorted.extend(0..entries.len());
+            sorted.sort_by(|&a, &b| entries[a].0.cmp(&entries[b].0));
         }
+        Self { entries, sorted }
     }
 
     fn lookup(&self, names: &[&str]) -> Option<f64> {
+        if !self.sorted.is_empty() {
+            let mut last = None;
+            for &key in names {
+                let start = self
+                    .sorted
+                    .partition_point(|&i| self.entries[i].0.as_str() < key);
+                for &i in &self.sorted[start..] {
+                    let (k, _, used) = &self.entries[i];
+                    if k != key {
+                        break;
+                    }
+                    used.set(true);
+                    last = Some(i.max(last.unwrap_or(0)));
+                }
+            }
+            return last.map(|i| self.entries[i].1);
+        }
         let mut found = None;
         for (k, v, used) in &self.entries {
             if names.contains(&k.as_str()) {

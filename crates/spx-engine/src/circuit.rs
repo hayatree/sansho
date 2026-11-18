@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use spx_devices::bjt::BjtModel;
+use spx_devices::bsim4::{Binding, Bsim4s};
 use spx_devices::diode::DiodeModel;
 use spx_devices::mos1::{Mos1Geometry, Mos1Model};
 use spx_devices::{
@@ -877,6 +878,7 @@ pub(crate) fn compile_cached(
     let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
     let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
     let mut mos1 = Chunked::<Mos1s>::new(CHUNK_NONLINEAR);
+    let mut bsim4 = Chunked::<Bsim4s>::new(CHUNK_NONLINEAR);
     let mut model_cache = ModelCache::new(&nl.models, opts);
     for e in &nl.elements {
         match &e.kind {
@@ -928,7 +930,17 @@ pub(crate) fn compile_cached(
                     continue;
                 };
                 let inst = ModelParams::new(params);
-                let area = inst.get("area", 1.0);
+                let area = inst.get("area", 1.0) * inst.opt(&["m", "mult"]).unwrap_or(1.);
+                if !area.is_finite() || area <= 0. {
+                    errors.push(
+                        Diagnostic::error(
+                            "E-ELAB-PARAM",
+                            format!("{}: effective area must be positive", e.name),
+                        )
+                        .with_span(e.span),
+                    );
+                    continue;
+                }
                 warn_instance(e, &inst, &mut diags);
                 nonlinear_count += 1;
                 diodes.cur().push(&e.name, node(p), node(n), m, area, *off);
@@ -946,7 +958,17 @@ pub(crate) fn compile_cached(
                     continue;
                 };
                 let inst = ModelParams::new(params);
-                let area = inst.get("area", 1.0);
+                let area = inst.get("area", 1.0) * inst.opt(&["m", "mult"]).unwrap_or(1.);
+                if !area.is_finite() || area <= 0. {
+                    errors.push(
+                        Diagnostic::error(
+                            "E-ELAB-PARAM",
+                            format!("{}: effective area must be positive", e.name),
+                        )
+                        .with_span(e.span),
+                    );
+                    continue;
+                }
                 warn_instance(e, &inst, &mut diags);
                 let sub = s.as_deref().and_then(node);
                 nonlinear_count += 1;
@@ -962,19 +984,69 @@ pub(crate) fn compile_cached(
                 params,
                 off,
             } => {
-                let Some(m) = model_cache.mos(model, &mut diags, &mut errors) else {
-                    continue;
-                };
                 let inst = ModelParams::new(params);
                 let dflt = Mos1Geometry::default();
-                let geom = Mos1Geometry {
-                    l: inst.get("l", opts.defl.unwrap_or(dflt.l)),
-                    w: inst.get("w", opts.defw.unwrap_or(dflt.w)),
-                    ad: inst.get("ad", opts.defad.unwrap_or(0.0)),
-                    as_: inst.get("as", opts.defas.unwrap_or(0.0)),
-                    pd: inst.get("pd", 0.0),
-                    ps: inst.get("ps", 0.0),
+                let scaled = |name: &str, default: f64, power: i32| {
+                    inst.opt(&[name])
+                        .map_or(default, |v| v * opts.scale.powi(power))
                 };
+                let geom = Mos1Geometry {
+                    l: scaled("l", opts.defl.unwrap_or(dflt.l), 1),
+                    w: scaled("w", opts.defw.unwrap_or(dflt.w), 1),
+                    ad: scaled("ad", opts.defad.unwrap_or(0.0), 2),
+                    as_: scaled("as", opts.defas.unwrap_or(0.0), 2),
+                    pd: scaled("pd", 0.0, 1),
+                    ps: scaled("ps", 0.0, 1),
+                };
+                if let Some(card) = model_cache.card(model)
+                    && card
+                        .params
+                        .iter()
+                        .rev()
+                        .find(|(k, _)| k == "level")
+                        .is_some_and(|(_, v)| *v == 54.)
+                {
+                    let p = ModelParams::new(&card.params);
+                    let binding = Binding {
+                        model: &p,
+                        instance: &inst,
+                        geometry: geom,
+                        polarity: if card.kind == "pmos" { -1. } else { 1. },
+                        temp: opts.temp,
+                        tnom: opts.tnom,
+                        scale: opts.scale,
+                    };
+                    match bsim4.cur().push(
+                        &e.name,
+                        [node(d), node(g), node(s), node(b)],
+                        *off,
+                        binding,
+                    ) {
+                        Ok(warnings) => {
+                            diags.extend(warnings.into_iter().map(|d| d.with_span(e.span)));
+                            nonlinear_count += 1;
+                            ModelCache::warn_ignored(card, &p.unused(), &mut diags);
+                            warn_instance(e, &inst, &mut diags);
+                        }
+                        Err(d) => errors.push(d.with_span(e.span)),
+                    }
+                    continue;
+                }
+                let Some(mut m) = model_cache.mos(model, &mut diags, &mut errors) else {
+                    continue;
+                };
+                let copies = inst.opt(&["m", "mult"]).unwrap_or(1.);
+                if !copies.is_finite() || copies <= 0. {
+                    errors.push(
+                        Diagnostic::error(
+                            "E-ELAB-PARAM",
+                            format!("{}: multiplicity must be positive", e.name),
+                        )
+                        .with_span(e.span),
+                    );
+                    continue;
+                }
+                m.multiply(copies);
                 warn_instance(e, &inst, &mut diags);
                 if let Some(msg) = Mos1s::check_geometry(&m, &geom) {
                     errors.push(
@@ -1006,6 +1078,7 @@ pub(crate) fn compile_cached(
     diodes.into_groups(&mut groups);
     bjts.into_groups(&mut groups);
     mos1.into_groups(&mut groups);
+    bsim4.into_groups(&mut groups);
     #[cfg(feature = "jit")]
     let first_va = groups.len();
     for group in va.into_values() {
@@ -1164,7 +1237,7 @@ pub(crate) fn compile_cached(
 
 /// Resolves `.model` cards into typed models once per model name, emitting warnings once.
 struct ModelCache<'a> {
-    cards: &'a [ModelCard],
+    cards: HashMap<&'a str, &'a ModelCard>,
     temp_differs: bool,
     diodes: HashMap<String, Option<DiodeModel>>,
     bjts: HashMap<String, Option<BjtModel>>,
@@ -1174,7 +1247,7 @@ struct ModelCache<'a> {
 impl<'a> ModelCache<'a> {
     fn new(cards: &'a [ModelCard], opts: &SimOptions) -> Self {
         Self {
-            cards,
+            cards: cards.iter().map(|c| (c.name.as_str(), c)).collect(),
             temp_differs: (opts.temp - opts.tnom).abs() > 1e-9,
             diodes: HashMap::new(),
             bjts: HashMap::new(),
@@ -1183,7 +1256,7 @@ impl<'a> ModelCache<'a> {
     }
 
     fn card(&self, name: &str) -> Option<&'a ModelCard> {
-        self.cards.iter().find(|c| c.name == name)
+        self.cards.get(name).copied()
     }
 
     /// Common checks; returns the parameter list and polarity.
@@ -1198,14 +1271,11 @@ impl<'a> ModelCache<'a> {
         if level != 1.0 {
             let mut d = Diagnostic::error(
                 "E-ELAB-MODEL",
-                format!(
-                    "model `{}`: level {level} is not supported (only level 1)",
-                    card.name
-                ),
+                format!("model `{}`: level {level} is not supported", card.name),
             )
             .with_span(card.span);
             if matches!(card.kind.as_str(), "nmos" | "pmos") {
-                d = d.with_note("advanced MOSFET models will be supported through OSDI (planned)");
+                d = d.with_note("built-in MOSFET levels are 1 and 54");
             }
             errors.push(d);
             return None;

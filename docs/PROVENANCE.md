@@ -32,6 +32,8 @@ that introduces the code.
 | pn-junction current, depletion charge with `fc` linearization, junction limiting, `vcrit` | `spx-devices/src/junction.rs` | Nagel (1975); Antognetti & Massobrio (1993), ch. 1 |
 | Diode (level 1) | `spx-devices/src/diode.rs` | Antognetti & Massobrio (1993), ch. 1; breakdown as a single exponential (own simplification) |
 | BJT Gummel–Poon | `spx-devices/src/bjt.rs` | Gummel & Poon (1970); Getreu (1976); Antognetti & Massobrio (1993), ch. 2 |
+| Silicon MOSFET level 54, parameter catalog and device tests | `spx-devices/src/bsim4/` | Original Rust from UC Berkeley, *BSIM4 4.8.2 Technical Manual*, ch. 1–15 and Appendix A, and published update notes (CMC/ECL-2.0 documentation). The local notes contain an embedded implementation excerpt encountered during document inspection. Implementation files and excerpts were not used to derive the Rust equations. |
+| SKY130 nominal library binding | `spx-netlist/src/{preproc,parser,expr}.rs` | Original implementation. Local Apache-2.0 SKY130 model cards informed syntax and the maintainer's ngspice 44.2 waveforms supplied black-box comparisons. |
 | MOSFET level 1, Meyer capacitances | `spx-devices/src/mos1.rs` | Shichman & Hodges (1968); Meyer (1971); Antognetti & Massobrio (1993), ch. 4; FET step limiting is original |
 | Gmin stepping, source stepping | `spx-engine/src/analysis.rs` | Standard continuation methods (e.g. Nagel 1975; Vlach & Singhal, *Computer Methods for Circuit Analysis and Design*, 1983); adaptive schedules are original |
 | LTE step control, variable-step BDF2 | `spx-engine/src/analysis.rs` | Nagel (1975); Brayton, Gustavson & Hachtel, "A new efficient algorithm for solving differential-algebraic systems using implicit BDF", Proc. IEEE 60 (1972) |

@@ -41,6 +41,8 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`W-ELAB-NODC`](#w-elab-nodc) | warning | No DC path to ground |
 | [`W-ELAB-NODE`](#w-elab-node) | warning | Unknown node in `.ic` / `.nodeset` |
 | [`W-ELAB-VLOOP`](#w-elab-vloop) | warning | Loop of voltage sources or inductors |
+| [`E-UNSUPPORTED`](#e-unsupported) | error | Unsupported device selector |
+| [`W-BSIM4-PARAM`](#w-bsim4-param) | warning | BSIM4 parameter check |
 | [`W-MODEL-IGNORED`](#w-model-ignored) | warning | Model parameter ignored |
 | [`W-MODEL-TEMP`](#w-model-temp) | warning | Temperature not applied |
 | [`W-LINT-UNIT-MILLI`](#w-lint-unit-milli) | warning | `M` means milli |
@@ -227,7 +229,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 **Unsupported model.** The model level or type is not supported.
 
-- Use a supported level (level 1 for diodes, BJTs and MOSFETs in this version).
+- Use a supported model level. Built-in MOSFETs support levels 1 and 54.
 
 ## E-ELAB-NOGROUND
 
@@ -264,6 +266,18 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Loop of voltage sources or inductors.** Voltage sources and/or inductors form a loop, which makes the matrix singular.
 
 - Add a small series resistance to one element of the loop.
+
+## E-UNSUPPORTED
+
+**Unsupported device selector.** The selected device equation or analysis mode is unavailable.
+
+- See docs/bsim4.md for the available BSIM4 selectors.
+
+## W-BSIM4-PARAM
+
+**BSIM4 parameter check.** A selected model or instance falls outside the recommended BSIM4 parameter range.
+
+- Inspect the named parameter, its units and the effective geometry.
 
 ## W-MODEL-IGNORED
 

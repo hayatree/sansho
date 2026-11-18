@@ -306,6 +306,9 @@ pub fn write(nl: &Netlist) -> String {
             .iter()
             .map(|(k, v)| format!("{k}={}", num(*v)))
             .collect();
+        if let Some(v) = &m.version {
+            let _ = write!(l, "version={v} ");
+        }
         l += &ps.join(" ");
         l += ")";
         let _ = writeln!(out, "{l}");
@@ -384,7 +387,7 @@ mod tests {
         assert_eq!(a.hdl[0].text, b.hdl[0].text);
         assert_eq!(crate::parse(src).unwrap_err()[0].code, "E-PARSE-INCLUDE");
         assert!(
-            crate::parse("t\n.model m unknown\n")
+            crate::parse("t\n.model m unknown\nD1 a 0 m\n")
                 .unwrap_err()
                 .iter()
                 .any(|d| d.code == "E-PARSE-MODEL")

@@ -200,7 +200,7 @@ fn model_diagnostics() {
     let nl = parse("t\nD1 a 0 dm\nV1 a 0 0.5\n.model dm d is=1e-14 foo=3\n.op\n").unwrap();
     let out = run(&nl).unwrap();
     assert!(out.warnings.iter().any(|w| w.code == "W-MODEL-IGNORED"));
-    let nl = parse("t\nM1 d g 0 0 m4\nV1 d 0 1\nV2 g 0 1\n.model m4 nmos level=54\n.op\n").unwrap();
+    let nl = parse("t\nM1 d g 0 0 m4\nV1 d 0 1\nV2 g 0 1\n.model m4 nmos level=99\n.op\n").unwrap();
     let err = run(&nl).err().unwrap();
     assert!(err.diagnostics.iter().any(|d| d.code == "E-ELAB-MODEL"));
 }

@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bjt;
+pub mod bsim4;
 pub mod diode;
 pub mod dual;
 pub mod junction;

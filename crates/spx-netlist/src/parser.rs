@@ -13,9 +13,6 @@ use crate::{
     SourceSpec, TranFn,
 };
 
-/// Model types accepted on `.model` cards.
-const MODEL_TYPES: &[&str] = &["d", "npn", "pnp", "nmos", "pmos"];
-
 /// Parse netlist text.
 ///
 /// On success the returned netlist carries any warnings. On failure, all diagnostics (errors and
@@ -33,6 +30,7 @@ pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<
         diags: pre.diags,
         ..Parser::default()
     };
+    let mut dynamic = std::collections::HashMap::new();
     let mut parsed_models = std::collections::HashMap::new();
     for (index, line) in pre.lines.iter().enumerate() {
         let head = line.tokens[0].lower();
@@ -43,7 +41,16 @@ pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<
                 line,
                 &pre.lines[original],
                 parsed_models.get(&original).copied(),
+                pre.model_scopes.get(&original).map(|s| s.as_ref()),
             );
+            if p.models.len() > before {
+                p.model_names.insert(p.models[before].name.clone(), before);
+            }
+            if let Some(scope) = pre.model_scopes.get(&original)
+                && p.models.len() > before
+            {
+                dynamic.insert(before, (original, scope.as_ref(), &pre.lines[original]));
+            }
             if index == original && p.models.len() > before {
                 parsed_models.insert(index, before);
             }
@@ -54,7 +61,8 @@ pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<
         }
     }
     p.resolve_bjt_substrates();
-    p.resolve_bins();
+    p.resolve_bins(&dynamic);
+    p.bind_model_expressions(&dynamic);
     p.check_models();
     if p.diags.iter().any(Diagnostic::is_error) {
         return Err(p.diags);
@@ -75,6 +83,9 @@ pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<
     })
 }
 
+type DynamicCards<'a> =
+    std::collections::HashMap<usize, (usize, &'a crate::preproc::ModelScope, &'a Line)>;
+
 #[derive(Default)]
 struct Parser {
     has_hdl: bool,
@@ -82,6 +93,7 @@ struct Parser {
     analyses: Vec<AnalysisCard>,
     options: Vec<OptionCard>,
     models: Vec<ModelCard>,
+    model_names: std::collections::HashMap<String, usize>,
     saves: Vec<String>,
     measures: Vec<crate::MeasureCard>,
     ics: Vec<NodeValue>,
@@ -102,6 +114,12 @@ struct DeviceFields {
 fn node_name(t: &Token) -> String {
     let s = t.lower();
     if s == "gnd" { crate::GROUND.into() } else { s }
+}
+
+fn dotted_version(s: &str) -> bool {
+    s.split('.').count() > 2
+        && s.split('.')
+            .all(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
 }
 
 impl Parser {
@@ -233,6 +251,7 @@ impl Parser {
         let t = self.need(line, 3, &usage)?;
         let (p, n) = (node_name(&t[1]), node_name(&t[2]));
         let mut value = None;
+        let mut mult = 1.;
         let mut i = 3;
         while i < t.len() {
             if t.get(i + 1).is_some_and(Token::is_eq) {
@@ -248,6 +267,8 @@ impl Parser {
                 let v = self.number(vt, &k)?;
                 if k == key {
                     value = Some(v);
+                } else if matches!(k.as_str(), "m" | "mult") {
+                    mult = v;
                 } else if k == "ic" {
                     self.diags.push(
                         Diagnostic::warning(
@@ -287,6 +308,19 @@ impl Parser {
                     .with_note(format!("usage: {usage}")),
             );
             return None;
+        };
+        if mult <= 0. || !mult.is_finite() {
+            self.err(
+                "E-PARSE-VALUE",
+                "multiplicity must be positive",
+                line.span(),
+            );
+            return None;
+        }
+        let value = if letter == "C" {
+            value * mult
+        } else {
+            value / mult
         };
         if !value.is_finite() || (letter == "R" && value == 0.0) {
             self.err(
@@ -687,28 +721,34 @@ impl Parser {
     /// Report instances that reference undefined models or models of the wrong type.
     /// Resolve references to binned models (`nch` → `nch.1`, `nch.2`, ...) by the instance
     /// geometry: the bin with `lmin <= l < lmax` and `wmin <= w < wmax` is chosen.
-    fn resolve_bins(&mut self) {
+    fn resolve_bins(&mut self, dynamic: &DynamicCards<'_>) {
+        let scale = self
+            .options
+            .iter()
+            .rev()
+            .find(|o| o.name == "scale")
+            .and_then(|o| o.value)
+            .unwrap_or(1.);
         let mut errs = Vec::new();
+        let mut families = std::collections::HashMap::<_, Vec<_>>::new();
+        for (index, card) in self.models.iter().enumerate() {
+            if let Some((base, bin)) = card.name.rsplit_once('.')
+                && !bin.is_empty()
+                && bin.bytes().all(|c| c.is_ascii_digit())
+            {
+                families.entry(base).or_default().push(index);
+            }
+        }
         for e in &mut self.elements {
             let ElementKind::Mosfet { model, params, .. } = &mut e.kind else {
                 continue;
             };
-            if self.models.iter().any(|m| m.name == *model) {
+            if self.model_names.contains_key(model) {
                 continue;
             }
-            let prefix = format!("{model}.");
-            let bins: Vec<&ModelCard> = self
-                .models
-                .iter()
-                .filter(|m| {
-                    m.name
-                        .strip_prefix(&prefix)
-                        .is_some_and(|b| !b.is_empty() && b.bytes().all(|c| c.is_ascii_digit()))
-                })
-                .collect();
-            if bins.is_empty() {
+            let Some(bins) = families.get(model.as_str()) else {
                 continue;
-            }
+            };
             let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|p| p.1);
             let (Some(l), Some(w)) = (get("l"), get("w")) else {
                 errs.push(
@@ -723,20 +763,57 @@ impl Parser {
                 );
                 continue;
             };
-            let p = |m: &ModelCard, k: &str, d: f64| {
-                m.params.iter().find(|(n, _)| n == k).map_or(d, |p| p.1)
-            };
-            // Relative tolerance for geometry exactly on a bin boundary.
-            let tol = 1e-9;
-            let fits = |m: &&ModelCard| {
-                let (lmin, lmax) = (p(m, "lmin", 0.0), p(m, "lmax", f64::INFINITY));
-                let (wmin, wmax) = (p(m, "wmin", 0.0), p(m, "wmax", f64::INFINITY));
-                l >= lmin * (1.0 - tol)
-                    && l < lmax * (1.0 - tol)
-                    && w >= wmin * (1.0 - tol)
-                    && w < wmax * (1.0 - tol)
-            };
-            match bins.iter().find(|m| fits(m)) {
+            let mut selected = None;
+            for &idx in bins {
+                let card = &self.models[idx];
+                let mut bounds = [1., 0., f64::INFINITY, 0., f64::INFINITY];
+                let keys = ["level", "lmin", "lmax", "wmin", "wmax"];
+                for (name, value) in &card.params {
+                    if let Some(k) = keys.iter().position(|&n| n == name) {
+                        bounds[k] = *value;
+                    }
+                }
+                if let Some((_, scope, line)) = dynamic.get(&idx) {
+                    let eval = scope.evaluator(params);
+                    for kv in line.tokens[3..].as_chunks::<3>().0 {
+                        if let Some(k) =
+                            keys.iter().position(|n| kv[0].text.eq_ignore_ascii_case(n))
+                            && !crate::expr::is_number_literal(&kv[2].text)
+                        {
+                            match eval(&kv[2].text) {
+                                Ok(v) if v.is_finite() => bounds[k] = v,
+                                _ => errs.push(
+                                    Diagnostic::error(
+                                        "E-PARSE-EXPR",
+                                        format!(
+                                            "{}: invalid {} in bin {}",
+                                            e.name, keys[k], card.name
+                                        ),
+                                    )
+                                    .with_span(kv[2].span),
+                                ),
+                            }
+                        }
+                    }
+                }
+                let [level, lmin, lmax, wmin, wmax] = bounds;
+                let width = w * scale
+                    / if level == 54. {
+                        get("nf").unwrap_or(1.)
+                    } else {
+                        1.
+                    };
+                let tol = 1. - 1e-9;
+                if l * scale >= lmin * tol
+                    && l * scale < lmax * tol
+                    && width >= wmin * tol
+                    && width < wmax * tol
+                {
+                    selected = Some(card);
+                    break;
+                }
+            }
+            match selected {
                 Some(m) => *model = m.name.clone(),
                 None => errs.push(
                     Diagnostic::error(
@@ -753,6 +830,121 @@ impl Parser {
         self.diags.extend(errs);
     }
 
+    /// Bind only the selected model in the raw (pre-scale) instance geometry.
+    fn bind_model_expressions(&mut self, dynamic: &DynamicCards<'_>) {
+        use std::collections::HashMap;
+        if dynamic.is_empty() {
+            return;
+        }
+        let index: HashMap<_, _> = self
+            .models
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.name.clone(), i))
+            .collect();
+        let mut arguments = HashMap::new();
+        let mut first = std::collections::HashSet::new();
+        let mut shared: HashMap<_, Vec<(String, f64)>> = HashMap::new();
+        let mut canonical = HashMap::new();
+        'element: for e in &mut self.elements {
+            let (model, params) = match &mut e.kind {
+                ElementKind::Mosfet { model, params, .. }
+                | ElementKind::Diode { model, params, .. }
+                | ElementKind::Bjt { model, params, .. }
+                | ElementKind::Va { model, params, .. } => (model, params),
+                _ => continue,
+            };
+            let Some((&idx, (original, scope, line))) = index
+                .get(model)
+                .and_then(|i| dynamic.get(i).map(|v| (i, v)))
+            else {
+                continue;
+            };
+            let key = (
+                idx,
+                params
+                    .iter()
+                    .map(|(n, v)| (n.clone(), v.to_bits()))
+                    .collect::<Vec<_>>(),
+            );
+            if let Some(name) = arguments.get(&key) {
+                model.clone_from(name);
+                continue;
+            }
+            let shared_key = (*original, key.1.clone());
+            let values = if let Some(cached) = shared.get(&shared_key) {
+                cached.clone()
+            } else {
+                let eval = scope.evaluator(params);
+                let mut values = vec![];
+                for kv in line.tokens[3..].as_chunks::<3>().0 {
+                    let token = &kv[2];
+                    if kv[0].text.eq_ignore_ascii_case("version") && dotted_version(&token.text) {
+                        continue;
+                    }
+                    let value = if crate::expr::is_number_literal(&token.text) {
+                        parse_number(&token.text)
+                            .ok_or_else(|| format!("invalid number {}", token.text))
+                    } else {
+                        eval(&token.text)
+                    };
+                    match value {
+                        Ok(v) if v.is_finite() => values.push((kv[0].lower(), v)),
+                        err => {
+                            let msg = err.err().unwrap_or_else(|| "non-finite value".into());
+                            self.diags.push(
+                                Diagnostic::error(
+                                    "E-PARSE-EXPR",
+                                    format!("{}: {} in model {}: {msg}", e.name, kv[0].text, model),
+                                )
+                                .with_span(token.span),
+                            );
+                            continue 'element;
+                        }
+                    }
+                }
+                shared.insert(shared_key, values.clone());
+                values
+            };
+            let signature = (
+                idx,
+                values
+                    .iter()
+                    .map(|(n, v)| (n.clone(), v.to_bits()))
+                    .collect::<Vec<_>>(),
+            );
+            let name = if let Some(name) = canonical.get(&signature) {
+                String::clone(name)
+            } else {
+                let name = if first.insert(idx) {
+                    self.models[idx].params = values;
+                    model.clone()
+                } else {
+                    let mut card = self.models[idx].clone();
+                    let mut suffix = self.models.len();
+                    loop {
+                        card.name = format!("{model}__spx_{suffix}");
+                        if !index.contains_key(&card.name)
+                            && !self.model_names.contains_key(&card.name)
+                        {
+                            break;
+                        }
+                        suffix += 1;
+                    }
+                    card.params = values;
+                    let name = card.name.clone();
+                    self.model_names.insert(name.clone(), self.models.len());
+                    self.models.push(card);
+                    name
+                };
+                canonical.insert(signature, name.clone());
+                name
+            };
+            arguments.insert(key, name.clone());
+            *model = name;
+        }
+    }
+
     fn check_models(&mut self) {
         let mut errs = Vec::new();
         for e in &self.elements {
@@ -763,7 +955,7 @@ impl Parser {
                 ElementKind::Va { .. } => &[],
                 _ => &["nmos", "pmos"],
             };
-            match self.models.iter().find(|m| m.name == name) {
+            match self.model_names.get(name).map(|&i| &self.models[i]) {
                 None => errs.push(
                     Diagnostic::error(
                         "E-PARSE-MODEL",
@@ -790,24 +982,19 @@ impl Parser {
         self.diags.extend(errs);
     }
 
-    fn model_card(&mut self, line: &Line, parameters: &Line, cached: Option<usize>) {
+    fn model_card(
+        &mut self,
+        line: &Line,
+        parameters: &Line,
+        cached: Option<usize>,
+        scope: Option<&crate::preproc::ModelScope>,
+    ) {
         let Some(t) = self.need(line, 3, ".model name type [(param=value ...)]") else {
             return;
         };
         let name = t[1].lower();
         let kind = t[2].lower();
-        if !self.has_hdl && !MODEL_TYPES.contains(&kind.as_str()) {
-            self.diags.push(
-                Diagnostic::error(
-                    "E-PARSE-MODEL",
-                    format!("unsupported model type `{}`", t[2].text),
-                )
-                .with_span(t[2].span)
-                .with_note(format!("supported types: {}", MODEL_TYPES.join(", "))),
-            );
-            return;
-        }
-        if self.models.iter().any(|m| m.name == name) {
+        if self.model_names.contains_key(&name) {
             self.err(
                 "E-PARSE-DUPLICATE",
                 format!("duplicate model name `{name}`"),
@@ -817,9 +1004,11 @@ impl Parser {
         }
         if let Some(index) = cached {
             let params = self.models[index].params.clone();
+            let version = self.models[index].version.clone();
             self.models.push(ModelCard {
                 name,
                 kind,
+                version,
                 params,
                 span: line.span(),
             });
@@ -827,6 +1016,7 @@ impl Parser {
         }
         let t = &parameters.tokens;
         let mut params = Vec::new();
+        let mut version = None;
         let mut i = 3;
         while i < t.len() {
             let k = t[i].lower();
@@ -846,6 +1036,18 @@ impl Parser {
                 );
                 return;
             };
+            if k == "version"
+                && matches!(kind.as_str(), "nmos" | "pmos")
+                && dotted_version(&vt.text)
+            {
+                version = Some(vt.text.clone());
+                i += 3;
+                continue;
+            }
+            if scope.is_some() && !crate::expr::is_number_literal(&vt.text) {
+                i += 3;
+                continue;
+            }
             let Some(v) = self.number(vt, &k) else {
                 return;
             };
@@ -855,6 +1057,7 @@ impl Parser {
         self.models.push(ModelCard {
             name,
             kind,
+            version,
             params,
             span: line.span(),
         });
@@ -1142,6 +1345,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parameterized_bins_bind_only_live_expressions() {
+        let nl=parse("device bins\n.option scale=1u\n.param bad={undefined}\n.model n.1 nmos level=54 version=4.8.2 wmax={w/2*1u} vth0={bad}\n.model n.2 nmos level=54 wmin={w/2*1u} vth0={l+nf}\n.model idle nmos level=54 k1={missing}\nM1 d g 0 0 n l=0.2 w=4 nf=2\nM2 d g 0 0 n l=0.3 w=4 nf=2\nM3 d g 0 0 n l=0.2 w=4 nf=2\n.end").unwrap();
+        let cards: Vec<_> = nl
+            .elements
+            .iter()
+            .map(|e| {
+                nl.models
+                    .iter()
+                    .find(|m| Some(m.name.as_str()) == e.kind.model())
+                    .unwrap()
+            })
+            .collect();
+        let vth = |i: usize| cards[i].params.iter().find(|(k, _)| k == "vth0").unwrap().1;
+        assert_eq!([vth(0), vth(1), vth(2)], [2.2, 2.3, 2.2]);
+        assert_eq!(cards[0].name, cards[2].name);
+        assert_ne!(cards[0].name, cards[1].name);
+        assert_eq!(nl.models[0].version.as_deref(), Some("4.8.2"));
+    }
+
+    #[test]
+    fn statistical_parameters_and_parallel_subcircuits() {
+        let src = "nominal\n.param mc_mm_switch=0 mc_pr_switch=0\n.subckt cell a\nR1 a 0 {agauss(80,2,3)+gauss(10,1,3)+unif(5,1)+aunif(5,1)}\n.ends\n.subckt nest a\nX1 a cell mult=2\n.ends\nX2 d nest m=5\n.end";
+        let nl = parse(src).unwrap();
+        assert!(matches!(nl.elements[0].kind,ElementKind::Resistor {value,..} if value==10.));
+        assert!(parse(&src.replace("mc_mm_switch=0", "mc_mm_switch=1")).is_err());
+    }
+
+    #[test]
     fn repeated_local_models_keep_their_scope_and_diagnostics() {
         let fields = (0..24)
             .map(|i| format!("p{i}={{gain(a)}}"))
@@ -1169,7 +1400,7 @@ mod tests {
         let broken = deck.replace("p12={gain(a)}", "p12=missing");
         let errors = parse(&broken).unwrap_err();
         assert_eq!(
-            errors.iter().filter(|d| d.code == "E-PARSE-NUMBER").count(),
+            errors.iter().filter(|d| d.code == "E-PARSE-EXPR").count(),
             4
         );
     }

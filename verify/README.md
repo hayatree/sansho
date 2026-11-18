@@ -16,6 +16,22 @@ comment line such as `* verify: rtol_tran=3e-2`.
 All decks are original circuits written for this project. Raw files go to `verify/out/`
 (ignored by git).
 
+## Built-in BSIM4 and SKY130
+
+`verify/bsim4-decks` contains 15 PDK-independent level-54 decks. The six decks in
+`verify/sky130-decks` select the TT section of the externally installed volare
+`sky130A/libs.tech/ngspice/sky130.lib.spice` under `va-models/volare-sky130`.
+The deck-local `.spiceinit` applies to the reference simulator.
+
+```sh
+cargo run --offline --release -p spx-verify -- --cached verify/bsim4-decks
+cargo run --offline --release -p spx-verify -- --cached verify/sky130-decks
+```
+
+Omit `--cached` when generating fresh black-box references. Scores use the same tolerances
+and waveform interpolation as the existing suites. Current discrepancies and the equation
+coverage are recorded in [the BSIM4 model notes](../docs/bsim4.md).
+
 ## Production Verilog-A decks
 
 Supply the SG13G2 inputs under the git-ignored `va-models/ihp/` at the checkout

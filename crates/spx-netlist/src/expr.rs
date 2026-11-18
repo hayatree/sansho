@@ -247,8 +247,13 @@ pub fn strip_delims(s: &str) -> &str {
 
 /// Parse an expression (delimiters `{}` / `''` are accepted).
 pub fn parse_expr(s: &str) -> Result<Expr, String> {
+    let text = strip_delims(s).trim();
+    let text = text
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(text);
     let mut p = P {
-        t: tokenize(strip_delims(s))?,
+        t: tokenize(text)?,
         i: 0,
     };
     let e = p.cond()?;
@@ -300,11 +305,22 @@ fn builtin(name: &str, a: &[f64]) -> Option<Result<f64, String>> {
         "atan2" => two(f64::atan2),
         "min" => two(f64::min),
         "max" => two(f64::max),
-        "agauss" => arity(3).and_then(|()| {
+        "gauss" | "agauss" => arity(3).and_then(|()| {
             if a[1] == 0. || a[2] == 0. {
                 Ok(a[0])
             } else {
-                Err("agauss with active statistical variation is unsupported".into())
+                Err(format!(
+                    "{name} with active statistical variation is unsupported"
+                ))
+            }
+        }),
+        "aunif" | "unif" => arity(2).and_then(|()| {
+            if a[1] == 0. {
+                Ok(a[0])
+            } else {
+                Err(format!(
+                    "{name} with active statistical variation is unsupported"
+                ))
             }
         }),
         "limit" => arity(3).map(|()| a[0].clamp(a[1].min(a[2]), a[1].max(a[2]))),
@@ -391,6 +407,20 @@ fn eval_depth(
                     None => var(n),
                 };
                 return eval_depth(&f.body, &local, funcs, depth + 1);
+            }
+            if matches!(
+                (name.as_str(), vals.len()),
+                ("agauss" | "gauss", 3) | ("aunif" | "unif", 2)
+            ) {
+                let switches = [var("mc_mm_switch"), var("mc_pr_switch")];
+                if switches.iter().any(|v| matches!(v, Ok(0.0)))
+                    && switches.iter().all(|v| match v {
+                        Ok(x) => *x == 0.,
+                        Err(e) => e.starts_with("unknown parameter"),
+                    })
+                {
+                    return Ok(vals[0]);
+                }
             }
             match builtin(name, &vals) {
                 Some(r) => r?,

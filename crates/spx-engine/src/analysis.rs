@@ -714,7 +714,19 @@ pub(crate) fn tran(
             qdot_new[i] = integ.a0 * ws.asm.q[i] + integ.hist[i];
         }
         // Truncation-error control (needs order + 1 history points).
-        let mut grow = 2.0;
+        // A UIC voltage jump may place a displacement-current impulse in the first
+        // backward-Euler sample. Resolve the right-hand limit before growing the step.
+        let voltage_jump = uic
+            && accepted_steps == 0
+            && x_new
+                .iter()
+                .zip(&x)
+                .zip(ckt.unknowns.kinds())
+                .any(|((&new, &old), kind)| {
+                    *kind == spx_devices::UnknownKind::Voltage
+                        && (new - old).abs() > 0.1 + opts.vntol
+                });
+        let mut grow = if voltage_jump { 0.0625 } else { 2.0 };
         if hist.len() > order {
             let r = lte_ratio(
                 opts.method,

@@ -95,6 +95,7 @@ pub(crate) struct Expanded {
     pub title: String,
     pub lines: Vec<Line>,
     /// Repeated model headers refer to the earlier card supplying their parameter tokens.
+    pub model_scopes: HashMap<usize, Rc<ModelScope>>,
     pub model_sources: HashMap<usize, usize>,
     pub sources: Vec<String>,
     pub hdl: Vec<crate::HdlSource>,
@@ -108,7 +109,7 @@ const MAX_DEPTH: usize = 64;
 struct SubcktDef {
     ports: Vec<String>,
     /// Default parameters (`name = expr`), evaluated in the instance scope.
-    defaults: Vec<(String, Rc<Expr>)>,
+    defaults: Vec<(String, Rc<str>)>,
     /// Body lines for per-instance elaboration.
     body: Vec<Line>,
     leaf: RefCell<Option<Leaf>>,
@@ -126,10 +127,11 @@ struct Leaf {
 }
 
 /// A parameter scope: instance overrides, body `.param`s and defaults, then the global scope.
+#[derive(Debug)]
 struct Scope<'p> {
     parent: Option<&'p Scope<'p>>,
     fixed: HashMap<String, f64>,
-    defs: HashMap<String, Rc<Expr>>,
+    defs: HashMap<String, Rc<str>>,
     expressions: Rc<RefCell<HashMap<String, Rc<Expr>>>>,
     cache: RefCell<HashMap<String, f64>>,
     busy: RefCell<HashSet<String>>,
@@ -158,7 +160,7 @@ impl<'p> Scope<'p> {
             if !self.busy.borrow_mut().insert(name.to_string()) {
                 return Err(format!("parameter `{name}` depends on itself"));
             }
-            let r = eval(e, &|n| self.get(n, funcs), funcs);
+            let r = self.eval_text(e, funcs);
             self.busy.borrow_mut().remove(name);
             let v = r?;
             self.cache.borrow_mut().insert(name.to_string(), v);
@@ -182,6 +184,44 @@ impl<'p> Scope<'p> {
     fn eval_text(&self, text: &str, funcs: &Funcs) -> Result<f64, String> {
         let e = self.expression(text)?;
         eval(&e, &|n| self.get(n, funcs), funcs)
+    }
+}
+
+/// Lexical environment retained by a model until a device selects it.
+#[derive(Debug)]
+pub(crate) struct ModelScope {
+    local: Scope<'static>,
+    global: Rc<Scope<'static>>,
+    funcs: Funcs,
+}
+
+impl Scope<'_> {
+    fn snapshot(&self) -> Scope<'static> {
+        let mut saved = Scope::new(None);
+        saved.fixed.clone_from(&self.fixed);
+        saved.defs.clone_from(&self.defs);
+        saved.expressions = self.expressions.clone();
+        saved
+    }
+}
+
+impl ModelScope {
+    pub fn evaluator(
+        &self,
+        instance: &[(String, f64)],
+    ) -> impl Fn(&str) -> Result<f64, String> + use<'_> {
+        let mut local = Scope::new(Some(&self.global));
+        local.fixed.clone_from(&self.local.fixed);
+        local.defs.clone_from(&self.local.defs);
+        local.fixed.extend(instance.iter().cloned());
+        if !local.defs.contains_key("nf") {
+            local.fixed.entry("nf".into()).or_insert(1.);
+        }
+        if !local.defs.contains_key("mult") {
+            let m = local.fixed.get("m").copied().unwrap_or(1.);
+            local.fixed.entry("mult".into()).or_insert(m);
+        }
+        move |text| local.eval_text(text, &self.funcs)
     }
 }
 
@@ -476,6 +516,7 @@ fn model_names(name: &str, out: &mut HashSet<String>) {
 }
 
 struct Ctx<'a> {
+    copies: f64,
     prefix: String,
     ports: HashMap<String, String>,
     local_models: &'a HashSet<String>,
@@ -517,6 +558,8 @@ impl Ctx<'_> {
 }
 
 struct Flat<'l> {
+    global_model_scope: Rc<Scope<'static>>,
+    model_scopes: HashMap<usize, Rc<ModelScope>>,
     model_sources: HashMap<usize, usize>,
     next_version: usize,
     defs: Defs,
@@ -589,6 +632,7 @@ impl Flat<'_> {
         substituted: bool,
         prior: Option<usize>,
     ) {
+        let mut model_scope = None;
         for (offset, line) in lines.iter().enumerate() {
             let h = head(line);
             let span = line.span();
@@ -605,7 +649,28 @@ impl Flat<'_> {
                             self.push(header, line);
                             continue;
                         }
-                        let mut toks = if substituted {
+                        // Keep model expressions in their lexical scope until the parser
+                        // knows which geometry bin and primitive arguments are in use.
+                        let deferred = line.tokens.get(3..).is_some_and(|tail| {
+                            tail.chunks(3)
+                                .any(|kv| kv.get(2).is_some_and(|v| !is_number_literal(&v.text)))
+                        });
+                        if deferred {
+                            let captured = model_scope.get_or_insert_with(|| {
+                                Rc::new(ModelScope {
+                                    local: if scope.parent.is_some() {
+                                        scope.snapshot()
+                                    } else {
+                                        Scope::new(None)
+                                    },
+                                    global: self.global_model_scope.clone(),
+                                    funcs: self.defs.funcs.clone(),
+                                })
+                            });
+                            self.model_scopes
+                                .insert(self.out.len(), Rc::clone(captured));
+                        }
+                        let mut toks = if substituted || deferred {
                             line.tokens.clone()
                         } else {
                             self.substitute(&line.tokens, scope)
@@ -720,6 +785,23 @@ impl Flat<'_> {
                     }
                 }
             }
+            if ctx.copies != 1. && matches!(letter, 'm' | 'r' | 'l' | 'c' | 'd' | 'q') {
+                let start = node_slots.last().copied().unwrap_or(0) + 1;
+                if let Some(k) = toks[start..]
+                    .windows(3)
+                    .rposition(|kv| matches!(kv[0].lower().as_str(), "m" | "mult") && kv[1].is_eq())
+                {
+                    let value = &mut toks[start + k + 2];
+                    if let Some(m) = crate::number::parse_number(&value.text) {
+                        value.text = num_text(m * ctx.copies);
+                    }
+                } else {
+                    toks.extend(
+                        ["m".into(), "=".into(), num_text(ctx.copies)]
+                            .map(|text| Token { text, span }),
+                    );
+                }
+            }
             self.push(toks, line);
         }
     }
@@ -756,11 +838,10 @@ impl Flat<'_> {
                     }
                 }
                 ".param" if nested == 0 => {
-                    let parsed = split_assignments(raw_rest(l)).and_then(|pairs| {
+                    let parsed = split_assignments(raw_rest(l)).map(|pairs| {
                         for (name, value) in pairs {
-                            scope.defs.insert(name, scope.expression(&value)?);
+                            scope.defs.insert(name, Rc::from(value));
                         }
-                        Ok(())
                     });
                     if let Err(e) = parsed {
                         self.error("E-PARSE-EXPR", e, l.span());
@@ -972,6 +1053,29 @@ impl Flat<'_> {
             .map(|(k, v)| (k.clone(), v.to_bits()))
             .collect();
         arguments.sort_unstable();
+        // An explicitly declared multiplier is a wrapper parameter. An undeclared
+        // m (or mult) denotes parallel copies of the instantiated subcircuit.
+        let declared = |key: &str| {
+            def.defaults.iter().any(|(n, _)| n == key)
+                || def.body.iter().filter(|l| head(l) == ".param").any(|l| {
+                    l.tokens
+                        .windows(2)
+                        .any(|w| w[0].text.eq_ignore_ascii_case(key) && w[1].is_eq())
+                })
+        };
+        let copies = ctx.copies
+            * ["m", "mult"]
+                .iter()
+                .filter_map(|&n| inst.fixed.get(n).filter(|_| !declared(n)))
+                .product::<f64>();
+        if !copies.is_finite() || copies <= 0. {
+            self.error(
+                "E-PARSE-VALUE",
+                "subcircuit multiplicity must be positive",
+                span,
+            );
+            return;
+        }
         let version = self.defs.function_version;
         if let Some(leaf) = def.leaf.borrow().as_ref()
             && self.diags.len() == diagnostics_before_args
@@ -979,6 +1083,7 @@ impl Flat<'_> {
             && leaf.arguments == arguments
         {
             let inner = Ctx {
+                copies,
                 prefix,
                 ports,
                 local_models: &leaf.local_models,
@@ -1001,7 +1106,10 @@ impl Flat<'_> {
         let outer = self.defs.clone();
         let lines = self.prepare(def.body.clone(), &mut inst, 0);
         for (index, tok) in t.iter().enumerate().skip(end) {
-            if t.get(index + 1).is_some_and(Token::is_eq) && !inst.defs.contains_key(&tok.lower()) {
+            if t.get(index + 1).is_some_and(Token::is_eq)
+                && !inst.defs.contains_key(&tok.lower())
+                && !matches!(tok.lower().as_str(), "m" | "mult")
+            {
                 self.diags.push(
                     Diagnostic::warning(
                         "W-PARSE-IGNORED",
@@ -1017,6 +1125,7 @@ impl Flat<'_> {
         let mut models = HashSet::new();
         let body = collect(lines, &mut self.defs, &mut models, &mut self.diags);
         let inner = Ctx {
+            copies,
             prefix,
             ports,
             local_models: &models,
@@ -1036,14 +1145,18 @@ impl Flat<'_> {
                 .any(|line| line.tokens.len() > 64 && head(line) == ".model")
             && body.iter().all(|line| {
                 matches!(head(line).as_str(), ".model" | ".param" | ".func")
-                    || head(line).starts_with('n')
+                    || head(line).starts_with(['n', 'm'])
             })
         {
             let body: Vec<_> = body
                 .iter()
                 .filter(|l| !matches!(head(l).as_str(), ".param" | ".func"))
                 .map(|l| Line {
-                    tokens: self.substitute(&l.tokens, &inst),
+                    tokens: if head(l) == ".model" {
+                        l.tokens.clone()
+                    } else {
+                        self.substitute(&l.tokens, &inst)
+                    },
                     raw: l.raw.clone(),
                 })
                 .collect();
@@ -1118,12 +1231,8 @@ fn collect(
                     if lower == "params:" {
                         i += 1;
                     } else if t.get(i + 1).is_some_and(Token::is_eq) {
-                        match t.get(i + 2).map(|v| parse_expr(&v.text)) {
-                            Some(Ok(e)) => defaults.push((lower, Rc::new(e))),
-                            Some(Err(e)) => diags.push(
-                                Diagnostic::error("E-PARSE-EXPR", format!("`{lower}`: {e}"))
-                                    .with_span(t[i].span),
-                            ),
+                        match t.get(i + 2) {
+                            Some(v) => defaults.push((lower, Rc::from(v.text.as_str()))),
                             None => diags.push(
                                 Diagnostic::error(
                                     "E-PARSE-EXPR",
@@ -1205,6 +1314,8 @@ pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
     let _phase = spx_diag::Phase::start("netlist_pre");
     let lexed = lex_source(text, 0, true);
     let mut flat = Flat {
+        global_model_scope: Rc::new(Scope::new(None)),
+        model_scopes: HashMap::new(),
         model_sources: Default::default(),
         next_version: 0,
         defs: Defs::default(),
@@ -1223,19 +1334,10 @@ pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
     global.fixed.insert("temper".into(), 27.);
     let lines = flat.prepare(lexed.lines, &mut global, 0);
     let top = collect(lines, &mut flat.defs, &mut HashSet::new(), &mut flat.diags);
-    // Report unresolvable global parameters once, at their definition.
-    let mut names: Vec<&String> = global.defs.keys().collect();
-    names.sort();
-    for k in names {
-        if let Err(e) = global.get(k, &flat.defs.funcs) {
-            flat.diags.push(Diagnostic::error(
-                "E-PARSE-EXPR",
-                format!("parameter `{k}`: {e}"),
-            ));
-        }
-    }
+    flat.global_model_scope = Rc::new(global.snapshot());
     let empty = HashSet::new();
     let ctx = Ctx {
+        copies: 1.,
         prefix: String::new(),
         ports: HashMap::new(),
         local_models: &empty,
@@ -1249,6 +1351,7 @@ pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
         title: lexed.title,
         lines: flat.out,
         model_sources: flat.model_sources,
+        model_scopes: flat.model_scopes,
         sources: flat.pre.sources,
         diags: flat.diags,
     }
@@ -1285,9 +1388,9 @@ mod tests {
         );
         let want = [
             "m.x1.xa.m1 x1.m in 0 0 x1.xa.nch w = 2e-6 l = 5e-7",
-            ".model x1.xa.nch nmos vto = 4.5e-1",
+            ".model x1.xa.nch nmos vto = {vdd/4}",
             "m.x1.xb.m1 out x1.m 0 0 x1.xb.nch w = 1e-6 l = 5e-7",
-            ".model x1.xb.nch nmos vto = 4.5e-1",
+            ".model x1.xb.nch nmos vto = {vdd/4}",
             "V1 vdd 0 1.8e0",
         ];
         assert_eq!(out, want);
@@ -1351,7 +1454,7 @@ mod tests {
     #[test]
     fn errors_are_reported() {
         let e = preprocess(
-            "t\nX1 a b nosuch\n.subckt s a\n.ends\nX2 a b s\n.param p={q}\n",
+            "t\nX1 a b nosuch\n.subckt s a\n.ends\nX2 a b s\n.param p={q}\nR1 a 0 {p}\n",
             &NoFiles,
         );
         let codes: Vec<&str> = e.diags.iter().map(|d| d.code).collect();

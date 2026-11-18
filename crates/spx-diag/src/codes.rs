@@ -243,7 +243,7 @@ pub const CODES: &[CodeInfo] = &[
         "E-ELAB-MODEL",
         "Unsupported model",
         "The model level or type is not supported.",
-        &["Use a supported level (level 1 for diodes, BJTs and MOSFETs in this version)."],
+        &["Use a supported model level. Built-in MOSFETs support levels 1 and 54."],
     ),
     e(
         "E-ELAB-NOGROUND",
@@ -281,6 +281,18 @@ pub const CODES: &[CodeInfo] = &[
         "Loop of voltage sources or inductors",
         "Voltage sources and/or inductors form a loop, which makes the matrix singular.",
         &["Add a small series resistance to one element of the loop."],
+    ),
+    e(
+        "E-UNSUPPORTED",
+        "Unsupported device selector",
+        "The selected device equation or analysis mode is unavailable.",
+        &["See docs/bsim4.md for the available BSIM4 selectors."],
+    ),
+    w(
+        "W-BSIM4-PARAM",
+        "BSIM4 parameter check",
+        "A selected model or instance falls outside the recommended BSIM4 parameter range.",
+        &["Inspect the named parameter, its units and the effective geometry."],
     ),
     w(
         "W-MODEL-IGNORED",

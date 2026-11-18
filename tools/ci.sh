@@ -59,6 +59,12 @@ if (( !quick )); then
 
   if docker image inspect spx-ngspice:latest >/dev/null 2>&1; then
     step "verify vs ngspice" cargo run -q --release -p spx-verify --features jit
+    step "verify BSIM4 decks" cargo run -q --release -p spx-verify -- verify/bsim4-decks
+    if [[ -d va-models/volare-sky130 ]]; then
+      step "verify SKY130 decks" cargo run -q --release -p spx-verify -- verify/sky130-decks
+    else
+      skip "verify SKY130 decks" "va-models/volare-sky130 is missing"
+    fi
     if [[ -d va-models ]]; then
       step "verify Verilog-A decks" cargo run -q --release -p spx-verify --features jit -- verify/va-decks
     else

@@ -284,6 +284,9 @@ impl ElementKind {
 /// A `.model name type (params)` card.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ModelCard {
+    /// Multi-component version labels that cannot be represented by an f64.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// Lower-cased model name.
     pub name: String,
     /// Lower-cased model type (`d`, `npn`, `pnp`, `nmos`, `pmos`).

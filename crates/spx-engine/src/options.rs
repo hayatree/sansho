@@ -31,6 +31,8 @@ pub struct SimOptions {
     pub itl4: usize,
     /// Optional shunt resistance from every node to ground (Ω).
     pub rshunt: Option<f64>,
+    /// MOS instance length scale (areas use its square).
+    pub scale: f64,
     /// Circuit temperature (°C).
     pub temp: f64,
     /// Nominal model temperature (°C).
@@ -75,6 +77,7 @@ impl Default for SimOptions {
             itl1: 100,
             itl4: 10,
             rshunt: None,
+            scale: 1.,
             temp: 27.0,
             tnom: 27.0,
             defl: None,
@@ -137,6 +140,10 @@ impl SimOptions {
                 }
                 ("rshunt", Some(v)) if v > 0.0 => {
                     o.rshunt = Some(v);
+                    true
+                }
+                ("scale", Some(v)) if v.is_finite() && v > 0. => {
+                    o.scale = v;
                     true
                 }
                 ("temp", Some(v)) => {
