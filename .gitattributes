@@ -1,0 +1,2 @@
+# Keep LF everywhere so generated docs and golden files compare byte-for-byte on Windows.
+* text=auto eol=lf
