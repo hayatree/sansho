@@ -68,6 +68,13 @@ pub const CODES: &[CodeInfo] = &[
         &["Check the parameter scope and the nesting of .if, .elseif, .else and .endif."],
     ),
     // --- Verilog-A compiler ---
+    CodeInfo {
+        code: "I-VA-JIT",
+        severity: Severity::Info,
+        title: "Verilog-A interpreter selected",
+        explanation: "The native compiler could not specialize this binding. Evaluation continues with the interpreter.",
+        remedies: &[],
+    },
     e(
         "E-VA-SEMA",
         "Invalid Verilog-A semantics",
@@ -428,6 +435,7 @@ mod tests {
     fn codes_are_unique_and_well_formed() {
         for (i, c) in CODES.iter().enumerate() {
             let prefix = match c.severity {
+                Severity::Info => "I-",
                 Severity::Error => "E-",
                 Severity::Warning => "W-",
             };

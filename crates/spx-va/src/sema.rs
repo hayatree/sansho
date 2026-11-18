@@ -375,6 +375,8 @@ fn lower(m: &ast::Module, potentials: BTreeSet<String>) -> R<CompiledModule> {
     }
     let history = crate::eval::program::history(&body, l.slots);
     Ok(CompiledModule {
+        #[cfg(feature = "jit")]
+        kernels: Default::default(),
         history,
         optional_ports: l.optional_ports,
         param_index,

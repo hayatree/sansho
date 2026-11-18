@@ -3,11 +3,12 @@
 <!-- Generated from crates/spx-diag/src/codes.rs; do not edit by hand.
      Regenerate with `SPX_BLESS=1 cargo test -p spx-diag`. -->
 
-Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (the input cannot be simulated); `W-` codes are warnings. Diagnostics may also carry `culprits` (implicated nodes, branches and devices), `attempts` (strategies that were tried) and `suggestions` (specific remedies).
+Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (the input cannot be simulated); `W-` codes are warnings and `I-` codes are informational. Diagnostics may also carry `culprits` (implicated nodes, branches and devices), `attempts` (strategies that were tried) and `suggestions` (specific remedies).
 
 | Code | Severity | Summary |
 |---|---|---|
 | [`E-PARSE-COND`](#e-parse-cond) | error | Invalid conditional netlist block |
+| [`I-VA-JIT`](#i-va-jit) | info | Verilog-A interpreter selected |
 | [`E-VA-SEMA`](#e-va-sema) | error | Invalid Verilog-A semantics |
 | [`E-VA-EVAL`](#e-va-eval) | error | Verilog-A evaluation failed |
 | [`E-VA-PARAM`](#e-va-param) | error | Invalid Verilog-A parameter binding |
@@ -66,6 +67,11 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Invalid conditional netlist block.** A conditional directive is misplaced, unbalanced or has an invalid expression.
 
 - Check the parameter scope and the nesting of .if, .elseif, .else and .endif.
+
+## I-VA-JIT
+
+**Verilog-A interpreter selected.** The native compiler could not specialize this binding. Evaluation continues with the interpreter.
+
 
 ## E-VA-SEMA
 

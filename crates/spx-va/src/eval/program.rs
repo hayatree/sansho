@@ -3,6 +3,10 @@
 
 mod execute;
 mod history;
+#[cfg(feature = "jit")]
+mod jit;
+#[cfg(feature = "jit")]
+pub(crate) use jit::Cache;
 mod optimize;
 use super::*;
 use crate::math::Math;
@@ -59,6 +63,8 @@ pub(super) struct Machine {
     key: Option<(u64, u64)>,
     program: Option<Program>,
     queries: Vec<Option<f64>>,
+    #[cfg(feature = "jit")]
+    native: jit::Instance,
 }
 #[derive(Default, Debug)]
 struct Program {
@@ -76,6 +82,7 @@ struct Builder<'a> {
     fuel: usize,
     depth: usize,
     compact_charge: bool,
+    charge_joins: Option<HashSet<Reg>>,
     types: Vec<Ty>,
     // The two slots after the variables for each branch hold its mode and sum.
     vars: Vec<Option<Pair>>,
@@ -137,10 +144,14 @@ impl Builder<'_> {
         r
     }
     fn merge(&mut self, c: Reg, a: Pair, b: Pair) -> Pair {
-        Pair {
-            f: self.phi(c, a.f, b.f),
-            q: self.phi(c, a.q, b.q),
+        let f = self.phi(c, a.f, b.f);
+        let q = self.phi(c, a.q, b.q);
+        if a.q != b.q
+            && let Some(joins) = &mut self.charge_joins
+        {
+            joins.insert(q);
         }
+        Pair { f, q }
     }
     fn load(&mut self, i: usize) -> Pair {
         if let Some(v) = self.vars[i] {
@@ -513,6 +524,64 @@ impl Builder<'_> {
         }
         None
     }
+    fn case_arms(
+        &mut self,
+        selector: Reg,
+        arms: &[(Vec<Expr>, Stmt)],
+        default: Option<&Stmt>,
+        depth: usize,
+    ) -> Option<()> {
+        let zero = self.num(0.);
+        let empty = self.scalar(zero);
+        for (i, (labels, body)) in arms.iter().enumerate() {
+            if labels.is_empty() {
+                continue;
+            }
+            let mut matched = zero;
+            for label in labels {
+                // A later label can call a function with output arguments.
+                matched = self
+                    .cond(
+                        matched,
+                        |s| {
+                            let one = s.num(1.);
+                            Some(s.scalar(one))
+                        },
+                        |s| {
+                            let r = s.expr(label)?.f;
+                            let same = s.math(Math::Eq, selector, r);
+                            Some(s.scalar(same))
+                        },
+                    )?
+                    .f;
+            }
+            if let Some(value) = self.known[matched] {
+                if value != 0. {
+                    return self.stmt(body);
+                }
+            } else {
+                if depth >= 64 {
+                    return None;
+                }
+                self.cond(
+                    matched,
+                    |s| {
+                        s.stmt(body)?;
+                        Some(empty)
+                    },
+                    |s| {
+                        s.case_arms(selector, &arms[i + 1..], default, depth + 1)?;
+                        Some(empty)
+                    },
+                )?;
+                return Some(());
+            }
+        }
+        if let Some(body) = default {
+            self.stmt(body)?;
+        }
+        Some(())
+    }
     fn stmt(&mut self, s: &Stmt) -> Option<()> {
         self.fuel = self.fuel.checked_sub(1)?;
         match s {
@@ -606,24 +675,11 @@ impl Builder<'_> {
             }
             Stmt::Case(selector, arms) => {
                 let x = self.expr(selector)?.f;
-                let key = self.known[x]?;
-                let mut selected = None;
-                let mut default = None;
-                'arms: for (labels, stmt) in arms {
-                    if labels.is_empty() {
-                        default = Some(stmt)
-                    }
-                    for label in labels {
-                        let r = self.expr(label)?.f;
-                        if self.known[r]? == key {
-                            selected = Some(stmt);
-                            break 'arms;
-                        }
-                    }
-                }
-                if let Some(stmt) = selected.or(default) {
-                    self.stmt(stmt)?
-                }
+                let default = arms
+                    .iter()
+                    .rfind(|(labels, _)| labels.is_empty())
+                    .map(|(_, s)| s);
+                self.case_arms(x, arms, default, 0)?;
             }
             Stmt::Event {
                 initial,
@@ -661,6 +717,15 @@ impl Program {
         input: &EvalInput<'_>,
         compact_charge: bool,
     ) -> Option<Self> {
+        Self::compile_channels(m, b, input, compact_charge, false)
+    }
+    fn compile_channels(
+        m: &CompiledModule,
+        b: &Bound,
+        input: &EvalInput<'_>,
+        compact_charge: bool,
+        canonical_charge: bool,
+    ) -> Option<Self> {
         let mut builder = Builder {
             m,
             b,
@@ -669,6 +734,7 @@ impl Program {
             integrals_seen: vec![false; m.integrals.len()],
             fuel: ITERATION_CAP,
             compact_charge,
+            charge_joins: canonical_charge.then(HashSet::new),
             types: vec![Ty::Real; m.slots],
             vars: vec![None; m.slots],
             constants: HashMap::new(),
@@ -745,6 +811,22 @@ pub(super) fn evaluate(
     state: &mut StateIo<'_>,
 ) -> bool {
     let key = (input.temperature.to_bits(), input.mfactor.to_bits());
+    #[cfg(feature = "jit")]
+    let replay = if scratch.disable_jit {
+        false
+    } else {
+        match scratch
+            .machine
+            .native
+            .evaluate(m, b, input, &mut scratch.slots, out, state)
+        {
+            jit::Dispatch::Finished => return true,
+            jit::Dispatch::Interpreter => false,
+            jit::Dispatch::Replay => true,
+        }
+    };
+    #[cfg(not(feature = "jit"))]
+    let replay = false;
     if scratch.machine.key != Some(key) {
         scratch.machine.program = Program::compile(m, b, input, m.states == 0);
         if let Some(p) = &scratch.machine.program {
@@ -763,11 +845,21 @@ pub(super) fn evaluate(
         return false;
     };
     machine.queries.clear();
-    if p.run(b, input, &mut scratch.slots, out, state, |key| {
-        let value = (input.simparams)(key);
-        machine.queries.push(value);
-        value
-    }) {
+    let valid = if replay {
+        #[cfg(feature = "jit")]
+        std::mem::swap(&mut machine.queries, &mut machine.native.replay);
+        let mut values = machine.queries.iter().copied();
+        p.run(b, input, &mut scratch.slots, out, state, |_| {
+            values.next().flatten()
+        })
+    } else {
+        p.run(b, input, &mut scratch.slots, out, state, |key| {
+            let value = (input.simparams)(key);
+            machine.queries.push(value);
+            value
+        })
+    };
+    if valid {
         return true;
     }
     // The guarded pass has not committed retained variables. Replay simulator
@@ -797,10 +889,20 @@ mod tests {
     // Force the general evaluator in the second workspace. Compare the complete
     // state and stamps on every call, including binding and temperature changes.
     fn compare(source: &str, inputs: &[f64], exceptional: bool) {
+        compare_backend(source, inputs, exceptional, false);
+        #[cfg(feature = "jit")]
+        compare_backend(source, inputs, exceptional, true);
+    }
+    fn compare_backend(source: &str, inputs: &[f64], exceptional: bool, native: bool) {
         let ast = crate::parse_va(source, &crate::NoVaFiles).unwrap();
         let m = crate::compile_module(&ast, None).unwrap();
         let b = m.bind(&[]).unwrap();
         let mut work = [Scratch::default(), Scratch::default()];
+        #[cfg(feature = "jit")]
+        {
+            work[0].set_jit(native);
+            work[1].set_jit(false);
+        }
         let mut current = [vec![0.; m.states], vec![0.; m.states]];
         let accepted = vec![0.; m.states];
         let mut out = [EvalOutput::default(), EvalOutput::default()];
@@ -842,7 +944,7 @@ mod tests {
                     &mut out[path],
                 );
             }
-            if k > 0 {
+            if k > 0 && !native {
                 assert!(
                     work[0].machine.program.is_some(),
                     "expected register execution"
@@ -885,6 +987,19 @@ mod tests {
           I(p)<+y*$vt+ddt(v*v);
         end endmodule"#,
             &[0., 1., 1.2, -2., 0.3, 1.1],
+            false,
+        );
+    }
+
+    #[test]
+    fn numeric_case_preserves_label_order_and_state() {
+        compare(
+            r#"module m(p); electrical p; real x,y;
+            analog begin x=V(p);
+              case(x) 0,1: y=y+1; 2: y=2*x; default: y=-x; endcase
+              I(p)<+y+ddt(x*y);
+            end endmodule"#,
+            &[0., 1., 2., -2., 1., 0.],
             false,
         );
     }

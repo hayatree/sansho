@@ -306,21 +306,48 @@ fn card_span(card: &AnalysisCard) -> spx_diag::Span {
 /// Analyses run concurrently (L0) and large circuits evaluate devices and assemble the matrix
 /// in parallel (L1/L2); the results do not depend on the thread count.
 pub fn run_with(nl: &Netlist, cfg: &RunConfig) -> Result<RunOutput, RunError> {
+    #[cfg(feature = "jit")]
+    if !nl.hdl.is_empty() && matches!(nl.analyses.as_slice(), [AnalysisCard::Tran { .. }]) {
+        let checked = check_run(nl)?;
+        let ckt = &checked.circuit;
+        // A single transient has at most one ready job per device group or
+        // gather chunk. Idle workers otherwise contend on every Newton assembly.
+        let jobs = if checked.options.va_jit && spx_va::jit_enabled() {
+            if ckt.parallel {
+                ckt.groups
+                    .len()
+                    .max(ckt.nnz().max(ckt.dim()).div_ceil(solve::GATHER_CHUNK))
+            } else {
+                1
+            }
+        } else {
+            cfg.threads
+        };
+        return parallel::with_threads(cfg.threads.min(jobs), || run_checked(nl, checked));
+    }
     parallel::with_threads(cfg.threads, || run_in_current_pool(nl))
 }
 
 /// Like [`run_with`], but uses the rayon thread pool the caller is running in (see
 /// `rayon::ThreadPool::install`), so that an embedding application can share one pool.
 pub fn run_in_current_pool(nl: &Netlist) -> Result<RunOutput, RunError> {
+    run_checked(nl, check_run(nl)?)
+}
+
+fn check_run(nl: &Netlist) -> Result<Checked, RunError> {
+    check(nl).map_err(|diagnostics| RunError {
+        diagnostics,
+        measurement_context: None,
+        partial: None,
+    })
+}
+
+fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
     let Checked {
         circuit: ckt,
         options: opts,
         mut warnings,
-    } = check(nl).map_err(|diagnostics| RunError {
-        diagnostics,
-        measurement_context: None,
-        partial: None,
-    })?;
+    } = checked;
     let outcomes: Vec<_> = nl
         .analyses
         .par_iter()

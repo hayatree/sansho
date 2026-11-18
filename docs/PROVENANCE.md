@@ -120,3 +120,19 @@ and backwards liveness analysis from general compiler literature (Aho et al., *C
 The dense gradient rows, scratch arena and scalar chain-rule factors in `dual.rs` and
 `math.rs` use forward-mode AD as described by Griewank and Walther, *Evaluating Derivatives*.
 The 21-stage benchmark in `benches/psp_ring21.cir` extends the project's authored CMOS ring.
+
+### Verilog-A VA-5b
+
+The native backend in `crates/spx-va/src/eval/program/jit.rs` and its submodules
+is original work based on the project's register evaluator, the Accellera
+Verilog-AMS LRM 2.4, SSA construction and forward-mode AD (Aho et al.,
+*Compilers*, Griewank and Walther, *Evaluating Derivatives*). Finiteness checks
+use IEEE 754 arithmetic. Native math shims use the repository's scalar math
+and limiter implementations.
+
+Cranelift codegen, frontend, jit, module and native 0.137.2 are optional Cargo
+dependencies under Apache-2.0 WITH LLVM-exception. The five packaged crates
+each contain LICENSE and ship no NOTICE file. The backend uses their public
+APIs. No Cranelift source was ported into the repository, and NOTICE requires
+no additional attribution for this change. Local IHP model files and circuit
+cards are external test inputs.

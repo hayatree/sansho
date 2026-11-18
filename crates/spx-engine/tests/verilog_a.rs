@@ -547,3 +547,63 @@ fn parallel_va_assembly_is_bit_identical() {
         }
     }
 }
+
+#[cfg(feature = "jit")]
+#[test]
+fn ihp_jit_and_interpreter_match_every_vector() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for dir in [
+        "psp103/psp103.va",
+        "vbic_1p3/vbic_1p3.va",
+        "r3_cmc/r3_cmc.va",
+        "ngspice-models/cornerMOSlv.lib",
+        "ngspice-models/cornerHBT.lib",
+        "ngspice-models/cornerRES.lib",
+    ] {
+        if !root.join("va-models/ihp").join(dir).try_exists().unwrap() {
+            eprintln!("skipping IHP vector comparison, missing {dir}");
+            return;
+        }
+    }
+    let bits = |xs: &[f64]| xs.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    for file in root.join("verify/va-decks").read_dir().unwrap() {
+        let path = file.unwrap().path();
+        if path.extension().is_none_or(|e| e != "cir") {
+            continue;
+        }
+        let mut nl = spx_netlist::parse_file(&path).unwrap();
+        nl.saves.clear();
+        let native = run_with(&nl, &RunConfig { threads: 5 }).unwrap().results;
+        nl.options.push(spx_netlist::OptionCard {
+            name: "va_jit".into(),
+            value: Some(0.),
+            span: spx_netlist::Span::new(1, 1),
+        });
+        assert!(!spx_engine::SimOptions::from_cards(&nl.options).0.va_jit);
+        let other = run_with(&nl, &RunConfig { threads: 1 }).unwrap().results;
+        assert_eq!(native.analyses.len(), other.analyses.len());
+        for (a, b) in native.analyses.iter().zip(&other.analyses) {
+            assert_eq!(a.variables, b.variables);
+            assert_eq!(bits(&a.scale_values), bits(&b.scale_values), "{path:?}");
+            for v in &a.variables {
+                if let Some(column) = a.real(&v.name) {
+                    assert_eq!(
+                        bits(column),
+                        bits(b.real(&v.name).unwrap()),
+                        "{path:?} {}",
+                        v.name
+                    );
+                } else {
+                    let complex = |r: &AnalysisResult| {
+                        r.complex(&v.name)
+                            .unwrap()
+                            .iter()
+                            .map(|(x, y)| (x.to_bits(), y.to_bits()))
+                            .collect::<Vec<_>>()
+                    };
+                    assert_eq!(complex(a), complex(b), "{path:?} {}", v.name);
+                }
+            }
+        }
+    }
+}

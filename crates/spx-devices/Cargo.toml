@@ -15,3 +15,6 @@ workspace = true
 spx-diag = { path = "../spx-diag" }
 spx-netlist = { path = "../spx-netlist" }
 spx-va = { path = "../spx-va" }
+
+[features]
+jit = ["spx-va/jit"]

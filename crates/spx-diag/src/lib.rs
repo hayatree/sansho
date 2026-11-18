@@ -56,6 +56,8 @@ impl std::fmt::Display for Span {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
+    /// Informational status for a successful operation.
+    Info,
     /// The input cannot be processed.
     Error,
     /// The input was processed but may not mean what the user intended.
@@ -169,6 +171,14 @@ impl Diagnostic {
         }
     }
 
+    /// Create an informational diagnostic.
+    pub fn information(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Info,
+            ..Self::error(code, message)
+        }
+    }
+
     /// Create a warning.
     pub fn warning(code: &'static str, message: impl Into<String>) -> Self {
         Self {
@@ -224,6 +234,7 @@ impl Diagnostic {
 impl std::fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let sev = match self.severity {
+            Severity::Info => "info",
             Severity::Error => "error",
             Severity::Warning => "warning",
         };

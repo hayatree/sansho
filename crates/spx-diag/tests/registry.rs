@@ -29,7 +29,7 @@ fn code_literals(text: &str) -> Vec<String> {
     let b = text.as_bytes();
     let mut out = Vec::new();
     for i in 0..b.len().saturating_sub(3) {
-        if b[i] == b'"' && (b[i + 1] == b'E' || b[i + 1] == b'W') && b[i + 2] == b'-' {
+        if b[i] == b'"' && matches!(b[i + 1], b'E' | b'W' | b'I') && b[i + 2] == b'-' {
             let rest = &text[i + 1..];
             let end = rest.find('"').unwrap_or(0);
             let lit = &rest[..end];
@@ -67,13 +67,14 @@ fn render() -> String {
          <!-- Generated from crates/spx-diag/src/codes.rs; do not edit by hand.\n     \
          Regenerate with `SPX_BLESS=1 cargo test -p spx-diag`. -->\n\n\
          Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (the input \
-         cannot be simulated); `W-` codes are warnings. Diagnostics may also carry `culprits` \
+         cannot be simulated); `W-` codes are warnings and `I-` codes are informational. Diagnostics may also carry `culprits` \
          (implicated nodes, branches and devices), `attempts` (strategies that were tried) and \
          `suggestions` (specific remedies).\n\n\
          | Code | Severity | Summary |\n|---|---|---|\n",
     );
     for c in CODES {
         let sev = match c.severity {
+            Severity::Info => "info",
             Severity::Error => "error",
             Severity::Warning => "warning",
         };

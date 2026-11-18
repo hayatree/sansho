@@ -106,6 +106,12 @@ fn smoke(file: &str, defines: &str, expected: Option<&str>) {
     };
     let mut scratch = Scratch::default();
     let (reference, cold) = eval(&x, &mut scratch, true);
+    #[cfg(feature = "jit")]
+    if std::env::var_os("SPX_VA_JIT").is_none_or(|v| v != "0") {
+        let start = Instant::now();
+        assert!(module.prepare_jit(&b, 300.15, 1.).is_none());
+        eprintln!("{} native compilation {:?}", module.name, start.elapsed());
+    }
     let (warm_output, specialize) = eval(&x, &mut scratch, false);
     if file == "psp103/psp103.va" {
         for (cold, warm) in [
@@ -127,6 +133,36 @@ fn smoke(file: &str, defines: &str, expected: Option<&str>) {
         module.name,
         x.len()
     );
+    #[cfg(feature = "jit")]
+    {
+        let native = std::env::var_os("SPX_VA_JIT").is_none_or(|v| v != "0");
+        assert_eq!(native, scratch.used_jit(), "{}", module.name);
+        eprintln!("{} native specialization: {native}", module.name);
+        equivalence(&module, &b, &x, native);
+        // Exercise independent bindings on both sides of a legal parameter value.
+        let alternates = module
+            .params
+            .iter()
+            .filter(|p| !p.local && p.ty == "real" && p.name != "m")
+            .find_map(|p| {
+                let initial = module.param(&b, &p.name)?;
+                if initial == 0. {
+                    return None;
+                }
+                let bind = |scale| module.bind(&[(p.name.clone(), initial * scale)]).ok();
+                Some([bind(0.99)?, bind(1.01)?])
+            })
+            .unwrap();
+        for alternate in alternates {
+            let bias: Vec<_> = alternate
+                .layout()
+                .representatives()
+                .iter()
+                .map(|&i| b.layout().index(i).map_or(0., |j| x[j]))
+                .collect();
+            equivalence(&module, &alternate, &bias, native);
+        }
+    }
     for j in 0..x.len() {
         let h = 1e-6;
         let mut hi = x.clone();
@@ -177,4 +213,112 @@ fn vbic_three_terminal_variant() {
         "`define threeTerminal\n`define __XYCE__\n",
         Some("vbic13_va"),
     );
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn vbic_five_terminal_variant() {
+    smoke(
+        "vbic_1p3/vbic_1p3.va",
+        "`define fiveTerminal\n",
+        Some("vbic13_5t"),
+    );
+}
+
+#[cfg(feature = "jit")]
+fn equivalence(module: &CompiledModule, b: &Bound, bias: &[f64], expect_native: bool) {
+    let mut work = [Scratch::default(), Scratch::default()];
+    work[1].set_jit(false);
+    let mut outputs = [EvalOutput::default(), EvalOutput::default()];
+    let accepted = vec![0.; module.state_len()];
+    let mut current = [accepted.clone(), accepted.clone()];
+    let mut used = false;
+    for k in 0..6 {
+        let x: Vec<_> = bias
+            .iter()
+            .enumerate()
+            .map(|(i, v)| v + (k as f64 - 2.) * 0.002 * (1. + (i % 3) as f64))
+            .collect();
+        for path in 0..2 {
+            let input = EvalInput {
+                x: &x,
+                temperature: 300.15,
+                analysis: if k % 2 == 0 {
+                    Analysis::Dc
+                } else {
+                    Analysis::Tran
+                },
+                initial_step: k == 0,
+                final_step: k == 5,
+                abstime: k as f64 * 1e-12,
+                gmin: 1e-12,
+                limit: k % 3 != 0,
+                simparams: &|_| None,
+                mfactor: 1.,
+            };
+            module.eval_with_scratch(
+                b,
+                &input,
+                StateIo {
+                    accepted: &accepted,
+                    current: &mut current[path],
+                },
+                &mut work[path],
+                &mut outputs[path],
+            );
+        }
+        used |= work[0].used_jit();
+        let [a, b] = &outputs;
+        assert_eq!(a.error, None, "{} at point {k}", module.name);
+        assert_eq!(a.error, b.error);
+        assert_eq!(a.noncon, b.noncon);
+        for (name, a, b) in [
+            ("f", &a.f, &b.f),
+            ("q", &a.q, &b.q),
+            ("df", &a.df, &b.df),
+            ("dq", &a.dq, &b.dq),
+            ("state", &current[0], &current[1]),
+        ] {
+            assert_eq!(a.len(), b.len());
+            for (i, (a, b)) in a.iter().zip(b).enumerate() {
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "{} point {k} {name}[{i}]: {a:e} vs {b:e}",
+                    module.name
+                );
+            }
+        }
+    }
+    if std::env::var_os("SPX_VA_JIT").is_none_or(|v| v != "0") {
+        assert_eq!(used, expect_native, "backend for {}", module.name);
+    }
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn committed_model_equivalence() {
+    for (file, parameter, alternate, native) in [
+        ("resistor", "r", 27., true),
+        ("collapse", "RS", 4., true),
+        ("diode", "rs", 3., true),
+        ("mos", "beta", 0.002, false),
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/models")
+            .join(format!("{file}.va"));
+        let ast = parse_va(&fs::read_to_string(path).unwrap(), &NoVaFiles).unwrap();
+        let m = compile_module(&ast, None).unwrap();
+        for params in [
+            vec![],
+            vec![(parameter.to_string(), alternate)],
+            vec![(parameter.to_string(), alternate * 2.)],
+        ] {
+            let b = m.bind(&params).unwrap();
+            let x: Vec<_> = (0..b.layout().unknown_len())
+                .map(|i| 0.06 * i as f64)
+                .collect();
+            equivalence(&m, &b, &x, native);
+        }
+    }
 }

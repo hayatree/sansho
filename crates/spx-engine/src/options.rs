@@ -9,6 +9,8 @@ use spx_netlist::OptionCard;
 /// Numerical options.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SimOptions {
+    /// Enable native Verilog-A kernels in JIT builds.
+    pub va_jit: bool,
     /// Relative tolerance.
     pub reltol: f64,
     /// Absolute current tolerance (A).
@@ -60,6 +62,7 @@ pub enum Method {
 impl Default for SimOptions {
     fn default() -> Self {
         Self {
+            va_jit: cfg!(feature = "jit"),
             reltol: 1e-3,
             abstol: 1e-12,
             vntol: 1e-6,
@@ -89,6 +92,10 @@ impl SimOptions {
         let mut warnings = Vec::new();
         for c in cards {
             let ok = match (c.name.as_str(), c.value) {
+                ("va_jit", Some(v @ (0.0 | 1.0))) => {
+                    o.va_jit = v == 1.;
+                    true
+                }
                 ("reltol", Some(v)) if v > 0.0 => {
                     o.reltol = v;
                     true

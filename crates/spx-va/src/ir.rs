@@ -117,6 +117,8 @@ pub struct CompiledModule {
     pub branch_unknowns: Vec<String>,
     /// Parameter metadata.
     pub params: Vec<ParamInfo>,
+    #[cfg(feature = "jit")]
+    pub(crate) kernels: std::sync::Arc<crate::eval::program::Cache>,
     pub(crate) branches: Vec<Branch>,
     pub(crate) variables: Vec<(usize, Variable)>,
     pub(crate) functions: Vec<Function>,

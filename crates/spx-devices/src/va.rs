@@ -24,6 +24,8 @@ struct Instance {
 /// All instances of one compiled module, in fixed netlist order.
 #[derive(Debug, Default)]
 pub struct VaGroup {
+    #[cfg(feature = "jit")]
+    disable_jit: bool,
     buffers: std::sync::Mutex<Buffers>,
     module: Option<Arc<CompiledModule>>,
     instances: Vec<Instance>,
@@ -48,6 +50,16 @@ pub fn parameter_names(module: &CompiledModule, params: &[(String, f64)]) -> Vec
 }
 
 impl VaGroup {
+    /// Configure native kernels before simulation and warm the most recent binding.
+    #[cfg(feature = "jit")]
+    pub fn prepare_jit(&mut self, enabled: bool, kelvin: f64) -> Option<Diagnostic> {
+        self.disable_jit = !enabled;
+        if enabled && let (Some(m), Some(i)) = (&self.module, self.instances.last()) {
+            return m.prepare_jit(&i.bound, kelvin, 1.);
+        }
+        None
+    }
+
     /// Reserve every possible branch equation for an in-place DC parameter sweep.
     pub fn prepare_sweep(&mut self, name: &str) {
         if let Some(i) = self.instances.iter_mut().find(|i| i.name == name) {
@@ -182,6 +194,8 @@ impl DeviceGroup for VaGroup {
         } = &mut *buffers;
         scratch.resize_with(self.len(), Scratch::default);
         for (k, i) in self.instances.iter().enumerate() {
+            #[cfg(feature = "jit")]
+            scratch[k].set_jit(!self.disable_jit);
             values.clear();
             values.extend(i.nodes.iter().map(|&n| volt(x, n)));
             let start = k * m.state_len();

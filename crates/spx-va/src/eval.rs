@@ -141,11 +141,28 @@ pub struct Scratch {
     binding_key: Option<Arc<()>>,
     width: usize,
     machine: program::Machine,
+    #[cfg(feature = "jit")]
+    disable_jit: bool,
     gradients: Gradients,
     drives: Vec<Drive>,
     integrals: Vec<Option<Value>>,
     frames: Vec<CallFrame>,
     calls: Vec<usize>,
+}
+#[cfg(feature = "jit")]
+impl Scratch {
+    /// Select native specialization for subsequent evaluations in this workspace.
+    pub fn set_jit(&mut self, enabled: bool) {
+        if !enabled && !self.disable_jit {
+            self.machine.leave_jit(&mut self.slots);
+        }
+        self.disable_jit = !enabled;
+    }
+
+    /// Whether the last specialized evaluation used a native kernel.
+    pub fn used_jit(&self) -> bool {
+        self.machine.used_jit()
+    }
 }
 /// Validated parameter values and explicit-supply flags.
 /// The convenience evaluator owns one instance workspace here; use `eval_with_scratch`

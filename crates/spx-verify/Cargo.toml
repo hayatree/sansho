@@ -17,3 +17,6 @@ serde_json = "1.0.154"
 spx-engine = { path = "../spx-engine" }
 spx-netlist = { path = "../spx-netlist" }
 spx-output = { path = "../spx-output" }
+
+[features]
+jit = ["spx-engine/jit"]

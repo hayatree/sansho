@@ -1,6 +1,7 @@
 //! Clean-room Verilog-A compact-model compiler and AD evaluator.
 //! Provenance: original implementation from the Accellera Verilog-AMS LRM 2.4; see docs/PROVENANCE.md.
-#![forbid(unsafe_code)]
+#![cfg_attr(not(feature = "jit"), forbid(unsafe_code))]
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 pub mod ast;
 mod dual;
@@ -53,4 +54,10 @@ pub fn parse_va(text: &str, loader: &dyn VaLoader) -> Result<SourceFile, Vec<Dia
     } else {
         Ok(tree)
     }
+}
+
+/// Whether the process environment permits native Verilog-A evaluation.
+#[cfg(feature = "jit")]
+pub fn jit_enabled() -> bool {
+    std::env::var_os("SPX_VA_JIT").is_none_or(|value| value != "0")
 }

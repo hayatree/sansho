@@ -22,3 +22,6 @@ spx-netlist = { path = "../spx-netlist" }
 spx-engine = { path = "../spx-engine" }
 spx-output = { path = "../spx-output" }
 spx-diag = { path = "../spx-diag" }
+
+[features]
+jit = ["spx-engine/jit"]

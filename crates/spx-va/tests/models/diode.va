@@ -21,7 +21,7 @@ module junction(a,k);
  endfunction
  analog begin
   V(series) <+ rs*I(series);
-  v=$limit(V(j,k),"pnjlim",vt);
+  v=$limit(V(j,k),"pnjlim",vt,0.6145);
   current=isat*(bounded(v/vt)-1);
   charge=cj*v+tau*current;
   I(j,k) <+ current+ddt(charge);

@@ -28,7 +28,6 @@
 ### 1.2 Non-goals (for now)
 
 - GUI / schematic editor (use Xschem etc.)
-- Writing our own Verilog-A compiler (we load `.osdi` files produced by OpenVAF)
 - fast-SPICE approximations that trade accuracy (table models, partitioned approximations)
 - Mixed-signal digital (XSPICE equivalent), device simulation (CIDER equivalent)
 
@@ -88,6 +87,7 @@
 | `spx-ir` | Post-elaboration circuit IR. JSON schema via serde (also accepted as agent input) | serde, schemars |
 | `spx-sparse` | CSC pattern, AMD/COLAMD, BTF, LU (real & complex), refactor, triangular solves, `LinearSolver` trait | faer (initial backend) |
 | `spx-devices` | `DeviceGroup` trait. Built-ins (R/L/C/K/V/I/E/F/G/H/switches/diode/BJT (GP)/MOS1/later BSIM4) | — |
+| `spx-va` | Clean-room Verilog-A analog subset, binding specialization, register interpretation and optional native evaluation | Cranelift (optional) |
 | `spx-osdi` | OSDI 0.3/0.4 loader (independently implemented from the spec); exposes `.osdi` models as `DeviceGroup` | libloading |
 | `spx-engine` | MNA assembly, Newton, homotopy, time integration, analyses | rayon |
 | `spx-output` | Columnar waveform store, ngspice raw writer (ASCII/binary), `.meas` evaluation | — |
@@ -160,11 +160,27 @@ Results are therefore bit-identical regardless of thread count or scheduling. Ex
 8 bytes × number of contributions.
 
 Elaboration fixes the chunk size at 1,024 for linear devices, 64 for built-in nonlinear devices
-and two for interpreted Verilog-A instances. Each VA chunk keeps reusable input and stamp buffers
+and two for Verilog-A instances. Each VA chunk keeps reusable input and stamp buffers
 and an interpreter workspace for each instance. Device evaluation uses Rayon when the circuit
 has at least eight VA instances or 256 nonlinear instances. Every value of `G`, `C`, `f`, `q`
 and `b` is gathered in its original source order. The VA assembly test compares the bits of every
 time point and signal on one, two and five threads.
+
+### 4.4 Native Verilog-A evaluation (VA-5b)
+
+The optional `jit` feature on spx-cli, spx-verify, spx-engine and spx-devices
+forwards to spx-va. The scalar specializer lowers into the same register program
+used by the interpreter. Cranelift compiles the bias-dependent equations into a
+host function with one scalar SSA value per live partial. A compiled module owns
+its finalized code and specialization cache. The device adapter prepares kernels
+during elaboration. Each instance supplies its own voltages, retained history,
+limiter state and output slots. This preserves the ordered gather in D4.
+
+For a single native transient, the standalone run pool uses at most the larger
+of the device-group count and the number of gather chunks. An embedding that
+supplies a Rayon pool retains control of its workers. Section 13 of
+[the Verilog-A design](verilog-a.md#13-va-5b-native-evaluation) covers the ABI,
+backend selection, exceptional-value replay and measurements.
 
 ---
 

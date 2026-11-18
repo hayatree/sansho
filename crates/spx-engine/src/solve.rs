@@ -204,7 +204,7 @@ pub(crate) fn assemble(
 }
 
 /// Destinations per parallel task in [`gather`].
-const GATHER_CHUNK: usize = 2048;
+pub(crate) const GATHER_CHUNK: usize = 2048;
 
 /// `dst[i] = Σ sources of i`, accumulated in the fixed order of `map`.
 fn gather(dst: &mut [f64], map: &Gather, slots: &[Slots], pick: fn(&Slots) -> &[f64], par: bool) {

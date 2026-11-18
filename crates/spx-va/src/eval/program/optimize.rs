@@ -128,6 +128,18 @@ impl Program {
                         }
                     }
                 }
+                // In a stateless native kernel the charge channel only reaches
+                // additive stamps. Both zero signs have the same stamped bits.
+                Op::Phi(d, _, a, c)
+                    if b.charge_joins
+                        .as_ref()
+                        .is_some_and(|joins| joins.contains(&d))
+                        && b.known[a] == Some(0.)
+                        && b.known[c] == Some(0.) =>
+                {
+                    b.known[d] = Some(0.);
+                    *instruction = Op::Nop;
+                }
                 Op::Phi(d, _, a, c)
                     if b.known[a].is_some()
                         && b.known[a].map(f64::to_bits) == b.known[c].map(f64::to_bits) =>

@@ -512,6 +512,10 @@ pub(crate) fn compile_cached(
                     if swept.contains(e.name.as_str()) {
                         chunk.prepare_sweep(&e.name);
                     }
+                    #[cfg(feature = "jit")]
+                    if let Some(d) = chunk.prepare_jit(opts.va_jit, opts.temp + 273.15) {
+                        diags.push(d.with_span(e.span));
+                    }
                 }
                 Err(ds) => errors.extend(ds.into_iter().map(|d| d.with_span(e.span))),
             }

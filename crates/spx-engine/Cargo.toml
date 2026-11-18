@@ -19,3 +19,6 @@ spx-output = { path = "../spx-output" }
 rayon = "1.12.0"
 serde = { version = "1", features = ["derive"] }
 spx-va = { path = "../spx-va" }
+
+[features]
+jit = ["spx-devices/jit"]

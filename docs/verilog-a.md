@@ -1,6 +1,6 @@
 # Verilog-A compact-model compiler (`spx-va`)
 
-VA-5 specializes IHP compact-model equations to register instructions. Section 11 describes the reference circuits and §12 reports timings, solver work and the remaining gap to OSDI.
+VA-5 specializes compact-model equations to register instructions. Section 11 describes the reference circuits, §12 measures the register interpreter and §13 measures the optional Cranelift backend.
 
 ## 1. Purpose and constraints
 
@@ -132,7 +132,7 @@ N1 a k dmod                           * ngspice OSDI-style instance letter `N`
 | VA-4a (done) | Compact-model coverage, parameter kinds, per-instance collapse | IHP model smoke and Jacobian tests, PSP103 engine DC sweep |
 | VA-4b (done) | Black-box comparison with ngspice + OpenVAF | 10/10 IHP decks pass; with tight Newton tolerances PSP103 I-V matches to ~1e-14 relative |
 | VA-5 (interpreter implemented) | Binding specialization, register execution and parallel assembly | Five-stage ring analysis takes 6.9× the OSDI reference time. The 2× target remains open. |
-
+| VA-5b | Optional Cranelift CPU backend with scalar forward AD | Native and interpreted IHP vectors agree bit for bit. See §13 for the remaining performance gap. |
 
 ## 8. VA-2 library API and execution contract
 
@@ -379,7 +379,7 @@ full charge equations, reusing the simulator query results from the guarded call
 Specialization is conservative. Bindings with remaining array accesses, dynamic loops,
 unsupported scalar instructions or reachable error tasks use the general interpreter. That
 interpreter keeps numeric derivatives in a reusable arena, including across nested function
-calls. It can reclaim temporary rows during long loops. The JIT remains unimplemented.
+calls. It can reclaim temporary rows during long loops.
 
 ### Release measurements
 
@@ -426,3 +426,150 @@ With all vectors selected, the CLI results for the ten IHP decks and the 21-stag
 matched VA-4b, including every returned floating-point bit. The PSP103 smoke test also checks
 the cold and warm residual and Jacobian bits at its bias point. The cached reference suites
 passed 14/14 standard and 10/10 IHP decks.
+
+## 13. VA-5b native evaluation
+
+Build with `--features jit` to select Cranelift. The feature defaults off.
+In a JIT build, `.option va_jit=0`, `SimOptions::va_jit = false` or the process
+environment setting `SPX_VA_JIT=0` selects the interpreter. Library clients can
+choose the interpreter independently for each workspace with
+`Scratch::set_jit(false)`.
+
+**Preparation and ownership.** Elaboration prepares a native kernel before the
+transient timer starts. A standalone evaluator prepares it on demand. The
+specialization key includes the bits of the bound parameter values, string
+parameters, explicit-supply flags, terminal connectivity, compact layout,
+temperature and multiplier. The module cache serializes compilation per key,
+including failed attempts. Equal instance bindings share the same code.
+The first evaluation of each instance still runs startup events in the general
+interpreter. Subsequent calls read and update per-instance numeric history.
+Scratch holds a weak reference to its kernel. The last module owner releases
+the executable pages, even when a binding or scratch survives it.
+
+**Native function.** A C-layout call frame carries pointers to unknowns,
+hoisted constants, retained variables, accepted/current limiter history and
+the four dense output buffers. Flags and simulator context are call-local.
+The return word carries validity and nonconvergence bits. The last tangent
+component is the limiting displacement and is added at each residual stamp.
+Unknown derivatives become scalar SSA values. Missing components use the
+structural zero, and conditional transfers become native blocks. The lowerer
+uses ordinary multiply and add instructions in interpreter order. Rust
+C-ABI shims evaluate transcendental functions and limiters using the same
+implementations as the interpreter. Cranelift's optional e-graph optimizer
+increased spills and code size on the rings, so the backend uses the optimized
+register program with that pass disabled. Only `jit/abi.rs` permits unsafe Rust
+for calling finalized functions and releasing executable pages.
+
+**Floating-point guards.** The full lowering implements the interpreter's
+zero-incoming-partial rule, including at nonfinite slopes. Stateless programs
+whose derivatives only reach additive stamps can also use a guarded lowering.
+It merges both signs of zero in the charge channel at joins and omits per-lane
+zero tests in derivative products. Accumulation into dense output rows starts
+at positive zero. An otherwise suppressed zero times a nonfinite slope poisons
+the computed derivative until it dies on an untaken path or reaches a guard or
+output. The compiler propagates finiteness obligations backward through sums,
+products and control-flow joins. A finite sum of guarded terms certifies their
+finiteness. Overflow of that sum conservatively triggers replay. Stamps are
+checked before accepting the result. A failed guard replays the exact register
+program with the original simulator query results. Stateful and `ddx`
+programs keep exact signed components throughout.
+
+**Fallback.** Numeric case, if and ternary expressions compile to control flow.
+The scalar specializer unrolls loops with known bounds up to 64 iterations.
+Dynamic loops, deeper dynamic case chains, remaining arrays and string
+operations, reachable error tasks and unsupported scalar instructions use the
+existing evaluator for the affected binding. A backend or specialization
+failure emits the informational diagnostic `I-VA-JIT`. Other bindings and
+modules continue using their selected backend. Exceptional-value replay keeps
+the affected workspace on the interpreter until its specialization changes.
+
+**Reproducing verification.** Run from the checkout root with the local IHP
+inputs installed as described in §11.
+
+```sh
+cargo test --offline
+cargo test --offline --features jit -p spx-va
+cargo test --offline --features jit -p spx-engine
+cargo clippy --offline --all-targets --all-features -- -D warnings
+cargo run --offline --release --features jit -p spx-verify -- --cached
+cargo run --offline --release --features jit -p spx-verify -- --cached verify/va-decks
+cargo test --offline --release --features jit -p spx-va --test production -- --nocapture --test-threads=1
+SPX_VA_JIT=0 cargo test --offline --release --features jit -p spx-va --test production -- --nocapture --test-threads=1
+```
+
+The model comparison uses six evaluations at each of three bindings and compares
+the bits of every residual, Jacobian and limiter-state entry, as well as
+`noncon`. The engine comparison clears the deck's save restriction and compares
+all real and complex vector components and the independent variable, using
+one interpreter thread and five native threads. The committed small MOS
+fixture exercises the array/dynamic-loop fallback. All ten local production
+configurations ran native kernels.
+
+### Release measurements
+
+The following are medians of seven fresh CLI runs on the Ryzen AI Max+ 395.
+Both modes used the release JIT build. The interpreter runs set
+`SPX_VA_JIT=0`. Wall time includes parsing, binding, native compilation and
+CLI output. Analysis time came from a separate build with monotonic timing
+probes around the complete transient, including the initial operating point.
+The machine exposed 32 logical workers. The default native pools used seven
+on ring5 and 23 on ring21. With `-j8` the native pools used seven and eight.
+
+| Deck | Requested workers | Interpreter wall (ms) | Native wall (ms) | Interpreter analysis (ms) | Native analysis (ms) |
+|---|---|---:|---:|---:|---:|
+| ring5 | 1 | 366 | 313 | 267.4 | 66.6 |
+| ring5 | 8 | 223 | 292 | 119.0 | 37.1 |
+| ring5 | default | 241 | 286 | 138.5 | 41.3 |
+| ring21 | 1 | 1,399 | 529 | 1,251.1 | 241.9 |
+| ring21 | 8 | 414 | 397 | 262.5 | 94.1 |
+| ring21 | default | 458 | 405 | 281.8 | 117.0 |
+
+Against the maintainer's ngspice+OSDI analysis references of 21–28 ms and
+61–65 ms, the single-worker native times are **2.4–3.2× on ring5 and
+3.7–4.0× on ring21**. The default native pools meet the 2× analysis target
+on both rings. Native compilation accounts for the longer default wall time
+on ring5. The two PSP103 corner-card specializations took median compile times
+of 76.0 and 74.3 ms across the ring runs. Their finalized code and constant
+pools occupied 288,592 and 289,040 bytes. All matching instances reused them.
+
+| Native transient | Device groups (ms) | Ordered assembly (ms) | LU factor + solve (ms) | Integration, step control and other work (ms) |
+|---|---:|---:|---:|---:|
+| ring5, one worker | 54.7 | 2.5 | 8.7 | 0.6 |
+| ring5, default | 27.0 | 4.6 | 8.3 | 0.8 |
+| ring21, one worker | 209.3 | 9.3 | 21.5 | 1.8 |
+| ring21, default | 66.1 | 22.2 | 26.5 | 3.1 |
+
+Device-group time includes slot writes and parallel scheduling. Assembly
+covers gathering slots and applying shunts and clamps. The last column is
+the per-run remainder. Each column is independently medianed. Both rings
+took 306 accepted steps, zero rejected steps, 917 Newton iterations and 1,224
+assemblies. Timing the VA adapter itself on one worker gave **4.44 versus
+20.87 µs** per ring5 instance call and **4.05 versus 23.48 µs** on ring21
+(native versus interpreter).
+
+The standalone production test measures native preparation separately from
+the first evaluation. Compile time covers register specialization, Cranelift
+lowering, code generation and finalization. Warm time is the median of 11
+calls. Table entries are medians of three release test processes per backend.
+
+| Production configuration | Native compile (ms) | Warm interpreter (µs) | Warm native (µs) |
+|---|---:|---:|---:|
+| PSP103VA | 31.2 | 7.58 | 1.60 |
+| PSP103_VA | 31.6 | 7.93 | 1.73 |
+| PSP103TVA | 43.4 | 9.63 | 2.22 |
+| PSPNQS103VA | 34.1 | 18.40 | 2.77 |
+| JUNCAP200 | 8.5 | 2.85 | 0.41 |
+| vbic13_4t | 28.2 | 7.90 | 2.26 |
+| vbic13_5t | 37.2 | 5.37 | 3.09 |
+| vbic13_va (three terminals) | 49.2 | 9.82 | 3.70 |
+| r3_cmc | 4.6 | 1.84 | 0.31 |
+| mosvar | 14.6 | 2.45 | 0.61 |
+
+Device evaluation accounts for about 86% of ring21 single-worker analysis.
+The next code-generation experiment should pass selected partials directly as
+block arguments at joins and schedule derivative uses closer to definitions
+across math calls. Compare spill traffic, kernel size and adapter time against
+the current build while retaining the bitwise tests. On the default ring21
+pool, gather and LU together take about 49 ms. Precomputing contiguous runs
+of source slots in gather order and reusing the numeric LU pivot order are
+separate experiments for that path.
