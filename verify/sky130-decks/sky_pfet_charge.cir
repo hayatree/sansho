@@ -1,0 +1,11 @@
+* SKY130 pfet_01v8 terminal currents under gate and drain ramps (charges, body network)
+* Requires the open_pdks/volare SKY130 build under va-models/volare-sky130 (sky130A).
+* Provenance: original SKY130 test circuit.
+.lib "../../va-models/volare-sky130/sky130A/libs.tech/ngspice/sky130.lib.spice" tt
+vg g 0 pwl(0 1.8 0.5n 0 1n 1.8)
+vd d 0 pwl(0 0 0.25n 1.8 0.75n 0 1n 0.9)
+vs s 0 1.8
+vb b 0 1.8
+xm1 d g s b sky130_fd_pr__pfet_01v8 w=2 l=0.15 nf=2 ad=0.29 as=0.29 pd=2.58 ps=2.58
+.tran 1p 1n 0 1p
+.end
