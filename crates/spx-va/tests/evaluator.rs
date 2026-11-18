@@ -825,3 +825,128 @@ fn collecting_loop_temporaries_preserves_caller_gradients() {
         assert_eq!(out.df[0], 40002.);
     }
 }
+
+/// Measure dispatch, initialization of stamp slots, native return and validation
+/// with a seven-unknown circuit layout and an empty analog block.
+#[cfg(feature = "jit")]
+#[test]
+#[ignore = "release microbenchmark"]
+fn empty_kernel_overhead() {
+    let m = compile(
+        "module empty(a,b,c,d,e,f,g); electrical a,b,c,d,e,f,g; analog begin end endmodule",
+    );
+    let mut b = m.bind(&[]).unwrap();
+    b.specialize_stamp(&(0..7).map(Some).collect::<Vec<_>>(), false);
+    let input = EvalInput {
+        x: &[0.; 7],
+        temperature: 300.,
+        analysis: Analysis::Tran,
+        initial_step: false,
+        final_step: false,
+        abstime: 1.,
+        gmin: 1e-12,
+        limit: false,
+        simparams: &|_| None,
+        mfactor: 1.,
+    };
+    let mut workspace = Scratch::default();
+    let mut out = EvalOutput::default();
+    let mut times = Vec::new();
+    for _ in 0..8 {
+        let start = std::time::Instant::now();
+        for _ in 0..100_000 {
+            m.eval_with_scratch(
+                &b,
+                std::hint::black_box(&input),
+                StateIo {
+                    accepted: &[],
+                    current: &mut [],
+                },
+                &mut workspace,
+                std::hint::black_box(&mut out),
+            );
+        }
+        times.push(start.elapsed().as_nanos() as f64 / 100_000.);
+    }
+    assert!(workspace.used_jit() && out.error.is_none());
+    times[1..].sort_by(f64::total_cmp);
+    eprintln!("empty native evaluation: {:.1} ns/call", times[4]);
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn packed_instances_match_individual_stamps_on_divergent_paths() {
+    let m = compile(
+        r#"module branches(p,q,z); electrical p,q,z;
+        real u,w;
+        analog begin
+          if (V(p)>0) begin
+            u=sqrt(V(p))+$simparam("gmin",1);
+            w=u+V(q);
+            if (V(q)>0) begin
+              w=u*exp(V(q));
+              if (V(q)>0.5) w=w*V(q)+cos(V(p))+1;
+              w=w*w+u;
+            end
+            I(p,q)<+w;
+          end else begin
+            u=sqrt(-V(p));
+            if (V(q)>1) w=u*V(q); else w=u-2;
+            I(q)<+w;
+          end
+          I(p)<+ddt(w*V(p));
+        end endmodule"#,
+    );
+    let mut b = m.bind(&[]).unwrap();
+    b.specialize_stamp(&[Some(0), Some(1), None], false);
+    let pair = m.prepare_circuit_pair(&b, 300.).unwrap();
+    let mut packed = EvalOutput::default();
+    for (p, q) in [
+        ([0.4, -0.3], [-0.1, 2.]),
+        ([-0.5, -0.7], [0.3, 1.2]),
+        ([0.3, 0.7], [0.4, 0.8]),
+    ] {
+        assert!(pair.evaluate(&[p[0], p[1], q[0], q[1], 0., 0.], 1e-12, &mut packed));
+        for lane in 0..2 {
+            let mut out = EvalOutput::default();
+            let input = EvalInput {
+                x: &[p[lane], q[lane], 0.],
+                temperature: 300.,
+                analysis: Analysis::Tran,
+                initial_step: false,
+                final_step: false,
+                abstime: 1.,
+                gmin: 1e-12,
+                limit: false,
+                simparams: &|_| None,
+                mfactor: 1.,
+            };
+            m.eval_with_scratch(
+                &b,
+                &input,
+                StateIo {
+                    accepted: &[],
+                    current: &mut [],
+                },
+                &mut Scratch::default(),
+                &mut out,
+            );
+            for (v, w) in [
+                (&packed.f, &out.f),
+                (&packed.q, &out.q),
+                (&packed.df, &out.df),
+                (&packed.dq, &out.dq),
+            ] {
+                assert!(
+                    v.iter()
+                        .skip(lane)
+                        .step_by(2)
+                        .zip(w)
+                        .all(|(a, b)| a.to_bits() == b.to_bits())
+                );
+            }
+        }
+    }
+    assert!(!pair.evaluate(&[1., 2., 0., 0., 1., 0.], 1e-12, &mut packed));
+    assert!(!pair.evaluate(&[f64::NAN, 2., 0., 0., 0., 0.], 1e-12, &mut packed));
+}

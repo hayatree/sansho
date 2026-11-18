@@ -7,6 +7,8 @@ use crate::{
     ir::*,
     limit,
 };
+#[cfg(feature = "jit")]
+pub use program::CircuitPair;
 use spx_diag::Diagnostic;
 use std::sync::{Arc, Mutex};
 pub use topology::Layout;

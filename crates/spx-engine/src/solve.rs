@@ -9,7 +9,7 @@
 
 use spx_devices::{EvalCtx, Mode, Slots, StateRef, TranParams, UnknownKind};
 use spx_diag::{Confidence, Culprit, CulpritKind, Diagnostic};
-use spx_sparse::{FaerLu, LinearSolver, SolverError};
+use spx_sparse::{NewtonLu, SolverError};
 
 use rayon::prelude::*;
 
@@ -51,6 +51,8 @@ pub(crate) struct Assembled {
 pub(crate) struct Workspace {
     timed: bool,
     lu_time: std::time::Duration,
+    factor_time: std::time::Duration,
+    group_time: std::time::Duration,
     pub assemblies: usize,
     pub newton_calls: usize,
     pub newton_iterations: usize,
@@ -58,8 +60,7 @@ pub(crate) struct Workspace {
     pub asm: Assembled,
     jac: Vec<f64>,
     rhs: Vec<f64>,
-    lu: FaerLu<f64>,
-    analyzed: bool,
+    lu: Option<NewtonLu>,
     /// Per-group device state of the current iteration.
     pub state: Vec<Vec<f64>>,
     /// Per-group device state at the last accepted solution.
@@ -68,6 +69,21 @@ pub(crate) struct Workspace {
     pub noncon: bool,
     /// Nodes held at a voltage through [`CLAMP_G`] (`.ic` / `.nodeset`): (unknown, volts).
     pub clamp: Vec<(usize, f64)>,
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        if self.timed {
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "spx-groups {} {} {}",
+                rayon::current_num_threads(),
+                self.assemblies,
+                self.group_time.as_nanos()
+            );
+        }
+    }
 }
 
 /// Conductance that holds `.ic` / `.nodeset` nodes at their value (S).
@@ -80,6 +96,8 @@ impl Workspace {
         Self {
             timed: spx_diag::profile_devices(),
             lu_time: std::time::Duration::ZERO,
+            factor_time: std::time::Duration::ZERO,
+            group_time: std::time::Duration::ZERO,
             assemblies: 0,
             newton_calls: 0,
             newton_iterations: 0,
@@ -93,8 +111,7 @@ impl Workspace {
             },
             jac: vec![0.0; nnz],
             rhs: vec![0.0; n],
-            lu: FaerLu::new(),
-            analyzed: false,
+            lu: None,
             state: ckt.state_len.iter().map(|&n| vec![0.0; n]).collect(),
             accepted: ckt.state_len.iter().map(|&n| vec![0.0; n]).collect(),
             noncon: false,
@@ -200,6 +217,7 @@ fn assemble_for(
         s.error = None;
         group.eval(ctx, x, StateRef { accepted, current }, s);
     };
+    let started = ws.timed.then(std::time::Instant::now);
     let states = ws.state.iter_mut().zip(ws.accepted.iter());
     if par {
         ckt.groups
@@ -213,6 +231,9 @@ fn assemble_for(
             .zip(ws.slots.iter_mut())
             .zip(states)
             .for_each(eval);
+    }
+    if let Some(started) = started {
+        ws.group_time += started.elapsed();
     }
     ws.noncon = ws.slots.iter().any(|s| s.noncon);
     let slots = &ws.slots;
@@ -253,10 +274,23 @@ pub(crate) const GATHER_CHUNK: usize = 2048;
 
 /// `dst[i] = Σ sources of i`, accumulated in the fixed order of `map`.
 fn gather(dst: &mut [f64], map: &Gather, slots: &[Slots], pick: fn(&Slots) -> &[f64], par: bool) {
+    let (ptr, src) = match map {
+        Gather::ByGroup(groups) => {
+            dst.fill(0.);
+            for (slots, group) in slots.iter().zip(groups) {
+                let values = pick(slots);
+                for &(k, d) in group {
+                    dst[d] += values[k];
+                }
+            }
+            return;
+        }
+        Gather::ByDestination { ptr, src } => (ptr, src),
+    };
     let fill = |base: usize, out: &mut [f64]| {
         for (j, d) in out.iter_mut().enumerate() {
             let mut sum = 0.0;
-            for &(g, k) in map.of(base + j) {
+            for &(g, k) in &src[ptr[base + j]..ptr[base + j + 1]] {
                 sum += pick(&slots[g as usize])[k as usize];
             }
             *d = sum;
@@ -328,9 +362,8 @@ pub(crate) fn newton(
 ) -> Result<usize, NewtonError> {
     let n = ckt.dim();
     ws.newton_calls += 1;
-    if !ws.analyzed {
-        ws.lu.analyze(&ckt.pattern).map_err(NewtonError::Solver)?;
-        ws.analyzed = true;
+    if ws.lu.is_none() {
+        ws.lu = Some(NewtonLu::new(&ckt.pattern).map_err(NewtonError::Solver)?);
     }
     ws.restore();
     let kinds = ckt.unknowns.kinds();
@@ -365,12 +398,19 @@ pub(crate) fn newton(
             }
         }
         let lu_start = ws.timed.then(std::time::Instant::now);
-        match ws.lu.factor(&ws.jac) {
+        let lu = ws
+            .lu
+            .as_mut()
+            .ok_or(NewtonError::Solver(SolverError::NotReady))?;
+        match lu.factor(&ws.jac) {
             Ok(()) => {}
             Err(SolverError::Singular { .. }) => return Err(NewtonError::Singular),
             Err(e) => return Err(NewtonError::Solver(e)),
         }
-        match ws.lu.solve(&mut ws.rhs) {
+        if let Some(t) = lu_start {
+            ws.factor_time += t.elapsed();
+        }
+        match lu.solve(&mut ws.rhs) {
             Ok(()) => {}
             Err(SolverError::Singular { .. }) => return Err(NewtonError::Singular),
             Err(e) => return Err(NewtonError::Solver(e)),
@@ -411,6 +451,12 @@ pub(crate) fn newton(
         if ckt.linear || (converged && iter > 1 && !ws.noncon && !ctx.init_junctions) {
             if ws.timed {
                 use std::io::Write;
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "spx-factor {} {}",
+                    ws.newton_iterations,
+                    ws.factor_time.as_nanos()
+                );
                 let _ = writeln!(
                     std::io::stderr().lock(),
                     "spx-newton {} {} {}",

@@ -2,11 +2,14 @@
 //! Provenance: original implementation from the repository register evaluator and SSA literature.
 
 mod abi;
+mod batch;
+pub use batch::CircuitPair;
 mod arithmetic;
 mod guards;
 mod joins;
 mod lower;
 mod packed;
+mod simplify;
 mod split;
 
 use super::*;
@@ -34,6 +37,7 @@ pub(crate) struct Cache(Mutex<HashMap<Key, Cell>>);
 struct Kernel {
     bias_only: bool,
     code: abi::Code,
+    batch: std::sync::OnceLock<Option<abi::Code>>,
     constants: Vec<f64>,
     queries: Vec<String>,
     stores: Vec<(usize, Ty)>,
@@ -229,7 +233,7 @@ impl Kernel {
 
         // Some backend resource/ISA failures are reported by Cranelift as unwinds.
         let code = std::panic::catch_unwind(|| {
-            lower::compile(&p, n, regular, disk, circuit.filter(|_| regular))
+            lower::compile(&p, n, regular, disk, circuit.filter(|_| regular), false)
         })
         .map_err(|_| "native backend failed during compilation".to_string())??;
         let bias_only = regular
@@ -251,6 +255,7 @@ impl Kernel {
         Ok(Self {
             bias_only,
             code,
+            batch: Default::default(),
             regular,
             constants: p.values,
             queries,
@@ -267,6 +272,7 @@ pub(super) enum Dispatch {
 
 #[derive(Default, Debug)]
 pub(super) struct Instance {
+    bias_only: bool,
     key: Option<(u64, u64)>,
     kernel: Option<std::sync::Weak<Kernel>>,
     history: Vec<f64>,
@@ -276,11 +282,7 @@ pub(super) struct Instance {
 
 impl Machine {
     pub(in crate::eval) fn bias_only(&self) -> bool {
-        self.native
-            .kernel
-            .as_ref()
-            .and_then(std::sync::Weak::upgrade)
-            .is_some_and(|k| k.bias_only)
+        self.native.bias_only
     }
     pub(in crate::eval) fn used_jit(&self) -> bool {
         self.native.kernel.is_some()
@@ -293,6 +295,7 @@ impl Machine {
 
 impl Instance {
     fn flush(&mut self, slots: &mut [Slot]) {
+        self.bias_only = false;
         if let Some(kernel) = self.kernel.take().and_then(|k| k.upgrade()) {
             for &(i, ty) in &kernel.stores {
                 let slot = &mut slots[i];
@@ -368,7 +371,7 @@ impl Instance {
         let ok = kernel.code.run(
             &mut abi::Frame::new(
                 input,
-                b,
+                b.sim.tnom,
                 state,
                 out,
                 &kernel.constants,
@@ -382,16 +385,8 @@ impl Instance {
         }
         out.noncon = ok & 2 != 0;
         let regular = kernel.regular;
-        if ok & 1 != 0
-            && (!regular
-                || out
-                    .df
-                    .iter()
-                    .chain(out.dq.iter())
-                    .chain(out.q.iter())
-                    .chain(out.f.iter())
-                    .all(|g| g.is_finite()))
-        {
+        if ok & 1 != 0 && (!regular || finite_output(out)) {
+            self.bias_only = kernel.bias_only;
             return Dispatch::Finished;
         }
         // Only stateless programs have charge guards. Their retained stores are
@@ -403,6 +398,14 @@ impl Instance {
         out.dq.fill(0.);
         Dispatch::Replay
     }
+}
+
+// The common case is an entirely finite stamp. Independent reductions let
+// LLVM validate contiguous Jacobian rows in vectors.
+fn finite_output<T: AsRef<[f64]>>(out: &StampBuffers<T>) -> bool {
+    [&out.df, &out.dq, &out.f, &out.q]
+        .into_iter()
+        .all(|v| v.as_ref().iter().fold(true, |ok, x| ok & x.is_finite()))
 }
 
 #[cfg(test)]

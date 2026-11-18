@@ -94,6 +94,8 @@ impl SourceLoader for FsLoader {
 pub(crate) struct Expanded {
     pub title: String,
     pub lines: Vec<Line>,
+    /// Repeated model headers refer to the earlier card supplying their parameter tokens.
+    pub model_sources: HashMap<usize, usize>,
     pub sources: Vec<String>,
     pub hdl: Vec<crate::HdlSource>,
     pub diags: Vec<Diagnostic>,
@@ -109,7 +111,18 @@ struct SubcktDef {
     defaults: Vec<(String, Rc<Expr>)>,
     /// Body lines for per-instance elaboration.
     body: Vec<Line>,
+    leaf: RefCell<Option<Leaf>>,
     span: Span,
+}
+
+/// A substituted primitive/model body. Instance and net names are applied on use.
+#[derive(Clone, Debug)]
+struct Leaf {
+    first_output: usize,
+    arguments: Vec<(String, u64)>,
+    functions: usize,
+    body: Vec<Line>,
+    local_models: HashSet<String>,
 }
 
 /// A parameter scope: instance overrides, body `.param`s and defaults, then the global scope.
@@ -271,6 +284,7 @@ fn num_text(v: f64) -> String {
 
 struct Pre<'l> {
     libraries: HashMap<PathBuf, Rc<Vec<Line>>>,
+    volatile_reads: usize,
     loader: &'l dyn SourceLoader,
     hdl: Vec<crate::HdlSource>,
     sources: Vec<String>,
@@ -288,6 +302,9 @@ impl Pre<'_> {
         let key = self.loader.cache_path(path, from);
         if let Some(lines) = key.as_ref().and_then(|k| self.libraries.get(k)) {
             return Some(lines.clone());
+        }
+        if key.is_none() {
+            self.volatile_reads += 1;
         }
         match self.loader.load(path, from) {
             Ok((resolved, text)) => {
@@ -343,6 +360,7 @@ impl Pre<'_> {
                     }
                 }
                 ".hdl" => {
+                    self.volatile_reads += 1;
                     if let Some(p) = line.tokens.get(1) {
                         match self.loader.load(unquote(&p.text), from) {
                             Ok((path, text)) => self.hdl.push(crate::HdlSource {
@@ -439,6 +457,7 @@ fn lib_section(lines: &[Line], name: &str) -> Option<Vec<Line>> {
 /// Definitions collected from the expanded netlist.
 #[derive(Default, Clone)]
 struct Defs {
+    function_version: usize,
     subckts: HashMap<String, Rc<SubcktDef>>,
     funcs: Funcs,
     globals: HashSet<String>,
@@ -498,6 +517,8 @@ impl Ctx<'_> {
 }
 
 struct Flat<'l> {
+    model_sources: HashMap<usize, usize>,
+    next_version: usize,
     defs: Defs,
     pre: Pre<'l>,
     out: Vec<Line>,
@@ -559,15 +580,36 @@ impl Flat<'_> {
         out
     }
 
-    fn run(&mut self, lines: &[Line], ctx: &Ctx<'_>, scope: &Scope<'_>, depth: usize) {
-        for line in lines {
+    fn run(
+        &mut self,
+        lines: &[Line],
+        ctx: &Ctx<'_>,
+        scope: &Scope<'_>,
+        depth: usize,
+        substituted: bool,
+        prior: Option<usize>,
+    ) {
+        for (offset, line) in lines.iter().enumerate() {
             let h = head(line);
             let span = line.span();
             if h.starts_with('.') {
                 match h.as_str() {
                     ".param" | ".func" | ".global" => {}
                     ".model" => {
-                        let mut toks = self.substitute(&line.tokens, scope);
+                        if let Some(start) = prior
+                            && line.tokens.len() >= 3
+                        {
+                            let mut header = line.tokens[..3].to_vec();
+                            header[1].text = ctx.model(&header[1].text);
+                            self.model_sources.insert(self.out.len(), start + offset);
+                            self.push(header, line);
+                            continue;
+                        }
+                        let mut toks = if substituted {
+                            line.tokens.clone()
+                        } else {
+                            self.substitute(&line.tokens, scope)
+                        };
                         if let Some(name) = toks.get_mut(1) {
                             name.text = ctx.model(&name.text);
                         }
@@ -623,7 +665,11 @@ impl Flat<'_> {
                 self.instance(line, ctx, scope, depth);
                 continue;
             }
-            let mut toks = self.substitute(&line.tokens, scope);
+            let mut toks = if substituted {
+                line.tokens.clone()
+            } else {
+                self.substitute(&line.tokens, scope)
+            };
             let letter = h.chars().next().unwrap_or(' ');
             let n = toks.len();
             let node_slots: Vec<usize> = match letter {
@@ -723,6 +769,8 @@ impl Flat<'_> {
                 ".func" if nested == 0 => match parse_func(raw_rest(l)) {
                     Ok((n, f)) => {
                         self.defs.funcs.insert(n, f);
+                        self.next_version += 1;
+                        self.defs.function_version = self.next_version;
                     }
                     Err(e) => self.error("E-PARSE-EXPR", e, l.span()),
                 },
@@ -875,6 +923,7 @@ impl Flat<'_> {
             );
             return;
         }
+        let diagnostics_before_args = self.diags.len();
         // Instance parameters are evaluated in the caller's scope.
         let mut inst = Scope::new(Some(global_of(scope)));
         let mut i = end;
@@ -917,6 +966,38 @@ impl Flat<'_> {
             .zip(nodes)
             .map(|(p, n)| (p.clone(), ctx.node(&self.defs, &n.text)))
             .collect();
+        let mut arguments: Vec<_> = inst
+            .fixed
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_bits()))
+            .collect();
+        arguments.sort_unstable();
+        let version = self.defs.function_version;
+        if let Some(leaf) = def.leaf.borrow().as_ref()
+            && self.diags.len() == diagnostics_before_args
+            && leaf.functions == version
+            && leaf.arguments == arguments
+        {
+            let inner = Ctx {
+                prefix,
+                ports,
+                local_models: &leaf.local_models,
+            };
+            self.run(
+                &leaf.body,
+                &inner,
+                &inst,
+                depth + 1,
+                true,
+                Some(leaf.first_output),
+            );
+            return;
+        }
+        let before = (
+            self.diags.len(),
+            self.pre.diags.len(),
+            self.pre.volatile_reads,
+        );
         let outer = self.defs.clone();
         let lines = self.prepare(def.body.clone(), &mut inst, 0);
         for (index, tok) in t.iter().enumerate().skip(end) {
@@ -940,7 +1021,46 @@ impl Flat<'_> {
             ports,
             local_models: &models,
         };
-        self.run(&body, &inner, &inst, depth + 1);
+        // Cache expensive local model cards only when preparation was side-effect free.
+        // Child overrides come from their caller, but the parent of inst is the global scope.
+        if before.0 == diagnostics_before_args
+            && before
+                == (
+                    self.diags.len(),
+                    self.pre.diags.len(),
+                    self.pre.volatile_reads,
+                )
+            && self.defs.globals == outer.globals
+            && body
+                .iter()
+                .any(|line| line.tokens.len() > 64 && head(line) == ".model")
+            && body.iter().all(|line| {
+                matches!(head(line).as_str(), ".model" | ".param" | ".func")
+                    || head(line).starts_with('n')
+            })
+        {
+            let body: Vec<_> = body
+                .iter()
+                .filter(|l| !matches!(head(l).as_str(), ".param" | ".func"))
+                .map(|l| Line {
+                    tokens: self.substitute(&l.tokens, &inst),
+                    raw: l.raw.clone(),
+                })
+                .collect();
+            let first_output = self.out.len();
+            self.run(&body, &inner, &inst, depth + 1, true, None);
+            if self.diags.len() == before.0 {
+                *def.leaf.borrow_mut() = Some(Leaf {
+                    first_output,
+                    arguments,
+                    functions: version,
+                    body,
+                    local_models: models,
+                });
+            }
+        } else {
+            self.run(&body, &inner, &inst, depth + 1, false, None);
+        }
         self.defs = outer;
     }
 }
@@ -1024,6 +1144,7 @@ fn collect(
                         ports,
                         defaults,
                         body: Vec::new(),
+                        leaf: Default::default(),
                         span: line.span(),
                     },
                 ));
@@ -1084,10 +1205,13 @@ pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
     let _phase = spx_diag::Phase::start("netlist_pre");
     let lexed = lex_source(text, 0, true);
     let mut flat = Flat {
+        model_sources: Default::default(),
+        next_version: 0,
         defs: Defs::default(),
         pre: Pre {
             loader,
             libraries: Default::default(),
+            volatile_reads: 0,
             hdl: Vec::new(),
             sources: vec![String::new()],
             diags: vec![],
@@ -1118,12 +1242,13 @@ pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
     };
     drop(_phase);
     let _phase = spx_diag::Phase::start("flatten");
-    flat.run(&top, &ctx, &global, 0);
+    flat.run(&top, &ctx, &global, 0, false, None);
     flat.diags.extend(flat.pre.diags);
     Expanded {
         hdl: flat.pre.hdl,
         title: lexed.title,
         lines: flat.out,
+        model_sources: flat.model_sources,
         sources: flat.pre.sources,
         diags: flat.diags,
     }

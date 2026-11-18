@@ -1,6 +1,8 @@
 //! Lower the packed register program to a host function with scalar SSA tangents.
 //! Provenance: original implementation from forward-mode AD and SSA construction.
 
+mod batch;
+
 use super::{
     abi::{self, Frame},
     *,
@@ -25,6 +27,9 @@ pub(super) enum Partial {
 pub(super) struct Lower<'a, 'b> {
     pub fb: FunctionBuilder<'a>,
     pub ptr: ir::Type,
+    ty: ir::Type,
+    stamp_mask: Option<V>,
+    pure_calls: HashMap<ir::Inst, (usize, usize)>,
     frame: V,
     pub(super) program: &'b Program,
     pub(super) n: usize,
@@ -54,6 +59,7 @@ pub(super) fn compile(
     regular: bool,
     disk: Option<&crate::cache::Artifact>,
     circuit: Option<&CircuitStamp>,
+    batch: bool,
 ) -> Result<abi::Code, String> {
     let mut flags = settings::builder();
     let opt = std::env::var("SPX_CLIF_OPT").unwrap_or_else(|_| "none".into());
@@ -91,7 +97,7 @@ pub(super) fn compile(
                 .collect::<Vec<_>>()
                 .join(" ")
         );
-        entry.child(&[target.as_bytes(), &n.to_le_bytes()])
+        entry.child(&[target.as_bytes(), &n.to_le_bytes(), &[batch as u8]])
     });
     let module = JITModule::new(JITBuilder::with_isa(isa, default_libcall_names()));
     let mut pages = abi::Pages(Mutex::new(Some(module)));
@@ -112,7 +118,7 @@ pub(super) fn compile(
             .map_err(|e| e.to_string())
     };
     let id = declare()?;
-    let cut = split::cut(p, regular);
+    let cut = (!batch).then(|| split::cut(p, regular)).flatten();
     let next = cut.map(|_| declare()).transpose()?;
     let ids: Vec<_> = std::iter::once(id).chain(next).collect();
     if let Some(payload) = artifact.as_ref().and_then(|a| a.read())
@@ -140,6 +146,7 @@ pub(super) fn compile(
             range,
             &mut handoff,
             circuit,
+            batch,
         )?;
         module
             .define_function(func, &mut ctx)
@@ -204,6 +211,7 @@ fn emit(
     range: Range<usize>,
     handoff: &mut split::Handoff,
     circuit: Option<&CircuitStamp>,
+    batch: bool,
 ) -> Result<(), String> {
     let ptr = config.pointer_type();
     let mut builder_ctx = FunctionBuilderContext::new();
@@ -213,9 +221,15 @@ fn emit(
     fb.switch_to_block(entry);
     fb.seal_block(entry);
     let frame = fb.block_params(entry)[0];
-    let guard_sum = fb.declare_var(F64);
+    let ty = if batch { F64X2 } else { F64 };
+    let guard_sum = fb.declare_var(ty);
     let zero = fb.ins().f64const(0.);
-    fb.def_var(guard_sum, zero);
+    let initial_sum = if batch {
+        fb.ins().splat(ty, zero)
+    } else {
+        zero
+    };
+    fb.def_var(guard_sum, initial_sum);
     let valid = fb.declare_var(I8);
     let noncon = fb.declare_var(I8);
     let yes = fb.ins().iconst(I8, 1);
@@ -228,7 +242,11 @@ fn emit(
     } else {
         vec![(true, true); p.ops.len()]
     };
-    let pairs = super::packed::pairs(p, circuit);
+    let pairs = if batch {
+        Vec::new()
+    } else {
+        super::packed::pairs(p, circuit)
+    };
     let vector_sum = (!pairs.is_empty()).then(|| {
         let var = fb.declare_var(F64X2);
         let value = fb.ins().splat(F64X2, zero);
@@ -239,6 +257,9 @@ fn emit(
         fb,
         ptr,
         frame,
+        ty,
+        stamp_mask: None,
+        pure_calls: HashMap::new(),
         program: p,
         circuit,
         fixed: vec![None; p.values.len()],
@@ -258,17 +279,27 @@ fn emit(
         query_index: 0,
         regular,
     };
-    lower.body(range, handoff, &joins, &checks)?;
+    if batch {
+        lower.batch_body(&checks)?;
+    } else {
+        lower.body(range, handoff, &joins, &checks)?;
+    }
+    let calls = lower.pure_calls;
     lower.fb.finalize(config);
+    super::simplify::simplify(&mut ctx.func, &calls);
     Ok(())
 }
 
 impl Lower<'_, '_> {
     pub fn num(&mut self, x: f64) -> V {
-        *self
-            .literals
-            .entry(x.to_bits())
-            .or_insert_with(|| self.fb.ins().f64const(x))
+        *self.literals.entry(x.to_bits()).or_insert_with(|| {
+            let v = self.fb.ins().f64const(x);
+            if self.ty == F64 {
+                v
+            } else {
+                self.fb.ins().splat(self.ty, v)
+            }
+        })
     }
     fn field(&mut self, ty: ir::Type, offset: usize) -> V {
         *self.fields.entry(offset).or_insert_with(|| {
@@ -292,13 +323,30 @@ impl Lower<'_, '_> {
         {
             flags = flags.with_readonly().with_can_move();
         }
-        self.fb.ins().load(F64, flags, ptr, (8 * index) as i32)
+        if self.ty == F64 || field == offset_of!(Frame, constants) {
+            let v = self.fb.ins().load(F64, flags, ptr, (8 * index) as i32);
+            if self.ty == F64 {
+                v
+            } else {
+                self.fb.ins().splat(self.ty, v)
+            }
+        } else {
+            self.fb.ins().load(
+                self.ty,
+                MemFlagsData::new().with_notrap(),
+                ptr,
+                (16 * index) as i32,
+            )
+        }
     }
     pub(super) fn store(&mut self, field: usize, index: usize, value: V) {
         let ptr = self.field(self.ptr, field);
-        self.fb
-            .ins()
-            .store(MemFlagsData::trusted(), value, ptr, (8 * index) as i32);
+        self.fb.ins().store(
+            MemFlagsData::new().with_notrap(),
+            value,
+            ptr,
+            (self.ty.bytes() as usize * index) as i32,
+        );
     }
     fn get(&mut self, r: Reg) -> V {
         if let Some(value) = self.fixed[r] {
@@ -319,7 +367,7 @@ impl Lower<'_, '_> {
         v
     }
     pub(super) fn set(&mut self, r: Reg, v: V) {
-        let var = self.fb.declare_var(F64);
+        let var = self.fb.declare_var(self.ty);
         self.fb.def_var(var, v);
         self.primal[r] = Some(var);
     }
@@ -340,6 +388,10 @@ impl Lower<'_, '_> {
         let dfg = &self.fb.func.dfg;
         let inst = dfg.value_def(dfg.resolve_aliases(v)).inst()?;
         match dfg.insts[inst] {
+            ir::InstructionData::Unary {
+                opcode: ir::Opcode::Splat,
+                arg,
+            } => self.constant(arg),
             ir::InstructionData::UnaryIeee64 { imm, .. } => Some(f64::from_bits(imm.bits())),
             _ => None,
         }
@@ -351,7 +403,7 @@ impl Lower<'_, '_> {
         if let Some(value) = self.constant(v) {
             self.derivatives[r][i] = Some(Partial::Constant(value));
         } else {
-            let var = self.fb.declare_var(F64);
+            let var = self.fb.declare_var(self.ty);
             self.fb.def_var(var, v);
             self.derivatives[r][i] = Some(Partial::Scalar(var));
         }
@@ -381,7 +433,7 @@ impl Lower<'_, '_> {
     pub fn number_bool(&mut self, flag: V) -> V {
         let one = self.num(1.);
         let zero = self.num(0.);
-        self.fb.ins().select(flag, one, zero)
+        self.select(flag, one, zero)
     }
     pub fn math_call(&mut self, row: usize, column: usize, x: V, y: V) -> V {
         let table = self.field(self.ptr, offset_of!(Frame, math));
@@ -392,7 +444,26 @@ impl Lower<'_, '_> {
             table,
             offset as i32,
         );
-        let value = self.call(f, &[x, y]);
+        let shim = |this: &mut Self, a, b| {
+            let v = this.call(f, &[a, b]);
+            if let Some(i) = this.fb.func.dfg.value_def(v).inst() {
+                this.pure_calls.insert(i, (row, column));
+            }
+            v
+        };
+        let value = if self.ty == F64 {
+            shim(self, x, y)
+        } else {
+            let mut lane = |i| {
+                let a = self.fb.ins().extractlane(x, i);
+                let b = self.fb.ins().extractlane(y, i);
+                shim(self, a, b)
+            };
+            let a = lane(0);
+            let b = lane(1);
+            let v = self.fb.ins().splat(self.ty, a);
+            self.fb.ins().insertlane(v, b, 1)
+        };
         self.clear_block();
         value
     }
@@ -406,6 +477,14 @@ impl Lower<'_, '_> {
         let sig = self.fb.import_signature(sig);
         let call = self.fb.ins().call_indirect(sig, f, args);
         self.fb.inst_results(call)[0]
+    }
+    pub(super) fn select(&mut self, mask: V, x: V, y: V) -> V {
+        if self.ty == F64 {
+            self.fb.ins().select(mask, x, y)
+        } else {
+            let mask = self.fb.ins().bitcast(self.ty, MemFlagsData::new(), mask);
+            self.fb.ins().bitselect(mask, x, y)
+        }
     }
     fn finite(&mut self, v: V) -> V {
         let abs = self.fb.ins().fabs(v);
@@ -496,19 +575,7 @@ impl Lower<'_, '_> {
                         .jump(blocks[j].ok_or("missing branch target")?, &[]);
                     terminated = true;
                 }
-                Op::Unknown(d, i) => {
-                    self.unknowns[d] = Some(i);
-                    if self.circuit.is_some_and(|s| s.wires[i].is_none()) {
-                        let z = self.num(0.);
-                        self.fixed[d] = Some(0.);
-                        self.set(d, z);
-                        continue;
-                    }
-                    let v = self.load(offset_of!(Frame, x), i);
-                    self.set(d, v);
-                    let one = self.num(1.);
-                    self.set_grad(d, i, one);
-                }
+                Op::Unknown(d, i) => self.unknown(d, i),
                 Op::Math(d, m, a, b) | Op::Charge(d, m, a, b) => self.arithmetic(d, m, a, b),
                 Op::Phi(d, c, a, b) => {
                     if !joins.replaced[pc] || self.fixed[c].is_some() {
@@ -659,6 +726,19 @@ impl Lower<'_, '_> {
         self.fb.ins().return_(&[status]);
         Ok(())
     }
+    fn unknown(&mut self, d: Reg, i: usize) {
+        self.unknowns[d] = Some(i);
+        if self.circuit.is_some_and(|s| s.wires[i].is_none()) {
+            let z = self.num(0.);
+            self.fixed[d] = Some(0.);
+            self.set(d, z);
+            return;
+        }
+        let v = self.load(offset_of!(Frame, x), i);
+        self.set(d, v);
+        let one = self.num(1.);
+        self.set_grad(d, i, one);
+    }
     fn arithmetic(&mut self, d: Reg, m: Math, a: Reg, b: Reg) {
         let x = self.get(a);
         let y = self.get(b);
@@ -742,7 +822,7 @@ impl Lower<'_, '_> {
             return;
         }
         let value = self.get(src);
-        let var = *self.primal[dst].get_or_insert_with(|| self.fb.declare_var(F64));
+        let var = *self.primal[dst].get_or_insert_with(|| self.fb.declare_var(self.ty));
         self.fb.def_var(var, value);
         if dst >= self.derivatives.len() {
             return;
@@ -760,7 +840,7 @@ impl Lower<'_, '_> {
             let var = if let Some(Partial::Scalar(var)) = existing {
                 var
             } else {
-                self.fb.declare_var(F64)
+                self.fb.declare_var(self.ty)
             };
             self.fb.def_var(var, v);
             self.derivatives[dst][col] = Some(Partial::Scalar(var));
@@ -785,7 +865,7 @@ impl Lower<'_, '_> {
         let test = self.truth(c);
         let x = self.get(a);
         let y = self.get(b);
-        let v = self.fb.ins().select(test, x, y);
+        let v = self.select(test, x, y);
         self.set(d, v);
         for i in 0..=self.n {
             let x = self.grad(a, i);
@@ -793,7 +873,7 @@ impl Lower<'_, '_> {
             if x.is_some() || y.is_some() {
                 let x = x.unwrap_or_else(|| self.num(0.));
                 let y = y.unwrap_or_else(|| self.num(0.));
-                let v = self.fb.ins().select(test, x, y);
+                let v = self.select(test, x, y);
                 self.set_grad(d, i, v);
             }
         }
@@ -925,6 +1005,11 @@ impl Lower<'_, '_> {
         let v = self.fb.ins().fmul(s, v);
         let old = self.load(field, index);
         let sum = self.fb.ins().fadd(old, v);
+        let sum = if let Some(mask) = self.stamp_mask {
+            self.select(mask, sum, old)
+        } else {
+            sum
+        };
         self.store(field, index, sum);
     }
     fn scaled(&mut self, g: V, slope: V, op: Math, right: bool) -> V {

@@ -7,6 +7,8 @@ mod history;
 mod jit;
 #[cfg(feature = "jit")]
 pub(crate) use jit::Cache;
+#[cfg(feature = "jit")]
+pub use jit::CircuitPair;
 mod optimize;
 use super::*;
 use crate::math::Math;

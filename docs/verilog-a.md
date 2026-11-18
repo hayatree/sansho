@@ -225,8 +225,8 @@ synthetic HDL paths in the engine use the built-in headers and their aliases.
 
 Each file is compiled once during elaboration, all its modules are cached, and compiled modules
 are shared across analysis circuits. Duplicate module names are errors. Bindings and retained
-interpreter variables belong to individual instances and analyses. Fixed chunks of two VA instances,
-dense private stamps and ordered gather preserve thread-count determinism.
+interpreter variables belong to individual instances and analyses. Fixed instance chunks, private stamps and ordered gather preserve thread-count
+determinism. Section 16 describes the current native chunk sizes.
 
 `.model name module parameter=value ...` selects a loaded module. Module and numeric parameter
 names at the SPICE boundary are case-insensitive; original VA source identifiers retain their
@@ -935,3 +935,145 @@ per-instance branch masks and exact scalar math on divergent or exceptional
 lanes. On the solver side, measure numeric storage reuse and guarded reuse of
 the pivot order against the existing faer factorization. Compare every vector
 when changing pivot decisions or floating-point operation order.
+
+## 16. Optimization round 3 — ring analysis
+
+### Numeric factorization and device evaluation
+
+The first real simplicial Newton factorization supplies the pivot order, L and U
+column indices and update order. Subsequent Newton iterations scatter the new CSC
+values into a reusable column workspace and follow that schedule. Pivot reuse
+requires a finite normal diagonal strictly larger in magnitude than each remaining
+candidate. A tie, a nonfinite update or upper-factor growth above 1e8 times the
+input maximum triggers fresh partial pivoting. Triangular solves preserve HEAD's
+multiply-by-reciprocal and update order. Small assembled arrays collect contributions
+in group and slot order, preserving the original sum for each destination.
+
+For native transients with at least 32 VA instances, the circuit adapter pairs
+equal specializations within one chunk, preferring nearby
+biases to reduce branch divergence. Each Cranelift `f64x2` lane carries an independent
+instance. Branch masks control stamps and charge guards. Blocks with no active lanes
+can be skipped. When both lanes reconverge the kernel resumes unmasked arithmetic.
+The kernel uses the existing scalar math functions per lane, including their original
+derivatives. Square root already lowered to a hardware instruction in HEAD.
+Local value numbering removes repeated identical math calls and tangent expressions.
+A failed guard discards both lanes and replays through the scalar path. Stateful
+models, sweep targets and ineligible analyses also retain scalar evaluation.
+
+On the benchmark host the Cranelift native ISA builder accepted a two-lane
+double-precision test function. The same test with `f64x4` returned an unsupported
+SSA type. Eagerly evaluating all branch bodies increased time on both rings.
+Aborting a pair at the first divergent branch also lost most of the available work.
+
+For startup, repeated primitive subcircuits with large local model cards reuse their
+substituted model parameters under the same overrides and lexical function scope.
+Each expansion still resolves the instance, terminal and model names in its own scope.
+
+### Reproduction
+
+Build both CLIs with the release profile, JIT feature and offline dependency cache.
+The commands below use a separately saved `9802c52` CLI. The profile driver also
+accepts an instrumented HEAD executable via `--baseline`. To measure factorization
+alone on HEAD, place the same monotonic timer around the numeric `factor` call in
+`newton` and emit the cumulative count and nanoseconds as `spx-factor`.
+The empty-kernel test evaluates an empty seven-unknown module 100,000 times per
+sample. The built-in ring profile uses the engine's 301-stage test generator.
+
+```sh
+cargo build --offline --release -p spx-cli --features jit
+python3 benches/run.py --binary target/release/spx --baseline /tmp/spx-head --runs 7
+python3 benches/run.py --devices --runs 7 --deck benches/psp_ring21.cir
+python3 benches/run.py --devices --runs 7 --deck benches/psp_ring21.cir --jobs default
+SPX_PROFILE_DEVICES=1 cargo test --offline --release -p spx-engine --test nonlinear profile_big_ring -- --ignored --nocapture
+cargo test --offline --release -p spx-va --features jit --test evaluator empty_kernel_overhead -- --ignored --nocapture
+python3 benches/compare.py /tmp/spx-head target/release/spx
+```
+
+### Release measurements
+
+Each entry is the median of seven interleaved HEAD/candidate pairs on the same host. The warm analysis and wall timers ran in separate processes with separate on-disk caches. Reference analysis and elapsed times come from the maintainer’s simultaneous ngspice 44.2 and HEAD measurements. Each estimated ratio multiplies the supplied HEAD/reference ratio by the local candidate/HEAD time for the same deck and worker setting. For default wall, the HEAD ratio is its supplied default wall divided by reference elapsed. Times are milliseconds.
+
+| PSP deck | Reference analysis / elapsed | Warm analysis, -j1 (HEAD → round 3) | Speedup | Analysis / ref | Warm wall, -j1 (HEAD → round 3) | Wall / ref | Warm wall, default (HEAD → round 3) | Wall / ref |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| psp_nmos_idvg | 4.7 / 105 | 1.98 → 1.30 | 1.52× | 0.26× | 49.2 → 47.3 | 0.42× | 47.1 → 51.1 | 0.46× |
+| psp_inverter_dc | 6.3 / 104 | 4.56 → 2.98 | 1.53× | 0.45× | 52.1 → 56.4 | 0.55× | 54.7 → 55.1 | 0.56× |
+| psp_inverter_tran | 8.5 / 107 | 6.00 → 4.25 | 1.41× | 0.51× | 56.6 → 57.1 | 0.57× | 53.7 → 57.2 | 0.55× |
+| psp_ring5 | 37.5 / 146 | 62.72 → 40.28 | 1.56× | 1.03× | 129.4 → 96.9 | 0.64× | 110.5 → 84.3 | 0.57× |
+| psp_ring21 | 121.6 / 271 | 215.10 → 160.46 | 1.34× | 1.48× | 337.9 → 250.0 | 0.98× | 277.3 → 169.7 | 0.59× |
+
+| PSP deck | Warm default analysis (HEAD → round 3) | Cold -j1 wall (HEAD → round 3) | Cold default wall (HEAD → round 3) |
+|---|---:|---:|---:|
+| psp_nmos_idvg | 1.98 → 1.25 | 327.1 → 314.5 | 310.4 → 319.1 |
+| psp_inverter_dc | 4.33 → 2.99 | 418.9 → 399.0 | 340.8 → 349.1 |
+| psp_inverter_tran | 6.01 → 4.25 | 473.5 → 460.2 | 400.9 → 396.8 |
+| psp_ring5 | 44.03 → 35.24 | 507.4 → 497.2 | 423.9 → 405.5 |
+| psp_ring21 | 134.90 → 86.23 | 738.6 → 907.3 | 599.0 → 768.8 |
+
+Warm wall meets the estimated reference on all five decks at both worker settings.
+Ring21 has about 2% margin on one worker. Single-worker analysis is still 1.03×
+the reference on ring5 and 1.48× on ring21. The reference ratios are estimates
+on a host with varying load.
+
+Only ring21 compiles the extra packed kernels in this benchmark. Its single-worker
+cold wall went from 739 to 907 ms. An all-ring pairing trial placed ring5's cold
+wall at 791 ms against 531 ms on its interleaved HEAD runs. With the 32-instance
+cutoff the same comparison was 497 against 507 ms. The corresponding warm
+single-worker wall ratios to HEAD were 0.82 and 0.75. Ring5's isolated analysis
+results varied. The final direct comparison favored packed kernels, 42.37 versus
+46.65 ms on one worker, while an earlier scalar-fallback comparison favored scalar,
+40.56 versus 42.45 ms. The cutoff favors the reproducible startup saving on small
+decks. On ring21, enabling packed kernels brought analysis from 176.96 to 166.93 ms
+on one worker in the seven-pair scalar-fallback comparison.
+
+### Newton and device profiles
+
+These are medians of seven warm interleaved single-worker runs. The HEAD executable
+used only for this table has the same factor timer as the candidate. The factor
+column reports time inside numeric factorization divided by the number of factors.
+LU includes both factorization and triangular solves. Both PSP rings use 917 factors
+in 1,224 assemblies. Accepted-point charge sampling accounts for the additional
+assemblies. The Newton iteration histogram is identical in both builds.
+
+| Circuit | Factors | Numeric factor, µs (HEAD → round 3) | Speedup | Total LU, ms (HEAD → round 3) |
+|---|---:|---:|---:|---:|
+| PSP ring5 | 917 | 19.68 → 5.91 | 3.33× | 18.96 → 6.37 |
+| PSP ring21 | 917 | 55.84 → 16.86 | 3.31× | 54.58 → 18.75 |
+| Built-in MOS1 big_ring(301) | 206 | 66.79 → 20.77 | 3.22× | 15.30 → 5.69 |
+
+On ring21 the native evaluator took 164.69 → 136.85 ms for 38,556 instance
+evaluations. The candidate handled 36,720 of those in 18,360 successful paired
+calls. Another 12,852 visits reused exact stamps. On ring5 the 9,180 scalar
+evaluations took 39.17 → 36.55 ms. Per-instance native time includes dispatch and
+output validation. The empty seven-unknown scalar evaluator took 168.8 → 127.0 ns per
+call in a separate seven-pair measurement, compared with 3.55 µs per PSP instance
+on ring21.
+
+### Parallel efficiency and remaining work
+
+Seven additional interleaved runs varied only the ring21 worker count. The device
+group timer covers the complete evaluation loop, including task scheduling and
+writing stamp slots. The native timer above measures aggregate individual kernel
+time. The group timer measures elapsed time even with concurrent calls.
+
+| Workers | Group evaluation, ms | Group speedup | LU factor + solve, ms | Analysis, ms |
+|---:|---:|---:|---:|---:|
+| 1 | 148.10 | 1.00× | 18.47 | 179.97 |
+| 2 | 87.90 | 1.68× | 18.18 | 116.16 |
+| 4 | 65.23 | 2.27× | 18.01 | 96.92 |
+| 8 (default) | 52.99 | 2.79× | 18.54 | 86.25 |
+
+The 42 PSP devices occupy six chunks, with two devices in the final chunk.
+At eight workers the evaluation loop reaches 35% of ideal eight-way speedup.
+It remains the largest measured component at the default worker count.
+LU is about 10% of single-worker analysis and 21% at default.
+
+The next device experiment is a conservative range check that can prove entire
+charge-only tangent chains finite, with scalar replay outside the proven range.
+The two PSP specializations have 618 and 809 zero-product checks before derivative
+liveness analysis. An exploratory build omitting the checks estimated an upper bound
+on the opportunity but could change exceptional-value semantics. Reducing the
+resulting generated code and spills is also worth measuring. For parallel runs,
+measure the balance between VA chunks and the scheduling cost across 1,224
+repeated device loops. All 11 full-vector comparisons against HEAD passed with
+cold and warm caches and one and default workers. The serialized cache artifacts
+also matched across worker counts.

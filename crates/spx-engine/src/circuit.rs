@@ -62,15 +62,26 @@ pub(crate) type Src = (u32, u32);
 /// Every destination is the sum of its sources, accumulated left to right starting from zero.
 /// The order is fixed at elaboration, so the floating-point result does not depend on how the
 /// destinations are distributed over threads (architecture D4).
-#[derive(Debug, Default)]
-pub(crate) struct Gather {
-    pub ptr: Vec<usize>,
-    pub src: Vec<Src>,
+#[derive(Debug)]
+pub(crate) enum Gather {
+    // Small systems fit in cache and are always assembled on one worker.
+    ByGroup(Vec<Vec<(usize, usize)>>),
+    ByDestination { ptr: Vec<usize>, src: Vec<Src> },
 }
 
 impl Gather {
     /// Build from `(group, slot, destination)` triples given in accumulation order.
     fn build(len: usize, entries: impl Iterator<Item = (usize, usize, usize)> + Clone) -> Self {
+        if len <= crate::solve::GATHER_CHUNK {
+            let mut groups = Vec::<Vec<_>>::new();
+            for (g, k, d) in entries {
+                if groups.len() <= g {
+                    groups.resize_with(g + 1, Vec::new);
+                }
+                groups[g].push((k, d));
+            }
+            return Self::ByGroup(groups);
+        }
         let mut ptr = vec![0usize; len + 1];
         for (_, _, d) in entries.clone() {
             ptr[d + 1] += 1;
@@ -84,18 +95,12 @@ impl Gather {
             src[fill[d]] = (g as u32, k as u32);
             fill[d] += 1;
         }
-        Self { ptr, src }
-    }
-
-    /// Sources of destination `i`.
-    #[inline]
-    pub fn of(&self, i: usize) -> &[Src] {
-        &self.src[self.ptr[i]..self.ptr[i + 1]]
+        Self::ByDestination { ptr, src }
     }
 }
 
 /// Gather maps for `G`, `C` (pattern values) and `f`, `q`, `b` (unknowns).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct GatherMaps {
     pub g: Gather,
     pub c: Gather,
@@ -109,8 +114,8 @@ const CHUNK_LINEAR: usize = 1024;
 /// Instances per chunk of a nonlinear device group.
 const CHUNK_NONLINEAR: usize = 64;
 /// Interpreted models have substantially more work per instance than built-in devices.
-const CHUNK_VA_SMALL: usize = 2;
-const CHUNK_VA_LARGE: usize = 6;
+const CHUNK_VA_SMALL: usize = 4;
+const CHUNK_VA_LARGE: usize = 8;
 const PARALLEL_MIN_VA: usize = 8;
 /// Minimum number of nonlinear instances for parallel evaluation.
 const PARALLEL_MIN_NONLINEAR: usize = 256;
@@ -491,10 +496,16 @@ pub(crate) fn compile_cached(
         .iter()
         .filter(|e| matches!(e.kind, ElementKind::Va { .. }))
         .count();
-    let va_chunk = if va_instances >= 32 {
-        CHUNK_VA_LARGE
+    let va_chunk = if cfg!(feature = "jit") && opts.va_jit && va_instances >= 8 {
+        if va_instances >= 32 {
+            CHUNK_VA_LARGE
+        } else {
+            CHUNK_VA_SMALL
+        }
+    } else if va_instances >= 32 {
+        6
     } else {
-        CHUNK_VA_SMALL
+        2
     };
     for e in &nl.elements {
         if let ElementKind::Va {
@@ -676,6 +687,15 @@ pub(crate) fn compile_cached(
             })
             .collect();
         diags.extend(results.into_iter().flatten());
+        // The small chunks rarely have a choice of same-binding partners.
+        // Their scalar kernels also avoid the second cold compilation.
+        if enabled && !dc_only && va_instances >= 32 {
+            va.values_mut()
+                .flat_map(|v| v.done.iter_mut().chain([&mut v.cur]))
+                .collect::<Vec<_>>()
+                .into_par_iter()
+                .for_each(|chunk| chunk.prepare_pairs(kelvin));
+        }
     }
     if !grounded {
         return Err(vec![

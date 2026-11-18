@@ -152,7 +152,8 @@ pub trait DeviceGroup: Send + Sync {
 
 1. Each group writes contributions into `Slots { g: [f64], c: [f64], f: [f64], q: [f64] }`. Slot
    positions within a group are fixed.
-2. `stamp_map` stores, in CSR-like form, "the ordered list of slots summed into matrix value k".
+2. The gather map records source slots in their original accumulation order. Arrays with up to
+   2,048 destinations use a per-group scatter table. Larger arrays use a CSR-style table per destination.
 3. The summation can be parallelized per matrix value k (each k is independent; its summation order
    is fixed).
 
@@ -160,9 +161,11 @@ Results are therefore bit-identical regardless of thread count or scheduling. Ex
 8 bytes × number of contributions.
 
 Elaboration fixes the chunk size at 1,024 for linear devices, 64 for built-in nonlinear devices
-and two for Verilog-A instances on circuits with fewer than 32 VA instances. Larger
-VA circuits use six instances per chunk. Each instance has reusable local inputs and an
-evaluator workspace. Its evaluator writes directly into the chunk's final stamp slots. Device evaluation uses Rayon when the circuit
+and two or six for interpreted VA devices, with the larger size at 32 instances. Native VA
+circuits use two below eight instances, four from eight to 31, and eight from 32 upwards. Each
+instance has reusable local inputs and an evaluator workspace. Scalar evaluation writes directly
+into the final stamp slots. Native transient circuits with at least 32 VA devices can pair equal
+specializations within a chunk. Their outputs are deinterleaved first. Device evaluation uses Rayon when the circuit
 has at least eight VA instances or 256 nonlinear instances. Every value of `G`, `C`, `f`, `q`
 and `b` is gathered in its original source order. The VA assembly test compares the bits of every
 time point and signal on one, two and five threads.
@@ -184,8 +187,8 @@ For a single native transient, the standalone run pool uses at most the larger
 of the device-group count and the number of gather chunks. An embedding that
 supplies a Rayon pool retains control of its workers. Section 13 of
 [the Verilog-A design](verilog-a.md#13-va-5b-native-evaluation) covers the ABI,
-backend selection and exceptional-value replay. Section 14 covers cache identity,
-publication, startup profiles and current measurements.
+backend selection and exceptional-value replay. Section 14 covers cache identity and
+publication. Section 16 describes two-lane native circuit evaluation and timing measurements.
 
 ---
 
@@ -270,8 +273,11 @@ pub trait LinearSolver<T> {
 | S2 | Parallelism across BTF blocks; level-scheduled parallel refactor | Techniques from NICSLU/CKTSO and Basker papers |
 | S3 | Iterative methods for large power grids (preconditioned GMRES/CG); GPU (cuDSS as an optional plugin) | Optional |
 
-`refactor` checks pivot stability and re-pivots when a pivot falls below a threshold. This choice is
-also made deterministically.
+Real Newton solves reuse the symbolic ordering and simplicial pivot sequence. After a pivoted
+factorization, the solver records the scatter offsets and ordered updates for each factor column.
+Each subsequent factorization checks the pivot against the remaining column entries and monitors
+upper-factor growth. Ties, tiny pivots or excessive growth trigger fresh pivoting. The general
+backend handles dense and supernodal patterns and complex solves.
 
 ---
 

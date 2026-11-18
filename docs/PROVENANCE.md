@@ -164,3 +164,17 @@ uses the existing Cranelift public IR and frontend APIs. The charge-history opti
 uses exact equality of the simulator inputs to a side-effect-free evaluation. The
 existing Newton update, voltage limiting and integration equations are preserved.
 The timing probes use Rust and Python monotonic clocks. This round adds no dependencies.
+
+### Verilog-A optimization round 3
+
+The Newton numeric refactorization, scatter schedule, pivot tests and triangular solves
+are original repository code. The algorithmic sources are J. R. Gilbert and T. Peierls,
+*Sparse Partial Pivoting in Time Proportional to Arithmetic Operations* (1988), and
+T. A. Davis, *Direct Methods for Sparse Linear Systems* (2006). Symbolic ordering and
+fresh partial pivoting use the existing faer dependency through its public Rust API.
+
+The two-instance evaluator uses standard SSA value numbering, postdominators and
+masked SIMD execution through Cranelift's public IR and host-ISA APIs. Scalar math
+uses the existing spx shims. Instance pairing, ordered stamp assembly, local model
+card reuse and the timing probes are original work. The IHP models served as test
+inputs. Dependency and licensing inventories are unchanged.

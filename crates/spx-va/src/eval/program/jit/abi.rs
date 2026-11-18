@@ -65,7 +65,7 @@ pub(super) struct Frame<'a> {
 impl<'a> Frame<'a> {
     pub fn new(
         input: &'a EvalInput<'_>,
-        b: &Bound,
+        tnom: f64,
         state: &'a mut StateIo<'_>,
         out: &'a mut EvalStamp<'_>,
         constants: &'a [f64],
@@ -90,7 +90,7 @@ impl<'a> Frame<'a> {
             queries: std::ptr::from_mut(queries).cast(),
             time: input.abstime,
             gmin: input.gmin,
-            tnom: b.sim.tnom,
+            tnom,
             initial: input.initial_step.into(),
             last: input.final_step.into(),
             limit: input.limit.into(),

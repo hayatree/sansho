@@ -79,8 +79,8 @@ impl Lower<'_, '_> {
             Abs => {
                 let pos = self.fb.ins().fcmp(FloatCC::GreaterThan, x, z);
                 let neg = self.fb.ins().fcmp(FloatCC::LessThan, x, z);
-                let sa = self.fb.ins().select(neg, minus, z);
-                let sa = self.fb.ins().select(pos, one, sa);
+                let sa = self.select(neg, minus, z);
+                let sa = self.select(pos, one, sa);
                 return (self.fb.ins().fabs(x), sa, z);
             }
             Exp => Row::Exp,

@@ -33,9 +33,21 @@ pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<
         diags: pre.diags,
         ..Parser::default()
     };
-    for line in &pre.lines {
+    let mut parsed_models = std::collections::HashMap::new();
+    for (index, line) in pre.lines.iter().enumerate() {
         let head = line.tokens[0].lower();
-        if head.starts_with('.') {
+        if head == ".model" {
+            let original = pre.model_sources.get(&index).copied().unwrap_or(index);
+            let before = p.models.len();
+            p.model_card(
+                line,
+                &pre.lines[original],
+                parsed_models.get(&original).copied(),
+            );
+            if index == original && p.models.len() > before {
+                parsed_models.insert(index, before);
+            }
+        } else if head.starts_with('.') {
             p.dot_card(&head, line);
         } else {
             p.element(&head, line);
@@ -778,7 +790,7 @@ impl Parser {
         self.diags.extend(errs);
     }
 
-    fn model_card(&mut self, line: &Line) {
+    fn model_card(&mut self, line: &Line, parameters: &Line, cached: Option<usize>) {
         let Some(t) = self.need(line, 3, ".model name type [(param=value ...)]") else {
             return;
         };
@@ -803,6 +815,17 @@ impl Parser {
             );
             return;
         }
+        if let Some(index) = cached {
+            let params = self.models[index].params.clone();
+            self.models.push(ModelCard {
+                name,
+                kind,
+                params,
+                span: line.span(),
+            });
+            return;
+        }
+        let t = &parameters.tokens;
         let mut params = Vec::new();
         let mut i = 3;
         while i < t.len() {
@@ -1052,7 +1075,7 @@ impl Parser {
                     }
                 }
             }
-            ".model" => self.model_card(line),
+
             ".meas" | ".measure" => match crate::meas::parse_meas(line) {
                 Ok(m) => self.measures.push(m),
                 Err(d) => self.diags.push(d),
@@ -1117,6 +1140,39 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_local_models_keep_their_scope_and_diagnostics() {
+        let fields = (0..24)
+            .map(|i| format!("p{i}={{gain(a)}}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let deck = format!(
+            "templates\n.func gain(x) {{x+1}}\n.subckt leaf pin params: a=0\n.model device d {fields}\nN1 pin device\n.ends\n.subckt wrapper pin\n.func gain(x) {{x+2}}\nxinner pin leaf a=3\n.ends\nx1 one leaf a=3\nx2 two leaf a=3\nx3 three wrapper\nx4 four leaf a=4\n.op\n.end"
+        );
+        let nl = parse(&deck).unwrap();
+        for (index, (name, value)) in [
+            ("x1.device", 4.),
+            ("x2.device", 4.),
+            ("x3.xinner.device", 5.),
+            ("x4.device", 5.),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let model = &nl.models[index];
+            assert_eq!(model.name, name);
+            assert_eq!(nl.elements[index].kind.model(), Some(name));
+            assert_eq!(model.params.len(), 24);
+            assert!(model.params.iter().all(|(_, v)| *v == value));
+        }
+        let broken = deck.replace("p12={gain(a)}", "p12=missing");
+        let errors = parse(&broken).unwrap_err();
+        assert_eq!(
+            errors.iter().filter(|d| d.code == "E-PARSE-NUMBER").count(),
+            4
+        );
+    }
 
     #[test]
     fn unknown_string_option_warns_and_parsing_continues() {

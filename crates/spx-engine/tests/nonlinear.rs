@@ -221,3 +221,10 @@ fn convergence_failure_names_culprits() {
     assert!(d.suggestions.iter().any(|s| s.action.contains("gminsteps")));
     assert!(d.info().is_some());
 }
+
+#[test]
+#[ignore = "single-worker LU profile with SPX_PROFILE_DEVICES=1"]
+fn profile_big_ring() {
+    let deck = parse(&big_ring(301)).unwrap();
+    run_with(&deck, &RunConfig { threads: 1 }).unwrap();
+}

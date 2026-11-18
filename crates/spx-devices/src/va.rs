@@ -28,6 +28,10 @@ pub struct VaGroup {
     disable_jit: bool,
     #[cfg(feature = "jit")]
     dc_only: bool,
+    #[cfg(feature = "jit")]
+    pairs: Vec<(Vec<usize>, spx_va::CircuitPair)>,
+    #[cfg(feature = "jit")]
+    pair_temp: u64,
     buffers: std::sync::Mutex<Buffers>,
     module: Option<Arc<CompiledModule>>,
     instances: Vec<Instance>,
@@ -36,12 +40,20 @@ pub struct VaGroup {
 #[derive(Debug, Default)]
 struct Buffers {
     #[cfg(feature = "jit")]
+    pending: Vec<usize>,
+    #[cfg(feature = "jit")]
+    packed_x: Vec<f64>,
+    #[cfg(feature = "jit")]
+    packed_output: spx_va::EvalOutput,
+    #[cfg(feature = "jit")]
     profile: DeviceProfile,
     instances: Vec<InstanceBuffer>,
 }
 
 #[derive(Debug, Default)]
 struct InstanceBuffer {
+    #[cfg(feature = "jit")]
+    paired: bool,
     scratch: Scratch,
     values: Vec<f64>,
     #[cfg(feature = "jit")]
@@ -51,8 +63,23 @@ struct InstanceBuffer {
 }
 
 #[cfg(feature = "jit")]
+impl InstanceBuffer {
+    fn same_bias(&self, nodes: &[Node], x: &[f64], key: (u64, u64)) -> bool {
+        self.previous == Some(key)
+            && self
+                .values
+                .iter()
+                .zip(nodes)
+                .all(|(v, &n)| v.to_bits() == volt(x, n).to_bits())
+    }
+}
+
+#[cfg(feature = "jit")]
 #[derive(Debug, Default)]
 struct DeviceProfile {
+    attempted_pairs: usize,
+    finished_pairs: usize,
+    pair_elapsed: std::time::Duration,
     native: usize,
     interpreted: usize,
     reused: usize,
@@ -64,6 +91,15 @@ impl Drop for DeviceProfile {
     fn drop(&mut self) {
         if self.native + self.interpreted + self.reused > 0 {
             use std::io::Write;
+            if self.attempted_pairs > 0 {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "spx-pair {} {} {}",
+                    self.attempted_pairs,
+                    self.finished_pairs,
+                    self.pair_elapsed.as_nanos()
+                );
+            }
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "spx-device {} {} {} {}",
@@ -102,8 +138,136 @@ impl VaGroup {
     #[cfg(feature = "jit")]
     pub fn specialize_stamps(&mut self, dc_only: bool) {
         self.dc_only = dc_only;
+        self.pairs.clear();
         for i in &mut self.instances {
             i.bound.specialize_stamp(&i.ports, dc_only);
+        }
+    }
+
+    /// Match equal specializations within this chunk without changing stamp order.
+    #[cfg(feature = "jit")]
+    pub fn prepare_pairs(&mut self, temperature: f64) {
+        self.pairs.clear();
+        self.pair_temp = temperature.to_bits();
+        if self.disable_jit || self.instances.len() < 2 {
+            return;
+        }
+        let Some(module) = self.module.as_ref() else {
+            return;
+        };
+        let mut keys = std::collections::HashMap::new();
+        let mut groups = Vec::<Vec<usize>>::new();
+        for (k, i) in self.instances.iter().enumerate() {
+            if i.swept || i.copies != 1. {
+                continue;
+            }
+            let key = i.bound.specialization_key(temperature, 1.);
+            let index = *keys.entry(key).or_insert_with(|| {
+                groups.push(Vec::new());
+                groups.len() - 1
+            });
+            groups[index].push(k);
+        }
+        for group in groups {
+            if group.len() > 1
+                && let Some(kernel) =
+                    module.prepare_circuit_pair(&self.instances[group[0]].bound, temperature)
+            {
+                self.pairs.push((group, kernel));
+            }
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn eval_pairs(&self, ctx: &EvalCtx, x: &[f64], buffers: &mut Buffers) {
+        let Buffers {
+            instances,
+            pending,
+            packed_x,
+            packed_output,
+            profile,
+        } = buffers;
+        for i in instances.iter_mut() {
+            i.paired = false;
+        }
+        let timed = spx_diag::profile_devices();
+        if !self.disable_jit && ctx.mode == Mode::Tran && ctx.temp.to_bits() == self.pair_temp {
+            for (group, kernel) in &self.pairs {
+                let key = (ctx.temp.to_bits(), ctx.gmin.to_bits());
+                pending.clear();
+                pending.extend(
+                    group
+                        .iter()
+                        .copied()
+                        .filter(|&id| !instances[id].same_bias(&self.instances[id].nodes, x, key)),
+                );
+                while let Some(a) = pending.pop() {
+                    if pending.is_empty() {
+                        break;
+                    }
+                    let distance = |id: usize| {
+                        self.instances[a]
+                            .nodes
+                            .iter()
+                            .zip(&self.instances[id].nodes)
+                            .map(|(&u, &v)| {
+                                let dx = volt(x, u) - volt(x, v);
+                                dx * dx
+                            })
+                            .sum::<f64>()
+                    };
+                    let near = if pending.len() == 1 {
+                        0
+                    } else {
+                        pending
+                            .iter()
+                            .enumerate()
+                            .map(|(k, &id)| (k, distance(id)))
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map_or(0, |v| v.0)
+                    };
+                    let b = pending.swap_remove(near);
+                    packed_x.clear();
+                    packed_x.extend(
+                        self.instances[a]
+                            .nodes
+                            .iter()
+                            .zip(&self.instances[b].nodes)
+                            .flat_map(|(&u, &v)| [volt(x, u), volt(x, v)]),
+                    );
+                    let start = timed.then(std::time::Instant::now);
+                    let ok = kernel.evaluate(packed_x, ctx.gmin, packed_output);
+                    if let Some(t) = start {
+                        profile.attempted_pairs += 1;
+                        profile.finished_pairs += usize::from(ok);
+                        let elapsed = t.elapsed();
+                        profile.pair_elapsed += elapsed;
+                        profile.elapsed += elapsed;
+                        if ok {
+                            profile.native += 2;
+                        }
+                    }
+                    if !ok {
+                        continue;
+                    }
+                    for (lane, id) in [a, b].into_iter().enumerate() {
+                        let buf = &mut instances[id];
+                        buf.paired = true;
+                        buf.previous = (!ctx.limit).then_some(key);
+                        buf.values.clear();
+                        buf.values.extend(packed_x.iter().skip(lane).step_by(2));
+                        for (dst, src) in [
+                            (&mut buf.cached.f, &packed_output.f),
+                            (&mut buf.cached.q, &packed_output.q),
+                            (&mut buf.cached.df, &packed_output.df),
+                            (&mut buf.cached.dq, &packed_output.dq),
+                        ] {
+                            dst.clear();
+                            dst.extend(src.iter().skip(lane).step_by(2));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -248,28 +412,31 @@ impl DeviceGroup for VaGroup {
             ));
             return;
         };
+        buffers
+            .instances
+            .resize_with(self.len(), InstanceBuffer::default);
+        #[cfg(feature = "jit")]
+        self.eval_pairs(ctx, x, &mut buffers);
         let Buffers {
             instances,
             #[cfg(feature = "jit")]
             profile,
+            ..
         } = &mut *buffers;
-        instances.resize_with(self.len(), InstanceBuffer::default);
         #[cfg(feature = "jit")]
         let timed = spx_diag::profile_devices();
         for (k, (i, buffer)) in self.instances.iter().zip(instances).enumerate() {
-            let InstanceBuffer {
-                values, scratch, ..
-            } = buffer;
             #[cfg(feature = "jit")]
             {
-                scratch.set_jit(!self.disable_jit);
+                if std::mem::take(&mut buffer.paired) {
+                    let r = &buffer.cached;
+                    out.core_dyn(&mut at, &r.f, &r.q, &r.df, &r.dq);
+                    continue;
+                }
+                buffer.scratch.set_jit(!self.disable_jit);
                 if !self.disable_jit
                     && ctx.mode == Mode::Tran
-                    && buffer.previous == Some((ctx.temp.to_bits(), ctx.gmin.to_bits()))
-                    && values
-                        .iter()
-                        .zip(&i.nodes)
-                        .all(|(v, &n)| v.to_bits() == volt(x, n).to_bits())
+                    && buffer.same_bias(&i.nodes, x, (ctx.temp.to_bits(), ctx.gmin.to_bits()))
                 {
                     if timed {
                         profile.reused += 1;
@@ -280,6 +447,9 @@ impl DeviceGroup for VaGroup {
                 }
                 buffer.previous = None;
             }
+            let InstanceBuffer {
+                values, scratch, ..
+            } = buffer;
             values.clear();
             values.extend(i.nodes.iter().map(|&n| volt(x, n)));
             let start = k * m.state_len();
@@ -394,6 +564,8 @@ impl DeviceGroup for VaGroup {
                 bound.specialize_stamp(&i.ports, self.dc_only);
                 i.copies = m.parallel_copies(&bound);
                 i.bound = bound;
+                #[cfg(feature = "jit")]
+                self.pairs.retain(|(members, _)| !members.contains(&index));
                 // A sweep changes the equations even at the same bias.
                 if let Some(buffer) = self
                     .buffers

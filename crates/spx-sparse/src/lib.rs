@@ -11,6 +11,8 @@
 
 mod faer_backend;
 mod pattern;
+mod refactor;
+pub use refactor::NewtonLu;
 
 pub use faer::c64;
 pub use faer_backend::FaerLu;
