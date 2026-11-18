@@ -1,5 +1,6 @@
 //! Analog tree interpreter and public evaluation API.
 //! Provenance: original implementation from Accellera LRM 2.4 and forward-mode AD literature.
+mod generated;
 pub(crate) mod program;
 mod topology;
 use crate::{
@@ -152,7 +153,7 @@ pub struct Scratch {
     disable_jit: bool,
     gradients: Gradients,
     drives: Vec<Drive>,
-    integrals: Vec<Option<Value>>,
+    operator_rows: Vec<Option<Value>>,
     frames: Vec<CallFrame>,
     calls: Vec<usize>,
 }
@@ -186,6 +187,7 @@ pub struct Bound {
     circuit: Option<CircuitStamp>,
     sim: BindOptions,
     layout: Layout,
+    generated: Arc<generated::Derivatives>,
     connected_ports: usize,
     values: Vec<Value>,
     given: Vec<bool>,
@@ -213,6 +215,7 @@ impl Bound {
             circuit: None,
             sim: self.sim,
             layout: self.layout.clone(),
+            generated: self.generated.clone(),
             connected_ports: self.connected_ports,
             values: self.values.clone(),
             given: self.given.clone(),
@@ -463,6 +466,7 @@ impl CompiledModule {
             circuit: None,
             connected_ports,
             layout: Layout::default(),
+            generated: Default::default(),
             sim,
             values: vec![],
             given: vec![],
@@ -495,7 +499,7 @@ impl CompiledModule {
                 let mut out = EvalStamp::default();
                 let mut runtime = Runtime {
                     drives: vec![],
-                    integrals: vec![],
+                    operator_rows: vec![],
                     module: self,
                     bound: &bound,
                     input: &input,
@@ -530,7 +534,7 @@ impl CompiledModule {
             let mut out = EvalStamp::default();
             let mut r = Runtime {
                 drives: vec![],
-                integrals: vec![],
+                operator_rows: vec![],
                 module: self,
                 bound: &bound,
                 input: &input,
@@ -584,6 +588,11 @@ impl CompiledModule {
         }
         if diagnostics.is_empty() {
             bound.layout = topology::layout(self, &bound, &input);
+            if !self.derivative_loops.is_empty() {
+                let d = generated::Derivatives::bind(self, &bound, &input).map_err(|d| vec![d])?;
+                bound.layout.append(d.extra);
+                bound.generated = Arc::new(d);
+            }
             Ok(bound)
         } else {
             Err(diagnostics)
@@ -711,7 +720,7 @@ impl CompiledModule {
         scratch.steps = 0;
         let mut r = Runtime {
             drives: std::mem::take(&mut scratch.drives),
-            integrals: std::mem::take(&mut scratch.integrals),
+            operator_rows: std::mem::take(&mut scratch.operator_rows),
             module: self,
             bound: b,
             input,
@@ -721,8 +730,9 @@ impl CompiledModule {
             n,
             depth: 0,
         };
-        r.integrals.clear();
-        r.integrals.resize(self.integrals.len(), None);
+        r.operator_rows.clear();
+        r.operator_rows
+            .resize(self.operator_rows.len() + b.generated.extra, None);
         if !r.scratch.initialized {
             for (i, v) in &self.variables {
                 r.init(*i, v);
@@ -737,9 +747,9 @@ impl CompiledModule {
             r.stmt(s);
         }
         r.scratch.initialized = r.out.error.is_none();
-        for (k, original) in self.integrals.clone().enumerate() {
+        for (k, original) in self.operator_nodes(b).enumerate() {
             let state = r.voltage(Some(original), None);
-            let equation = r.integrals[k].take().unwrap_or(state);
+            let equation = r.operator_rows[k].take().unwrap_or(state);
             r.stamp(b.layout.index(original), &equation, 1.);
         }
         for (k, branch) in self.branches.iter().enumerate() {
@@ -759,7 +769,7 @@ impl CompiledModule {
             }
         }
         r.scratch.drives = r.drives;
-        r.scratch.integrals = r.integrals;
+        r.scratch.operator_rows = r.operator_rows;
     }
 }
 #[derive(Default, Debug)]
@@ -776,7 +786,7 @@ struct CallFrame {
 
 struct Runtime<'a, 'b, 's> {
     drives: Vec<Drive>,
-    integrals: Vec<Option<Value>>,
+    operator_rows: Vec<Option<Value>>,
     module: &'a CompiledModule,
     bound: &'a Bound,
     input: &'a EvalInput<'a>,
@@ -931,7 +941,7 @@ impl Runtime<'_, '_, '_> {
         }
     }
     fn stmt(&mut self, s: &Stmt) {
-        // At a statement boundary only variables, branch drives and integral
+        // At a statement boundary only variables, branch drives and operator
         // equations can outlive the statement in this invocation.
         let g = &mut self.scratch.gradients;
         if g.needs_collection() {
@@ -941,7 +951,7 @@ impl Runtime<'_, '_, '_> {
                 .iter_mut()
                 .flat_map(|s| &mut s.values)
                 .chain(self.drives.iter_mut().filter_map(|d| d.sum.as_mut()))
-                .chain(self.integrals.iter_mut().flatten())
+                .chain(self.operator_rows.iter_mut().flatten())
             {
                 g.retain(&mut v.f);
                 g.retain(&mut v.q);
@@ -1166,11 +1176,35 @@ impl Runtime<'_, '_, '_> {
                 }
             }
             E::Unsupported(name, span) => self.unsupported(name, *span),
+            E::Derivative(None, operand, _) => Value {
+                f: Dual::constant(0.),
+                q: self.expr(operand).f,
+                text: None,
+            },
+            E::Derivative(Some(template), operand, span) => {
+                let slot = self.bound.generated.slot(*template, |i| {
+                    self.scratch.slots[i].values.first().map(|v| v.f.v)
+                });
+                let Some(k) = slot else {
+                    return self.unsupported("ddt outside its elaborated genvar range", *span);
+                };
+                if self.operator_rows[k].is_some() {
+                    return self.unsupported("repeated evaluation of one ddt operator", *span);
+                }
+                let state = self.voltage(Some(self.module.operator_node(k)), None);
+                let q = self.expr(operand).f;
+                self.operator_rows[k] = Some(Value {
+                    f: state.f,
+                    q: q.map(-q.v, -1., &mut self.scratch.gradients),
+                    text: None,
+                });
+                state
+            }
             E::Integral(k, integrand, ic, span) => {
-                if self.integrals[*k].is_some() {
+                if self.operator_rows[*k].is_some() {
                     return self.unsupported("repeated evaluation of one idt operator", *span);
                 }
-                let state = self.voltage(Some(self.module.integrals.start + k), None);
+                let state = self.voltage(Some(self.module.operator_rows.start + k), None);
                 let initial = self.input.analysis == Analysis::Dc
                     || (self.input.analysis == Analysis::Tran && self.input.abstime == 0.);
                 // In DC the explicit initial condition fixes the state. In the time domain
@@ -1181,7 +1215,7 @@ impl Runtime<'_, '_, '_> {
                     let u = self.expr(integrand);
                     u.f.map(-u.f.v, -1., &mut self.scratch.gradients)
                 };
-                self.integrals[*k] = Some(Value {
+                self.operator_rows[*k] = Some(Value {
                     f: residual,
                     q: state.f,
                     text: None,
@@ -1413,11 +1447,6 @@ impl Runtime<'_, '_, '_> {
         let x = a.first().map_or(0., |a| a.f.v);
         let y = a.get(1).map_or(0., |a| a.f.v);
         match name {
-            "ddt" => Value {
-                f: Dual::constant(0.),
-                q: a[0].f,
-                text: None,
-            },
             "$temperature" => Value::num(self.input.temperature),
             "$vt" => {
                 if a.is_empty() {

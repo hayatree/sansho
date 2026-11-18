@@ -1,5 +1,6 @@
 * SKY130 five-stage ring oscillator
 * Requires the open_pdks/volare SKY130 build under va-models/volare-sky130 (sky130A).
+* spx-verify: known-difference free-running phase drift (~80 fs at 3 ns) shifts the uV-scale NMOS body-node traces; main nodes pass and body nodes pass when driven by the reference waveforms (docs/bsim4.md)
 * Provenance: original SKY130 test circuit.
 .lib "../../va-models/volare-sky130/sky130A/libs.tech/ngspice/sky130.lib.spice" tt
 .subckt inv in out vdd

@@ -104,6 +104,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Unsupported Verilog-A construct.** The source uses a language construct outside the analog compiler subset.
 
 - Check the source at the reported position and docs/verilog-a.md.
+- Use `ddt` in analog statements. For repeated stateful calls, use an analog-for loop with a genvar so each iteration has its own state.
 
 ## E-VA-PREPROC
 
@@ -355,7 +356,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## E-SOLVE-SINGULAR
 
-**Singular matrix.** The circuit matrix cannot be factored: the circuit equations do not determine every unknown.
+**Singular matrix.** The solver encountered a singular Jacobian. A nonlinear operating-point solve tries the enabled continuation methods because the matrix can lose rank at a trial bias.
 
 - Look for floating nodes, loops of voltage sources or inductors, and cut sets of current sources.
 - Add `.options rshunt=1e12` to tie every node weakly to ground.

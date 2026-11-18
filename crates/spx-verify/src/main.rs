@@ -7,7 +7,7 @@
 //! ```
 //!
 //! The reference command is invoked as `<cmd> -b <deck> -r <raw>` and must write an ASCII raw
-//! file. Exit code 0 when every deck passes, 1 otherwise, 2 on usage or I/O errors.
+//! file. Exit code 1 for a failed deck, 2 for a usage or setup error, and 0 otherwise.
 //!
 //! Provenance: original work. See `docs/PROVENANCE.md`.
 
@@ -60,6 +60,8 @@ struct Entry {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     missing: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    known_difference: Option<String>,
     #[serde(flatten)]
     report: DeckReport,
 }
@@ -72,7 +74,16 @@ fn fail(msg: String) -> DeckReport {
     }
 }
 
-fn verify(deck: &Path, cli: &Cli) -> Result<DeckReport, Problem> {
+fn known_difference(text: &str) -> Option<&str> {
+    text.lines().find_map(|line| {
+        let directive = line.trim_start().strip_prefix('*')?.trim_start();
+        let reason = directive.strip_prefix("spx-verify: known-difference")?;
+        (reason.starts_with(char::is_whitespace) && !reason.trim().is_empty())
+            .then(|| reason.trim())
+    })
+}
+
+fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>), Problem> {
     let deck = deck.canonicalize()?;
     let text = std::fs::read_to_string(&deck)?;
     let nl = reference::parse(&deck, &text)?;
@@ -125,7 +136,7 @@ fn verify(deck: &Path, cli: &Cli) -> Result<DeckReport, Problem> {
         let r = reference_measures(&prepared, &stem, &nl, cli)?;
         compare_measures(&r, &ours, &tol, &mut report);
     }
-    Ok(report)
+    Ok((report, known_difference(&text).map(str::to_owned)))
 }
 
 fn read_reference(path: &Path) -> Result<spx_output::SimResults, Problem> {
@@ -233,9 +244,9 @@ fn main() -> ExitCode {
     }
     let mut entries = Vec::new();
     for d in &decks {
-        let (report, missing) = match verify(d, &cli) {
-            Ok(r) => (r, None),
-            Err(Problem::Failed(e)) => (fail(e), None),
+        let (report, missing, known_difference) = match verify(d, &cli) {
+            Ok((r, reason)) => (r, None, reason),
+            Err(Problem::Failed(e)) => (fail(e), None, None),
             Err(Problem::Missing(path)) => (
                 DeckReport {
                     vars: vec![],
@@ -243,6 +254,7 @@ fn main() -> ExitCode {
                     problems: vec![],
                 },
                 Some(path),
+                None,
             ),
         };
         let pass = missing.is_none() && report.pass();
@@ -251,26 +263,39 @@ fn main() -> ExitCode {
             pass,
             status: if missing.is_some() {
                 "SKIP"
+            } else if known_difference.is_some() && report.problems.is_empty() {
+                "KNOWN"
             } else if pass {
                 "PASS"
             } else {
                 "FAIL"
             },
             missing,
+            known_difference,
             report,
         });
     }
-    let all = entries.iter().all(|e| e.pass || e.missing.is_some());
+    // Keep the JSON array and its entry schema compatible. Group annotated
+    // comparisons at the end in both report formats, preserving deck order.
+    entries.sort_by_key(|e| e.status == "KNOWN");
+    let all = entries.iter().all(|e| e.status != "FAIL");
     if cli.json {
         match serde_json::to_string_pretty(&entries) {
             Ok(s) => println!("{s}"),
             Err(_) => return ExitCode::from(2),
         }
     } else {
-        for e in &entries {
+        let known_start = entries.iter().position(|e| e.status == "KNOWN");
+        for (index, e) in entries.iter().enumerate() {
+            if Some(index) == known_start {
+                println!("Known differences");
+            }
             println!("{} {}", e.status, e.deck);
             if let Some(path) = &e.missing {
                 println!("    missing input: {path}");
+            }
+            if let Some(reason) = &e.known_difference {
+                println!("    known difference: {reason}");
             }
             for p in &e.report.problems {
                 println!("    problem: {p}");
@@ -305,11 +330,12 @@ fn main() -> ExitCode {
                 );
             }
         }
-        let passed = entries.iter().filter(|e| e.pass).count();
+        let passed = entries.iter().filter(|e| e.status == "PASS").count();
         let skipped = entries.iter().filter(|e| e.missing.is_some()).count();
+        let known = entries.iter().filter(|e| e.status == "KNOWN").count();
         println!(
-            "{passed}/{} decks passed, {skipped} skipped",
-            entries.len() - skipped
+            "{passed}/{} decks passed, {known} known, {skipped} skipped",
+            entries.len() - skipped - known
         );
     }
     if all {

@@ -89,12 +89,9 @@ fn solve_op_chain(
         }
         Err(e) => e,
     };
-    if ckt.linear
-        || matches!(
-            first,
-            crate::solve::NewtonError::Singular | crate::solve::NewtonError::Device(_)
-        )
-    {
+    // A nonlinear Jacobian can lose rank at a trial bias. Continuation
+    // can still reach a regular operating point from the saved initial guess.
+    if ckt.linear || matches!(first, crate::solve::NewtonError::Device(_)) {
         return Err(newton_diagnostic(ckt, &first, code, analysis).with_attempts(["newton"]));
     }
     let mut attempts = vec!["newton"];
@@ -671,7 +668,7 @@ pub(crate) fn tran(
         .enumerate()
         .flat_map(|(group, layout)| layout.lte_q.iter().map(move |&slot| (group, slot)))
         .collect();
-    let tracks_device_charges = !local_slots.is_empty();
+    let tracks_device_charges = ckt.layouts.iter().any(|l| l.has_independent_charges);
     let mut buffer = Vec::new();
     let charges = charge_sample(&ws, &local_slots, &mut buffer);
     hist.push(0.0, charges);

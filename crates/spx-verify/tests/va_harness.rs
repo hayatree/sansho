@@ -105,6 +105,17 @@ fi
     );
     fs::write(&docker, "#!/bin/sh\nexit 17\n").unwrap();
     assert!(run(true).contains("PASS"));
+    let annotated = fs::read_to_string(&deck).unwrap().replace(
+        "bias\n",
+        "bias\n* spx-verify: known-difference independent reference gain\n",
+    );
+    fs::write(&deck, annotated.replace(".dc V1 0 1 1", ".dc V1 0 2 2")).unwrap();
+    let log = run(true);
+    assert!(
+        log.contains("KNOWN")
+            && log.contains("1 known")
+            && log.contains("independent reference gain")
+    );
     fs::remove_file(lib.join("body.inc")).unwrap();
     let log = run(false);
     assert!(log.contains("SKIP") && log.contains("body.inc"));

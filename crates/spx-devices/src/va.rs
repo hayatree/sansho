@@ -90,6 +90,7 @@ struct DeviceProfile {
     pair_elapsed: std::time::Duration,
     native: usize,
     interpreted: usize,
+    interpreted_elapsed: std::time::Duration,
     reused: usize,
     elapsed: std::time::Duration,
 }
@@ -106,6 +107,13 @@ impl Drop for DeviceProfile {
                     self.attempted_pairs,
                     self.finished_pairs,
                     self.pair_elapsed.as_nanos()
+                );
+            }
+            if self.interpreted > 0 {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "spx-interpreted-ns {}",
+                    self.interpreted_elapsed.as_nanos()
                 );
             }
             let _ = writeln!(
@@ -448,10 +456,19 @@ impl DeviceGroup for VaGroup {
                 .map(|&k| {
                     if k < ports.len() {
                         ports[k]
+                    } else if k >= m.unknown_len() {
+                        Some(u.alloc_operator_state(
+                            &i.name,
+                            &format!("#gen_ddt{}", k - m.unknown_len()),
+                        ))
                     } else if let Some(name) = m.ports.get(k) {
                         Some(u.alloc_internal_node(&i.name, name))
                     } else if let Some(name) = m.internal_nodes.get(k - m.ports.len()) {
-                        Some(u.alloc_internal_node(&i.name, name))
+                        Some(if m.is_operator_state(k) {
+                            u.alloc_operator_state(&i.name, name)
+                        } else {
+                            u.alloc_internal_node(&i.name, name)
+                        })
                     } else {
                         Some(u.alloc_branch(&format!(
                             "{}#{}",
@@ -464,6 +481,13 @@ impl DeviceGroup for VaGroup {
         }
     }
     fn setup(&mut self, b: &mut StampBuilder<'_>) -> Result<(), Diagnostic> {
+        if self
+            .module
+            .as_ref()
+            .is_some_and(|m| m.has_derivative_states)
+        {
+            b.independent_charges();
+        }
         for i in &self.instances {
             b.core(&i.nodes);
         }
@@ -505,6 +529,9 @@ impl DeviceGroup for VaGroup {
             Ok(mut bound) if i.swept || bound.layout() == i.bound.layout() => {
                 if i.swept {
                     bound.retain_sweep_layout();
+                    if bound.layout() != i.bound.layout() {
+                        return false;
+                    }
                 }
                 #[cfg(feature = "jit")]
                 bound.specialize_stamp(&i.ports, self.dc_only);
@@ -641,6 +668,7 @@ impl VaGroup {
                     profile.elapsed += elapsed;
                 } else {
                     profile.interpreted += 1;
+                    profile.interpreted_elapsed += elapsed;
                 }
             }
             if let Some(d) = result.diagnostic.take() {

@@ -278,11 +278,62 @@ fn initialization_and_runtime_errors() {
     }
 }
 #[test]
+fn derivative_states_and_product_jacobian() {
+    let m = compile(
+        "module m(p); electrical p; real u; analog begin u=ddt(V(p)*V(p)); I(p)<+V(p)*u+sin(ddt(V(p))); end endmodule",
+    );
+    let b = m.bind(&[]).unwrap();
+    let x = [2., 3., 0.25];
+    let out = run(&m, &b, &x);
+    close(out.f[0], 6. + 0.25_f64.sin());
+    assert_eq!(&out.f[1..], &[3., 0.25]);
+    assert_eq!(out.q, [0., -4., -2.]);
+    // The first partial is c' * qdot. Eliminating the two unit-diagonal
+    // operator rows adds alpha * (2*p*p + cos(qdot2)).
+    assert_eq!(out.df[0], 3.);
+    assert_eq!(out.df[1], 2.);
+    close(out.df[2], 0.25_f64.cos());
+    assert_eq!(out.dq[3], -4.);
+    assert_eq!(out.dq[6], -1.);
+    finite_difference(&m, &b, &x);
+
+    let m = compile("module m(p); electrical p; analog I(p)<+ddt(ddt(V(p))); endmodule");
+    let b = m.bind(&[]).unwrap();
+    let out = run(&m, &b, &[2., 3.]);
+    assert_eq!(out.f, [0., 3.]);
+    assert_eq!(out.q, [3., -2.]);
+}
+
+#[test]
+fn genvar_derivatives_have_binding_specific_rows() {
+    let m = compile(
+        "module m(p); electrical p; parameter integer n=2; genvar i,j;
+        analog for(i=1;i<=n;i=i+1) for(j=0;j<i;j=j+1)
+            I(p)<+V(p)*ddt((i+j)*V(p)); endmodule",
+    );
+    for n in [0, 2, 3] {
+        let b = m.bind(&[("n".into(), n as f64)]).unwrap();
+        let weights: Vec<_> = (1..=n)
+            .flat_map(|i| (0..i).map(move |j| f64::from(i + j)))
+            .collect();
+        let mut x = vec![2.; 1 + weights.len().max(1)];
+        for (i, state) in x[1..].iter_mut().enumerate() {
+            *state = i as f64 + 1.;
+        }
+        for _ in 0..2 {
+            let out = run(&m, &b, &x);
+            assert_eq!(out.f[0], 2. * x[1..1 + weights.len()].iter().sum::<f64>());
+            for (i, gain) in weights.iter().enumerate() {
+                assert_eq!(out.q[i + 1], -2. * gain);
+            }
+        }
+    }
+}
+
+#[test]
 fn unsupported_has_spans() {
     for text in [
-        "module m(p); electrical p; analog I(p)<+V(p)*ddt(V(p)); endmodule",
-        "module m(p); electrical p; analog I(p)<+sin(ddt(V(p))); endmodule",
-        "module m(p); electrical p; analog I(p)<+ddt(ddt(V(p))); endmodule",
+        "module m(p); electrical p; analog function real bad; input x; real x; begin bad=ddt(x); end endfunction endmodule",
         "module m(p); electrical p; analog V(<p>)<+0; endmodule",
         "module m(p); electrical p; analog I(p)<+ddx(V(p),V(p,0)); endmodule",
         "module m(p); electrical p; analog @(cross(V(p))) ; endmodule",

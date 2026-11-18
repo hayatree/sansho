@@ -57,6 +57,7 @@ pub(crate) enum E {
     Voltage(Option<usize>, Option<usize>),
     Current(usize),
     Call(String, Vec<Expr>),
+    Derivative(Option<usize>, Box<Expr>, spx_diag::Span),
     Integral(usize, Box<Expr>, Box<Expr>, spx_diag::Span),
     Unsupported(String, spx_diag::Span),
     Function(usize, Vec<Expr>),
@@ -92,6 +93,15 @@ pub(crate) enum Stmt {
     Task(String, Vec<Expr>),
     Empty,
 }
+#[cfg_attr(feature = "jit", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone)]
+pub(crate) struct GenLoop {
+    pub var: usize,
+    pub initial: Expr,
+    pub condition: Expr,
+    pub next: Expr,
+}
+
 #[cfg_attr(feature = "jit", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub(crate) struct Branch {
@@ -175,7 +185,10 @@ CompiledModule, CompiledModuleImage, "CompiledModule" {
     pub(crate) slots: usize,
     pub(crate) function_writes: std::collections::BTreeSet<usize>,
     pub(crate) states: usize,
-    pub(crate) integrals: std::ops::Range<usize>,
+    /// Whether any derivative is evaluated through its own DAE row.
+    pub has_derivative_states: bool,
+    pub(crate) derivative_loops: std::collections::BTreeMap<usize, Vec<GenLoop>>,
+    pub(crate) operator_rows: std::ops::Range<usize>,
     #[cfg_attr(feature = "jit", serde(skip))]
     pub(crate) identity: std::sync::Arc<()>,
     pub(crate) implicit_m: bool,
@@ -201,6 +214,11 @@ impl CompiledModule {
     pub fn unknown_len(&self) -> usize {
         self.ports.len() + self.internal_nodes.len() + self.branch_unknowns.len()
     }
+    /// Whether this module row holds an analog operator state.
+    pub fn is_operator_state(&self, original: usize) -> bool {
+        self.operator_rows.contains(&original)
+    }
+
     /// Number of per-instance limiting history slots.
     pub fn state_len(&self) -> usize {
         self.states

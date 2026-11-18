@@ -1198,10 +1198,10 @@ pub(crate) fn compile_cached(
         q: Gather::build(n, rows_to(|l| &l.q).into_iter()),
         b: Gather::build(n, rows_to(|l| &l.b).into_iter()),
     };
-    // Diagonal of every node voltage, including internal device nodes.
+    // Shunts connect physical electrical nodes, including internal device terminals.
     let node_diag = (0..n)
         .map(|i| {
-            if unknowns.kinds()[i] == spx_devices::UnknownKind::Voltage {
+            if unknowns.is_physical_node(i) {
                 pattern.diag(i).unwrap_or(DISCARD)
             } else {
                 DISCARD

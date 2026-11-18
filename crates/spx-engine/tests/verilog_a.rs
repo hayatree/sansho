@@ -17,6 +17,10 @@ impl SourceLoader for Models {
                 r#"module init(p,n); electrical p,n; real r;
                 analog begin @(initial_step) r=1000; I(p,n)<+V(p,n)/r; end endmodule"#
             }
+            "rates.va" => {
+                r#"module rates(p,u,w); electrical p,u,w; real rate;
+                analog begin rate=ddt(V(u)); V(p)<+(1+V(w))*rate+sin(ddt(V(w))); end endmodule"#
+            }
             "bad.va" => {
                 r#"module bad(p,n); electrical p,n; analog $error("authored failure"); endmodule"#
             }
@@ -429,6 +433,39 @@ fn mixed_instance_layouts_and_external_port_shorts() {
 }
 
 #[test]
+fn derivative_expressions_in_dc_ac_and_transient() {
+    let text = "independent derivatives
+.hdl rates.va
+.model rates_model rates
+Vu u 0 dc 2 ac 1 pwl(0 2 0.1 2 0.9 2.4)
+Vw w 0 dc 1 ac 0.5 pwl(0 1 0.1 1 0.9 1.2)
+N1 p u w rates_model
+Rp p 0 1k
+.op
+.ac lin 1 10 10
+.tran 0.01 0.8
+";
+    for method in ["trap", "gear"] {
+        let results = simulate(&format!("{text}.options method={method} rshunt=10\n"));
+        close(results.analyses[0].real("v(p)").unwrap()[0], 0., 0., 1e-12);
+        let ac = results.analyses[1].complex("v(p)").unwrap()[0];
+        close(ac.0, 0., 0., 1e-12);
+        close(ac.1, 2.5 * std::f64::consts::TAU * 10., 1e-12, 0.);
+        let tran = &results.analyses[2];
+        for (&t, &v) in tran.scale_values.iter().zip(tran.real("v(p)").unwrap()) {
+            if t > 0.2 {
+                close(
+                    v,
+                    (2. + 0.25 * (t - 0.1)) * 0.5 + 0.25_f64.sin(),
+                    1e-9,
+                    1e-12,
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn integral_has_an_initial_condition_and_a_dynamic_state_equation() {
     struct Loader;
     impl SourceLoader for Loader {
@@ -565,10 +602,31 @@ fn ihp_jit_and_interpreter_match_every_vector() {
             return;
         }
     }
+    compare_va_vectors(&root, false);
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn cmg_jit_and_interpreter_match_every_vector() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    if root.join("va-models/bsimcmg/bsimcmg.va").is_file() {
+        compare_va_vectors(&root, true);
+    } else {
+        eprintln!("skipping missing BSIM-CMG model");
+    }
+}
+
+#[cfg(feature = "jit")]
+fn compare_va_vectors(root: &std::path::Path, cmg: bool) {
     let bits = |xs: &[f64]| xs.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
     for file in root.join("verify/va-decks").read_dir().unwrap() {
         let path = file.unwrap().path();
-        if path.extension().is_none_or(|e| e != "cir") {
+        if path.extension().is_none_or(|e| e != "cir")
+            || path
+                .file_name()
+                .is_some_and(|s| s.to_string_lossy().starts_with("cmg_"))
+                != cmg
+        {
             continue;
         }
         let mut nl = spx_netlist::parse_file(&path).unwrap();

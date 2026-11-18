@@ -9,6 +9,13 @@ pub struct Layout {
     representatives: Vec<usize>,
 }
 impl Layout {
+    pub(super) fn append(&mut self, count: usize) {
+        for _ in 0..count {
+            self.representatives.push(self.map.len());
+            self.map.push(Some(self.representatives.len() - 1));
+        }
+    }
+
     pub(super) fn retain_all(&mut self) {
         self.representatives = (0..self.map.len()).collect();
         self.map = self.representatives.iter().copied().map(Some).collect();
@@ -64,7 +71,7 @@ pub(super) fn layout(m: &CompiledModule, b: &Bound, input: &EvalInput<'_>) -> La
             n: 0,
             depth: 0,
             drives: vec![],
-            integrals: vec![],
+            operator_rows: vec![],
         };
         let mut pass = Propagation {
             runtime,

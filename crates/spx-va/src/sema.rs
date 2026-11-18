@@ -34,7 +34,10 @@ struct Lower {
     definitions: Vec<ast::AnalogFunction>,
     slots: usize,
     states: usize,
-    integral_count: usize,
+    operator_kinds: Vec<&'static str>,
+    genvars: BTreeSet<usize>,
+    gen_loops: Vec<GenLoop>,
+    derivative_loops: BTreeMap<usize, Vec<GenLoop>>,
     in_function: bool,
     arrays: BTreeSet<usize>,
     depth: usize,
@@ -111,7 +114,10 @@ fn lower(m: &ast::Module, potentials: BTreeSet<String>) -> R<CompiledModule> {
         definitions: vec![],
         slots: 0,
         states: 0,
-        integral_count: 0,
+        operator_kinds: Vec::new(),
+        genvars: BTreeSet::new(),
+        gen_loops: Vec::new(),
+        derivative_loops: BTreeMap::new(),
         in_function: false,
         arrays: BTreeSet::new(),
         depth: 0,
@@ -345,8 +351,14 @@ fn lower(m: &ast::Module, potentials: BTreeSet<String>) -> R<CompiledModule> {
             body.push(l.stmt(s)?);
         }
     }
-    let first_integral = ports.len() + internal_nodes.len();
-    internal_nodes.extend((0..l.integral_count).map(|i| format!("#idt{i}")));
+    let first_operator = ports.len() + internal_nodes.len();
+    let has_derivative_states = l.operator_kinds.contains(&"ddt");
+    internal_nodes.extend(
+        l.operator_kinds
+            .iter()
+            .enumerate()
+            .map(|(i, kind)| format!("#{kind}{i}")),
+    );
     let n = ports.len() + internal_nodes.len();
     let mut branch_unknowns = vec![];
     for (i, b) in l.branches.iter_mut().enumerate() {
@@ -403,7 +415,9 @@ fn lower(m: &ast::Module, potentials: BTreeSet<String>) -> R<CompiledModule> {
         slots: l.slots,
         function_writes: l.function_writes,
         states: l.states,
-        integrals: first_integral..n,
+        has_derivative_states,
+        derivative_loops: l.derivative_loops,
+        operator_rows: first_operator..n,
         identity: std::sync::Arc::new(()),
         implicit_m,
     })
@@ -430,6 +444,9 @@ impl Lower {
         let i = self.slots;
         self.slots += 1;
         let ty = Ty::parse(&v.ty);
+        if v.ty == "genvar" {
+            self.genvars.insert(i);
+        }
         let dimensions = v
             .dimensions
             .iter()
@@ -444,13 +461,14 @@ impl Lower {
         if dimensions.iter().any(|(a, b)| !a.parameter || !b.parameter) {
             return Err(error(v.span, "array bounds must be parameter-only"));
         }
+        let previous_rows = self.operator_kinds.len();
         let init = v.value.as_ref().map(|e| self.expr(e)).transpose()?;
         if let Some(e) = &init {
             check_conversion(ty, e.ty, v.span)?;
-            if e.reactive {
+            if e.reactive || self.operator_kinds[previous_rows..].contains(&"ddt") {
                 return Err(unsupported(
                     v.span,
-                    "ddt is only supported directly in contributions",
+                    "ddt requires an analog statement and cannot initialize static storage",
                 ));
             }
         }
@@ -710,14 +728,34 @@ impl Lower {
         Ok(v)
     }
     fn plain(&mut self, e: &ast::Expr) -> R<Expr> {
-        let v = self.expr(e)?;
-        if v.reactive {
-            return Err(unsupported(
-                e.span,
-                "ddt is only supported linearly in contributions",
-            ));
-        }
+        let mut v = self.expr(e)?;
+        self.materialize_derivatives(&mut v);
         Ok(v)
+    }
+
+    // In a scalar context each derivative needs its own DAE row. Linear
+    // charge arithmetic can still use the original two-channel fast path.
+    fn materialize_derivatives(&mut self, expr: &mut Expr) {
+        if !expr.reactive {
+            return;
+        }
+        match &mut expr.kind {
+            E::Derivative(row, ..) => {
+                let slot = self.operator_kinds.len();
+                if !self.gen_loops.is_empty() {
+                    self.derivative_loops.insert(slot, self.gen_loops.clone());
+                }
+                *row = Some(slot);
+                self.operator_kinds.push("ddt");
+            }
+            E::Unary(_, a) => self.materialize_derivatives(a),
+            E::Binary(_, a, b) => {
+                self.materialize_derivatives(a);
+                self.materialize_derivatives(b);
+            }
+            _ => {}
+        }
+        expr.reactive = false;
     }
     fn condition(&mut self, e: &ast::Expr) -> R<Expr> {
         let v = self.plain(e)?;
@@ -826,12 +864,35 @@ impl Lower {
                 condition,
                 step,
                 body,
-            } => Stmt::For(
-                Box::new(self.stmt(init)?),
-                self.condition(condition)?,
-                Box::new(self.stmt(step)?),
-                Box::new(self.stmt(body)?),
-            ),
+            } => {
+                let init = self.stmt(init)?;
+                let cond = self.condition(condition)?;
+                let step = self.stmt(step)?;
+                let scope = if let (Stmt::Assign(a, initial), Stmt::Assign(b, next)) =
+                    (&init, &step)
+                    && let (E::Var(i), E::Var(j)) = (&a.kind, &b.kind)
+                    && i == j
+                    && self.genvars.contains(i)
+                {
+                    Some(GenLoop {
+                        var: *i,
+                        initial: initial.clone(),
+                        condition: cond.clone(),
+                        next: next.clone(),
+                    })
+                } else {
+                    None
+                };
+                let generated = scope.is_some();
+                if let Some(scope) = scope {
+                    self.gen_loops.push(scope);
+                }
+                let body = self.stmt(body)?;
+                if generated {
+                    self.gen_loops.pop();
+                }
+                Stmt::For(Box::new(init), cond, Box::new(step), Box::new(body))
+            }
             S::While { condition, body } => {
                 Stmt::While(self.condition(condition)?, Box::new(self.stmt(body)?))
             }
@@ -962,7 +1023,7 @@ impl Lower {
                 E::Index(i, Box::new(b))
             }
             A::Unary { op, expr } => {
-                let a = self.expr(expr)?;
+                let mut a = self.expr(expr)?;
                 if a.ty == Ty::String {
                     return Err(error(e.span, "numeric unary operand required"));
                 }
@@ -970,7 +1031,7 @@ impl Lower {
                     return Err(error(e.span, "bitwise operands must be integers"));
                 }
                 if a.reactive && !matches!(op.as_str(), "+" | "-") {
-                    return Err(unsupported(e.span, "nonlinear ddt expression"));
+                    self.materialize_derivatives(&mut a);
                 }
                 ty = if op == "+" || op == "-" {
                     a.ty
@@ -982,8 +1043,8 @@ impl Lower {
                 E::Unary(op.clone(), Box::new(a))
             }
             A::Binary { op, left, right } => {
-                let a = self.expr(left)?;
-                let b = self.expr(right)?;
+                let mut a = self.expr(left)?;
+                let mut b = self.expr(right)?;
                 let cmp = matches!(
                     op.as_str(),
                     "==" | "!=" | "===" | "!==" | "<" | ">" | "<=" | ">="
@@ -1009,10 +1070,8 @@ impl Lower {
                         _ => false,
                     };
                     if !valid {
-                        return Err(unsupported(
-                            e.span,
-                            "ddt must be linear with parameter-only scaling",
-                        ));
+                        self.materialize_derivatives(&mut a);
+                        self.materialize_derivatives(&mut b);
                     }
                 }
                 ty = if cmp
@@ -1035,12 +1094,9 @@ impl Lower {
             }
             A::Ternary { condition, yes, no } => {
                 let c = self.condition(condition)?;
-                let a = self.expr(yes)?;
-                let b = self.expr(no)?;
+                let a = self.plain(yes)?;
+                let b = self.plain(no)?;
                 check_conversion(a.ty, b.ty, e.span)?;
-                if a.reactive || b.reactive {
-                    return Err(unsupported(e.span, "ddt inside ternary is unsupported"));
-                }
                 ty = if a.ty == b.ty { a.ty } else { Ty::Real };
                 parameter = c.parameter && a.parameter && b.parameter;
                 E::Select(Box::new(c), Box::new(a), Box::new(b))
@@ -1279,12 +1335,20 @@ impl Lower {
                         && !n.contains("noise");
                     reactive = n == "ddt";
                     if reactive {
+                        if self.in_function {
+                            return Err(unsupported(e.span, "ddt in analog functions"));
+                        }
                         parameter = false;
                     }
                     if n == "analysis" {
                         ty = Ty::Integer;
                     }
-                    if n.starts_with("$rdist_") {
+                    if n == "ddt" {
+                        let operand = a
+                            .pop()
+                            .ok_or_else(|| error(e.span, "missing derivative operand"))?;
+                        E::Derivative(None, Box::new(operand), e.span)
+                    } else if n.starts_with("$rdist_") {
                         E::Unsupported(n.into(), e.span)
                     } else if n == "idt" {
                         let mut args = a.into_iter();
@@ -1300,8 +1364,8 @@ impl Lower {
                                 "idt in analog functions is unsupported",
                             ));
                         }
-                        let slot = self.integral_count;
-                        self.integral_count += 1;
+                        let slot = self.operator_kinds.len();
+                        self.operator_kinds.push("idt");
                         E::Integral(slot, Box::new(input), Box::new(ic), e.span)
                     } else {
                         E::Call(n.into(), a)

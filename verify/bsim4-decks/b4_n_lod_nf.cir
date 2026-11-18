@@ -1,4 +1,5 @@
 * BSIM4 LOD stress with four fingers and SD spacing
+* spx-verify: known-difference ngspice 44.2 ignores KU0 (LOD mobility stress); spx follows BSIM4 manual eq. 14.5
 * Provenance: original BSIM4 test circuit; generic parameter values chosen for spx.
 .model n1 nmos
 + level=54 version=4.8 binunit=1 paramchk=1 mobmod=0 capmod=2

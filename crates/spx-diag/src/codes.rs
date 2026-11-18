@@ -105,7 +105,10 @@ pub const CODES: &[CodeInfo] = &[
         "E-VA-UNSUPPORTED",
         "Unsupported Verilog-A construct",
         "The source uses a language construct outside the analog compiler subset.",
-        &["Check the source at the reported position and docs/verilog-a.md."],
+        &[
+            "Check the source at the reported position and docs/verilog-a.md.",
+            "Use `ddt` in analog statements. For repeated stateful calls, use an analog-for loop with a genvar so each iteration has its own state.",
+        ],
     ),
     e(
         "E-VA-PREPROC",
@@ -386,8 +389,8 @@ pub const CODES: &[CodeInfo] = &[
     e(
         "E-SOLVE-SINGULAR",
         "Singular matrix",
-        "The circuit matrix cannot be factored: the circuit equations do not determine every \
-         unknown.",
+        "The solver encountered a singular Jacobian. A nonlinear operating-point solve tries the \
+         enabled continuation methods because the matrix can lose rank at a trial bias.",
         &[
             "Look for floating nodes, loops of voltage sources or inductors, and cut sets of \
              current sources.",

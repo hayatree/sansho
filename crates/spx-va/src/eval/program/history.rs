@@ -13,7 +13,7 @@ pub(crate) fn history(body: &[Stmt], slots: usize) -> Vec<usize> {
                 live[*i] |= !defined[*i];
                 read(e, defined, live);
             }
-            E::Unary(_, a) | E::Ddx(a, _) => read(a, defined, live),
+            E::Unary(_, a) | E::Derivative(_, a, _) | E::Ddx(a, _) => read(a, defined, live),
             E::Binary(_, a, b) | E::Integral(_, a, b, _) => {
                 read(a, defined, live);
                 read(b, defined, live);

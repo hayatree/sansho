@@ -13,6 +13,25 @@ Defaults: `rtol = 2e-3` (OP/DC/AC), `rtol_tran = 1e-2`, `rtol_tran_i = 3e-2` (tr
 currents), `rtol_meas = 1e-2`, `atol_v = 1 µV`, `atol_i = 1 nA`. A deck can override them with a
 comment line such as `* verify: rtol_tran=3e-2`.
 
+To declare an accepted reference difference, add a full-line comment to the deck.
+
+```spice
+* spx-verify: known-difference <reason>
+```
+
+The verifier still runs the simulation, compares the waveforms and measurements,
+and prints scores. A completed annotated comparison reports `KNOWN` and the
+reason, even if its scores fall within tolerance. The summary counts these decks
+separately. A run containing only passes and known differences exits with zero.
+The JSON array groups known comparisons at the end. Each entry retains the numeric comparison, with `status: "KNOWN"`
+and a `known_difference` reason. The `pass` field records the tolerance result.
+Missing inputs retain their `SKIP` status. Simulation errors, unreadable cached
+references and problems that prevent comparison produce `FAIL`.
+
+The three marked BSIM4 layout decks cover KU0 mobility stress. ngspice 44.2
+returned identical Id with and without KU0 in the black-box control. spx uses
+BSIM4 manual equation 14.5 by maintainer decision.
+
 All decks are original circuits written for this project. Raw files go to `verify/out/`
 (ignored by git).
 
@@ -44,7 +63,9 @@ root. Keep the `psp103/`, `vbic_1p3/` and `r3_cmc/` VA files together with their
 adjacent includes. Place the IHP corner libraries and the files they include in
 `ngspice-models/`. Each deck header lists its inputs.
 
-From the checkout root, generate the ngspice references and compare all ten decks:
+The five `cmg_*.cir` decks use the external BSIM-CMG 111.2.1 entry point
+`va-models/bsimcmg/bsimcmg.va` and its adjacent includes. From the checkout
+root, generate references and compare the ten IHP and five CMG decks:
 
 ```sh
 cargo run --release -p spx-verify -- verify/va-decks
@@ -64,7 +85,7 @@ the whole checkout at its host path. After replacing a compiler under the same
 image tag, remove the cached `model-*.osdi` files before regenerating references.
 
 `SKIP` identifies a missing circuit input and prints its path. Skips have no
-effect on the exit status. Parse errors, tool errors and comparison failures
+effect on the exit status. Parse errors, tool errors and unacknowledged comparison failures
 produce `FAIL`. A run with only skips exits successfully with zero passes.
 JSON entries include `status` and a skipped entry includes `missing`.
 

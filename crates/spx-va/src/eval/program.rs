@@ -87,7 +87,7 @@ struct Builder<'a> {
     m: &'a CompiledModule,
     b: &'a Bound,
     input: &'a EvalInput<'a>,
-    integrals_seen: Vec<bool>,
+    operators_seen: Vec<bool>,
     fuel: usize,
     depth: usize,
     compact_charge: bool,
@@ -326,11 +326,32 @@ impl Builder<'_> {
                 }
                 return Some(result);
             }
-            E::Integral(k, u, ic, _) => {
-                if std::mem::replace(&mut self.integrals_seen[*k], true) {
+            E::Derivative(None, operand, _) => {
+                return Some(Pair {
+                    f: z,
+                    q: self.expr(operand)?.f,
+                });
+            }
+            E::Derivative(Some(template), operand, _) => {
+                let k = self.b.generated.slot(*template, |i| {
+                    self.known.get(self.vars[i]?.f).copied().flatten()
+                })?;
+                if std::mem::replace(&mut self.operators_seen[k], true) {
                     return None;
                 }
-                let state = self.voltage(Some(self.m.integrals.start + k));
+                let state = self.voltage(Some(self.m.operator_node(k)));
+                let operand = self.expr(operand)?.f;
+                self.vars[self.m.slots + 2 * self.m.branches.len() + k] = Some(Pair {
+                    f: state,
+                    q: self.math(Math::Neg, operand, z),
+                });
+                state
+            }
+            E::Integral(k, u, ic, _) => {
+                if std::mem::replace(&mut self.operators_seen[*k], true) {
+                    return None;
+                }
+                let state = self.voltage(Some(self.m.operator_rows.start + k));
                 let state = self.scalar(state);
                 let c = self.reg();
                 self.ops.push(Op::IntegralInitial(c));
@@ -401,12 +422,6 @@ impl Builder<'_> {
                 return Some(Pair { f: dst, q: new.q });
             }
             E::Call(name, args) => match name.as_str() {
-                "ddt" => {
-                    return Some(Pair {
-                        f: z,
-                        q: self.expr(&args[0])?.f,
-                    });
-                }
                 "$temperature" => self.num(self.input.temperature),
                 "$vt" => {
                     let k = self.num(K_OVER_Q);
@@ -742,7 +757,7 @@ impl Program {
             b,
             input,
             depth: 0,
-            integrals_seen: vec![false; m.integrals.len()],
+            operators_seen: vec![false; m.operator_rows.len() + b.generated.extra],
             fuel: ITERATION_CAP,
             compact_charge,
             charge_joins: canonical_charge.then(HashSet::new),
@@ -768,7 +783,7 @@ impl Program {
         builder
             .vars
             .resize(m.slots + 2 * m.branches.len(), Some(zero));
-        for id in m.integrals.clone() {
+        for id in m.operator_nodes(b) {
             let r = builder.voltage(Some(id));
             let v = builder.scalar(r);
             builder.vars.push(Some(v));
@@ -776,7 +791,7 @@ impl Program {
         for s in &m.body {
             builder.stmt(s)?
         }
-        for (k, id) in m.integrals.clone().enumerate() {
+        for (k, id) in m.operator_nodes(b).enumerate() {
             if let Some(row) = b.layout.index(id) {
                 builder.ops.push(Op::Stamp(
                     row,

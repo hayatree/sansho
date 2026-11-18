@@ -1,4 +1,4 @@
-# PSP103 performance
+# Verilog-A performance
 
 The benchmark runs the IHP SG13G2 decks with the release Cranelift JIT. The
 comparison is against ngspice 44.2 with the corresponding OSDI models. The
@@ -284,3 +284,29 @@ A trial retained the matrix and specialized just the primals on exact, guarded
 rail and zero inputs. Over 31 pinned pairs it moved ring21 from 51.81 to
 51.69 ms and ring5 from 12.81 to 12.93 ms. The production kernel retains its
 general input loads.
+
+
+## BSIM-CMG 111.2.1 transients
+
+Release build on an AMD Ryzen AI Max+ 395, one worker, warm disk cache.
+Each number is the median of five runs after one warm-up. Analysis time
+comes from `SPX_PROFILE=1` with device profiling disabled. Per-evaluation
+cost comes from separate runs with `SPX_PROFILE_DEVICES=1`. It includes
+native and interpreted evaluator time, divided by executed instance
+evaluations. Exact stamp reuse is excluded from that denominator.
+
+| Deck | JIT-enabled analysis | JIT-enabled µs/eval | Interpreter analysis | Interpreter µs/eval |
+|---|---:|---:|---:|---:|
+| `cmg_inverter_tran` | 208.3 ms | 4.659 | 344.9 ms | 7.484 |
+| `cmg_ring5` | 227.7 ms | 0.764 | 417.4 ms | 6.918 |
+
+With JIT enabled the inverter recorded 12,469 native and 18,085 interpreted
+evaluations plus 5,662 exact reuses. The ring recorded 23,620 native
+evaluations and 6,060 reuses. All five CMG decks agree between backends on
+the binary64 values of every scale and output vector.
+
+To reproduce, build `spx-cli` with `--offline --release --features jit` and
+run `target/release/spx run -j1 verify/va-decks/cmg_ring5.cir` or the inverter
+deck. Set `SPX_VA_JIT=0` for the interpreter. In the device profile,
+`spx-device` reports native, interpreted and reused counts followed by native
+nanoseconds. `spx-interpreted-ns` reports the interpreted nanoseconds per group.

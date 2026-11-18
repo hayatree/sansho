@@ -214,3 +214,12 @@ a constrained voltage. The implementation, work-count instrumentation and
 static stack-operand counter are original. The counter reads spx's emitted
 machine code through Linux procfs and disassembles it with the system
 objdump. Third-party models served only as simulator test inputs.
+
+### M4 final verification and general time derivatives
+
+The derivative operator lowering, genvar state allocation and analytic regression
+circuits are original work from Accellera Verilog-AMS LRM 2.4, the repository's
+modified nodal equations and the forward-mode chain rule. BSIM-CMG 111.2.1
+(ECL-2.0) served as external compiler input. The known-difference directive and
+the SKY130 terminal-waveform replay are original verification work using local
+black-box results. The KU0 decision follows the BSIM4 4.8.2 manual, equation 14.5.

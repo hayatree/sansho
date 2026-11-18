@@ -52,6 +52,7 @@ pub struct Unknowns {
     names: Vec<String>,
     kinds: Vec<UnknownKind>,
     branches: HashMap<String, usize>,
+    operator_states: Vec<usize>,
 }
 
 impl Unknowns {
@@ -80,6 +81,19 @@ impl Unknowns {
         self.names.push(format!("v({device}#{suffix})"));
         self.kinds.push(UnknownKind::Voltage);
         idx
+    }
+
+    /// Allocate a private analog-operator equation with voltage convergence scaling.
+    pub fn alloc_operator_state(&mut self, device: &str, suffix: &str) -> usize {
+        let idx = self.alloc_internal_node(device, suffix);
+        self.operator_states.push(idx);
+        idx
+    }
+
+    /// A physical node can take a shunt conductance in its KCL equation.
+    pub fn is_physical_node(&self, index: usize) -> bool {
+        self.kinds.get(index) == Some(&UnknownKind::Voltage)
+            && self.operator_states.binary_search(&index).is_err()
     }
 
     /// Branch-current unknown of device `name`, if it has one.
@@ -122,6 +136,8 @@ pub struct StampLayout {
     pub q: Vec<Node>,
     /// Charge slots also monitored before summation for transient error control.
     pub lte_q: Vec<usize>,
+    /// Individual device charges participate in timestep and breakpoint control.
+    pub has_independent_charges: bool,
     /// Internal RC storage nodes whose relaxation times bound a transient restart.
     pub relaxation_nodes: Vec<usize>,
     /// Rows of `b` (independent sources).
@@ -228,6 +244,13 @@ impl<'a> StampBuilder<'a> {
         let first = self.layout.q.len();
         self.core(nodes);
         self.layout.lte_q.extend(first..self.layout.q.len());
+        self.independent_charges();
+    }
+
+    /// Request charge-aware startup and breakpoint handling. A private DAE
+    /// row already supplies its own LTE sample through the assembled history.
+    pub fn independent_charges(&mut self) {
+        self.layout.has_independent_charges = true;
     }
 
     /// Register a local capacitive node with a resistive discharge path.

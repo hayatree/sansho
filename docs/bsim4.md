@@ -57,7 +57,7 @@ The numerical comparison suite exercises fewer combinations than this table. In 
 
 Equations 14.3–6 and §14.1.3 specify the ratio `(1 + rho) / (1 + rho_ref)`. Both rhos use KU0 divided by the same size and temperature factor. Only the actual inverse isolation distances are averaged over fingers. For `b4_n_lod_ku0` the inverse-distance sum is 2.948505 per µm, compared with 1.886792 per µm for the reference geometry. Its U0 multiplier is 1.039488. For `b4_n_lod_nf` the four-finger average gives 0.958365 as the U0 multiplier. The unit tests exercise the size factor, reference normalization, nonzero TKU0 and distinct mobility and velocity ratios.
 
-All saved values in the 121-point KU0-only reference are identical to the zero-KU0/KVSAT control reference. With KU0 zero, equation 14.6 also gives unit velocity scaling in the control. As a separate experiment, suppressing only the U0 multiplier in spx produced scores of 0.220 for KU0, 0.237 for NF and 0.017 for the combined bin/layout deck. Velocity scaling, threshold shifts and the spacing average were active in that experiment. The delivered model retains equation 14.5. The cached traces establish the missing measurable mobility response, but do not identify its cause inside the reference run.
+All saved values in the 121-point KU0-only reference are identical to the zero-KU0/KVSAT control reference. With KU0 zero, equation 14.6 also gives unit velocity scaling in the control. As a separate experiment, suppressing only the U0 multiplier in spx produced scores of 0.220 for KU0, 0.237 for NF and 0.017 for the combined bin/layout deck. Velocity scaling, threshold shifts and the spacing average were active in that experiment. The maintainer selected equation 14.5 for spx. In a separate ngspice 44.2 black-box probe, Id was identical with KU0 omitted and with KU0 enabled at SA = SB = 0.3 µm and SAREF = SBREF = 1 µm. The verifier reports the KU0, NF and combined bin/layout decks as `KNOWN` with their measured scores. The cached traces establish the missing measurable mobility response, but do not identify its cause inside the reference run.
 
 ### Body-network transients
 
@@ -65,11 +65,27 @@ Figure 9.3 and §11.2 place each junction between its physical diffusion and the
 
 The SKY130 inverter has a second effect. Its second-stage wrappers pass zero perimeter, and the output briefly swings outside the supply rails. Evaluating spx's discrete KCL on the saved voltages at 175 ps gave a 1.74 µA drain-body discrepancy on the second NMOS, with the opposite discrepancy at the output. The reverse-biased junction at 177 ps agreed to within 0.1 nA. Retaining the signed perimeter in the forward capacitance reduced the inverter score from 4.112 after the restart fixes to 0.190.
 
-The five-stage SKY130 ring begins with a 1.8 V supply imposed on a zero-initialized supply node under UIC. The first accepted samples at 20 fs agree within tolerance across all signals. At the next reference sample, 28.0002 fs, the fourth NMOS internal body is at 152.936 mV. The spx waveform interpolates to 125.740 mV there. On that body row the saved 20–28 fs interval has a 7.5 µA KCL residual using backward Euler and a 2.06 mA residual using trapezoidal integration. At the following sample, 44 fs, the residuals are 1.48 mA and 3.49 µA respectively. These measurements support a backward-Euler step followed by trapezoidal integration. In a separate refinement experiment we kept the same first accepted state and limited subsequent intervals through 200 fs to 0.25 fs and then 0.125 fs. The values were 124.205 and 124.185 mV. Refining this part of the spx trajectory does not reproduce the coarse reference sample. From 10 ps onward the worst score over all signals, using the full-deck normalization, is 0.367. The source of the reference's initial post-impulse step size remains unresolved.
+The earlier UIC version of the five-stage SKY130 ring begins with a 1.8 V supply imposed on a zero-initialized supply node under UIC. The first accepted samples at 20 fs agree within tolerance across all signals. At the next reference sample, 28.0002 fs, the fourth NMOS internal body is at 152.936 mV. The spx waveform interpolates to 125.740 mV there. On that body row the saved 20–28 fs interval has a 7.5 µA KCL residual using backward Euler and a 2.06 mA residual using trapezoidal integration. At the following sample, 44 fs, the residuals are 1.48 mA and 3.49 µA respectively. These measurements support a backward-Euler step followed by trapezoidal integration. In a separate refinement experiment we kept the same first accepted state and limited subsequent intervals through 200 fs to 0.25 fs and then 0.125 fs. The values were 124.205 and 124.185 mV. Refining this part of the spx trajectory does not reproduce the coarse reference sample. From 10 ps onward the worst score over all signals, using the full-deck normalization, is 0.367. The source of the reference's initial post-impulse step size remains unresolved.
+
+#### Five-stage ring started at the .ic operating point
+
+The current `sky_ring5` starts at a constrained operating point. Its 1,508 reference samples and the spx samples reach a 2 ps step after startup. The worst main node is D (score 0.277). Its 25 crossings of 0.9 V drift from a 1.4 fs spx lag at the first crossing to 80.6 fs at the last. The fourth NMOS body error grows from at most 0.97 µV over the first 150 samples to 10.57 µV over the last 150. At 2.827–2.837 ns the error alternates sign at every sample. This is characteristic of trapezoidal ringing on a fast body RC network.
+
+To isolate the body equations, we replayed each saved trajectory on its own time grid. We held A–E at their saved voltages at each Newton solve, initialized the full state from sample zero, took two backward-Euler steps, then used trapezoidal integration with the converged spx charges. Replaying spx reproduced all 15 NMOS body traces within 0.01 nV. Replaying the reference gave these peak absolute errors for the fourth NMOS.
+
+| Fourth NMOS node | Free ring (µV) | Reference-driven replay (µV) |
+|---|---:|---:|
+| body | 10.57 | 1.28 |
+| sbody | 3.99 | 0.63 |
+| dbody | 8.74 | 1.01 |
+
+Across all five stages the largest reference-driven error was 1.32 µV, within the ordinary tolerance for every body trace. On the reference trajectory we also evaluated the fourth NMOS discrete KCL directly, using `f[n] + f[n−1] + 2(q[n]−q[n−1])/h` on trapezoidal steps. Peak residuals at body, sbody and dbody were 57.6, 0.0015 and 33.3 nA against peak charge terms of 18.64, 0.0484 and 35.98 µA. This checks the individual junction connections as well as the intrinsic body charge.
+
+Halving the spx step from 2 to 1, 0.5 and 0.25 ps moved the last D crossing from +0.081 ps relative to the fixed reference to −1.079, −1.369 and −1.441 ps. Successive shifts decreased roughly fourfold. Refining spx alone therefore moves it away from this coarse reference. The terminal-driven replay and the passing NFET/PFET charge and generic RBODY controls localize the out-of-tolerance error to the free-running switching trajectory and its sampled body response. A small fixed-trajectory discrepancy remains. These measurements do not establish an error in the body conductance or junction charge partition. The free-running deck keeps its ordinary score and failure status.
 
 ### Cached deck results
 
-Worst signal and maximum absolute difference use the ordinary verification harness. A score at or below 1 passes. All 30 cached decks ran. Four exceed tolerance.
+Worst signal and maximum absolute difference use the ordinary verification harness. A score at or below 1 passes. All 30 cached decks ran. Three KU0 comparisons report a known difference, and one free-running transient exceeds tolerance.
 
 | Deck | Worst signal | Score | Maximum absolute difference |
 |---|---|---:|---:|
@@ -102,9 +118,9 @@ Worst signal and maximum absolute difference use the ordinary verification harne
 | `sky_nfet_iv` | `i(vd)` | 0.119 | 1.717e-8 A |
 | `sky_pfet_charge` | `i(vb)` | 0.010 | 3.796e-9 A |
 | `sky_pfet_iv` | `i(vs)` | 0.173 | 2.918e-7 A |
-| `sky_ring5` | `v(m.x4.xn.msky130_fd_pr__nfet_01v8#body)` | **9.795** | 2.720e-2 V |
+| `sky_ring5` | `v(m.x4.xn.msky130_fd_pr__nfet_01v8#body)` | **2.079** | 1.057e-5 V |
 
-The original 14 decks and ten JIT Verilog-A decks passed and all 24 spx raw files matched their pre-change SHA-256 digests. The ten Verilog-A decks also passed in the interpreter. Two new inputs in `verify/diag-decks` await maintainer references. The mobility control measures separate drain currents for two spacings on one model card alongside a device with the hand-calculated mobility. The close-spacing and explicit-mobility currents agree at every spx sweep point. The tight-tolerance ring keeps the 2 ps maximum timestep and the initial UIC jump.
+The original 14 decks and ten JIT Verilog-A decks passed and all 24 spx raw files matched their pre-change SHA-256 digests. The ten Verilog-A decks also passed in the interpreter. Two additional inputs in `verify/diag-decks` have cached maintainer references. The mobility control measures separate drain currents for two spacings on one model card alongside a device with the hand-calculated mobility. The close-spacing and explicit-mobility currents agree at every spx sweep point. The tight-tolerance ring keeps the 2 ps maximum timestep and the initial UIC jump.
 
 In B4-1, median check / run times in seconds for three warm release CLI invocations were 0.154 / 0.167 for `sky_cs_ac`, 0.188 / 0.217 for `sky_inverter_tran`, 0.163 / 0.154 for `sky_nfet_idvd`, 0.164 / 0.158 for `sky_nfet_iv`, 0.158 / 0.209 for `sky_pfet_iv` and 0.169 / 0.220 for `sky_ring5`.
 
