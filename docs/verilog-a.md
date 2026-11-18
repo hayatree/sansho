@@ -1077,3 +1077,145 @@ measure the balance between VA chunks and the scheduling cost across 1,224
 repeated device loops. All 11 full-vector comparisons against HEAD passed with
 cold and warm caches and one and default workers. The serialized cache artifacts
 also matched across worker counts.
+
+## 17. Optimization round 4 — single-worker ring analysis
+
+The paired circuit JIT samples deterministic synthetic biases during compilation.
+It tracks boolean conditions evaluated by the register program. If only one outcome
+was seen, the packed kernel checks that outcome in each active lane and propagates
+the predicted constant through its remaining instructions. A mismatch replays the
+two real biases with the scalar evaluator. Ground-referenced DC supplies guide the
+sampling distribution and participate in the specialization key. A predicted
+condition is checked even when a real bias lies within the sampled range.
+Eight VA instances now suffice to enable pairing, which brings ring5 onto this path.
+The compiler also discards dead phi arguments and avoids redundant boolean-mask
+conversions. Pair output extraction visits each interleaved result once.
+
+The numeric LU plan keeps the fresh factor's row and column order. It traces
+structural reachability from active CSC coefficients, builds flat input and update
+lists and stores diagonal reciprocals for the triangular solves. The hot path
+checks for newly activated coefficients before using the plan. It retains the
+pivot, tie and growth tests. The last input peak supplies a cheap lower bound
+for the growth test, with a full peak search on failure. Newton assembly also
+vectorizes the conductance/capacitance combination, stops checking tolerances
+once another iteration is certain, swaps accepted state buffers and skips
+divided differences for constant charge histories.
+
+### Matrix and ordering
+
+Counts below come from the first Newton matrix. LU counts the diagonal once.
+The structural counts include allocated model slots whose coefficient is zero.
+The active plan counts include fill reachable from the active coefficients.
+
+| Circuit | Dimension | Structural A | Structural LU | Fill | Active A | Active LU | Active fill | Markowitz structural LU / fill | Markowitz active LU / fill |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ring5 | 37 | 269 | 617 | 348 | 108 | 155 | 47 | 293 / 24 | 122 / 14 |
+| ring21 | 149 | 1,117 | 2,029 | 912 | 444 | 626 | 182 | 1,174 / 57 | 522 / 78 |
+
+Run `python3 benches/ordering.py` to reproduce both orderings and compare the first
+Newton update. The Markowitz experiment chooses a minimum-cost admissible pivot
+using a threshold of 0.1 times the column maximum. On active coefficients its
+first solution differs in four components on ring5 and 17 on ring21, with a
+maximum absolute difference of 2.22e-16. The structural variant differs in 20
+and 96 components. The shipped order preserves the baseline arithmetic order.
+
+Each ring has one voltage per stage, a supply voltage and supply current, and
+three internal voltages per PSP instance (NOI, GP and NOII). The two noise-node
+voltages stay zero throughout the measured ring21 transient. Zero output over a
+trajectory does not establish an unconditional ideal short. GP varies, and the
+supply branch current is observable. The numerical-support optimization removes
+work on dormant coefficients while preserving all unknowns and output vectors.
+The reference matrix dimensions were unavailable.
+
+### Warm and cold release measurements
+
+Each entry is a median of seven interleaved A/B pairs against a separate release
+build of HEAD `64d9fa0`, both with the JIT enabled. Analysis was timed inside
+the simulator, and wall time in a separate uninstrumented process. Each build
+had its own cache. The reference columns use the maintainer's simultaneous
+ngspice 44.2 calibration. Each ratio multiplies the supplied HEAD/reference
+ratio by the local candidate/HEAD median time for that metric. The host changed
+speed substantially even between the ring21 worker settings, so those rows
+cannot measure parallel scaling. All elapsed times are milliseconds.
+
+| PSP deck | Reference analysis / elapsed | Warm -j1 analysis, HEAD → round 4 | Speedup | Analysis / ref | Warm -j1 wall, HEAD → round 4 | Wall / ref | Warm default wall, HEAD → round 4 | Wall / ref |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| psp_nmos_idvg | 5 / 97 | 1.25 → 1.20 | 1.042× | 0.2400× | 47.47 → 48.27 | 0.56× | 48.93 → 49.38 | 0.51× |
+| psp_inverter_dc | 6.7 / 108 | 3.02 → 2.90 | 1.040× | 0.4327× | 55.31 → 56.37 | 0.56× | 49.30 → 52.58 | 0.58× |
+| psp_inverter_tran | 8.9 / 110 | 4.31 → 4.08 | 1.056× | 0.4737× | 53.93 → 49.08 | 0.49× | 51.15 → 50.66 | 0.50× |
+| psp_ring5 | 41.5 / 149 | 42.43 → 31.30 | 1.356× | 0.8336× | 100.39 → 99.00 | 0.69× | 86.26 → 83.84 | 0.56× |
+| psp_ring21 | 124 / 280 | 164.33 → 126.33 | 1.301× | 0.9994× | 252.83 → 214.99 | 0.77× | 78.68 → 71.84 | 0.52× |
+
+Ring5 clears parity. Ring21's point estimate is 123.9 ms on the 124 ms calibration,
+within one tenth of one percent of the boundary. Two additional runs of 15 warm
+interleaved ring21 pairs gave 71.33 → 58.47 ms and 75.07 → 59.29 ms, equivalent
+to 1.065× and 1.027× the reference. Ring21 therefore still misses repeatable
+single-worker parity by about 3–7% on these runs. All five decks clear the warm
+wall target under both worker settings.
+
+| PSP deck | Cold -j1 wall, HEAD → round 4 | Cold default wall, HEAD → round 4 |
+|---|---:|---:|
+| psp_nmos_idvg | 294.98 → 307.45 | 298.59 → 299.66 |
+| psp_inverter_dc | 391.79 → 391.28 | 330.07 → 336.07 |
+| psp_inverter_tran | 403.04 → 414.66 | 358.58 → 352.39 |
+| psp_ring5 | 475.90 → 609.85 | 393.42 → 534.83 |
+| psp_ring21 | 879.99 → 714.06 | 327.74 → 268.59 |
+
+Ring5 now compiles both scalar and packed code on its first transient run.
+That increases cold wall time even though warm analysis is faster.
+
+### Single-worker profiles
+
+The following separate seven-pair run took place during a faster period on
+the host. Compare the paired columns within a row. Native time includes
+kernel dispatch and output validation. Group time also includes stamp
+extraction and reuse. The LU timer covers numeric factor and both solves.
+
+| Circuit | Native evaluation, ms | Device group, ms | Factor, µs/call | LU total, ms | Profiled analysis, ms |
+|---|---:|---:|---:|---:|---:|
+| ring5 | 16.54 → 13.03 | 17.28 → 13.99 | 2.63 → 0.73 | 2.83 → 0.93 | 22.11 → 16.74 |
+| ring21 | 54.01 → 46.68 | 58.18 → 50.45 | 6.92 → 2.34 | 7.72 → 3.09 | 70.27 → 57.52 |
+
+Both builds used 917 factorizations and 1,224 assemblies on each ring. Both
+accepted four transient points in two iterations and 302 in three iterations.
+The candidate completed 3,656 of 3,672 attempted packed calls on ring5 and
+18,310 of 18,360 on ring21. Exact stamp reuse accounted for another 3,060 and
+12,852 visits respectively. Ring21's factor improved 2.96× and native
+evaluation improved 1.16× in this profile. Applied to the round-3 component
+calibration, these correspond to about 5.7 µs per factor and 118 ms in native
+evaluation. The component goals were about 3.5 µs and 100 ms. The profile's
+end-to-end speedup (1.22×) also illustrates the sensitivity of the 1.30×
+release timing to the host.
+
+The Linux block sampler counted 343 samples in generated VA code over 12
+ring21 runs. Block 1 of the 4,116-op packed program accounted for 109 samples
+(31.8%), and block 1 of the 3,182-op program accounted for 62 (18.1%). Blocks
+37 and 42 of the former added 36 and 26 samples. These counts exclude time
+inside external math calls. The next device experiment should isolate live
+tangents and spills in those two large first blocks. For LU, specializing the
+short scatter updates by length under the existing pivot order could reduce
+the remaining loop and address calculations.
+
+An interval proof for check-only arithmetic, a later AD instruction schedule,
+speculative constant internal voltages and alternative LU update layouts
+produced mixed or slower measurements and were discarded. The full-vector
+comparison matched HEAD on all 11 decks, cold and warm, at one and default
+workers. The candidate's cache artifacts matched across worker counts. The
+two cached reference suites passed all 14 standard and all 10 VA decks.
+
+### Reproduction
+
+With a separate release JIT executable from `64d9fa0` at `$BASELINE`, run
+the following from the repository root. The block sampler requires a C compiler
+on Linux x86-64 or AArch64.
+
+```sh
+cargo build --offline --release -p spx-cli --features jit
+python3 benches/run.py --baseline "$BASELINE" --runs 7
+python3 benches/run.py --baseline "$BASELINE" --runs 15 --warm-analysis --deck benches/psp_ring21.cir
+python3 benches/run.py --baseline "$BASELINE" --runs 7 --devices \
+    --deck verify/va-decks/psp_ring5.cir --deck benches/psp_ring21.cir
+python3 benches/compare.py "$BASELINE" target/release/spx
+python3 benches/ordering.py
+python3 benches/blocks.py --runs 12 benches/psp_ring21.cir
+```

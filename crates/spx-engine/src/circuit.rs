@@ -667,11 +667,33 @@ pub(crate) fn compile_cached(
             .collect();
         let mut seen = HashSet::new();
         let mut jobs = Vec::new();
+        let mut rails = vec![None; node_names.len()];
+        let mut range = [0.0f64; 2];
+        for e in &nl.elements {
+            if let ElementKind::VoltageSource { p, n, source } = &e.kind
+                && source.tran.is_none()
+            {
+                let rail = match (node_index.get(p), node_index.get(n)) {
+                    (Some(&r), None) => Some((r, spx_devices::dc_value(source))),
+                    (None, Some(&r)) => Some((r, -spx_devices::dc_value(source))),
+                    _ => None,
+                };
+                if let Some((r, v)) = rail
+                    && v.is_finite()
+                {
+                    rails[r] = Some(v);
+                    range = [range[0].min(v), range[1].max(v)];
+                }
+            }
+        }
         for chunk in va
             .values_mut()
             .flat_map(|v| v.done.iter_mut().chain([&mut v.cur]))
         {
             chunk.specialize_stamps(dc_only);
+            if !dc_only && va_instances >= 8 && range[0] < range[1] {
+                chunk.predict_bias(&rails, range);
+            }
             for (module, bound, name) in chunk.jit_bindings(enabled) {
                 if enabled && seen.insert((&module.name, bound.specialization_key(kelvin, 1.))) {
                     jobs.push((module, bound, name));
@@ -687,9 +709,8 @@ pub(crate) fn compile_cached(
             })
             .collect();
         diags.extend(results.into_iter().flatten());
-        // The small chunks rarely have a choice of same-binding partners.
-        // Their scalar kernels also avoid the second cold compilation.
-        if enabled && !dc_only && va_instances >= 32 {
+        // Below eight instances the two-device chunks seldom share a binding.
+        if enabled && !dc_only && va_instances >= 8 {
             va.values_mut()
                 .flat_map(|v| v.done.iter_mut().chain([&mut v.cur]))
                 .collect::<Vec<_>>()

@@ -164,7 +164,7 @@ Elaboration fixes the chunk size at 1,024 for linear devices, 64 for built-in no
 and two or six for interpreted VA devices, with the larger size at 32 instances. Native VA
 circuits use two below eight instances, four from eight to 31, and eight from 32 upwards. Each
 instance has reusable local inputs and an evaluator workspace. Scalar evaluation writes directly
-into the final stamp slots. Native transient circuits with at least 32 VA devices can pair equal
+into the final stamp slots. Native transient circuits with at least eight VA devices can pair equal
 specializations within a chunk. Their outputs are deinterleaved first. Device evaluation uses Rayon when the circuit
 has at least eight VA instances or 256 nonlinear instances. Every value of `G`, `C`, `f`, `q`
 and `b` is gathered in its original source order. The VA assembly test compares the bits of every
@@ -274,7 +274,9 @@ pub trait LinearSolver<T> {
 | S3 | Iterative methods for large power grids (preconditioned GMRES/CG); GPU (cuDSS as an optional plugin) | Optional |
 
 Real Newton solves reuse the symbolic ordering and simplicial pivot sequence. After a pivoted
-factorization, the solver records the scatter offsets and ordered updates for each factor column.
+factorization, the solver records scatter offsets and ordered updates reachable from the active
+CSC entries. Activating a previously omitted entry triggers fresh pivoting and expands the
+support used for subsequent plans. Both solves traverse the same flat factor storage.
 Each subsequent factorization checks the pivot against the remaining column entries and monitors
 upper-factor growth. Ties, tiny pivots or excessive growth trigger fresh pivoting. The general
 backend handles dense and supernodal patterns and complex solves.

@@ -8,6 +8,9 @@ use super::*;
 impl Lower<'_, '_> {
     pub(super) fn batch_body(&mut self, checks: &[(bool, bool)]) -> Result<(), String> {
         let p = self.program;
+        let predictions = self
+            .circuit
+            .map(|s| super::super::predict::predictions(p, s));
         let yes = self.fb.ins().iconst(I64, -1);
         let yes = self.fb.ins().splat(I64X2, yes);
         let mut edges = vec![None; p.ops.len() + 1];
@@ -90,7 +93,24 @@ impl Lower<'_, '_> {
                 }
                 Op::Jump(j) => target = j,
                 Op::Unknown(d, i) => self.unknown(d, i),
-                Op::Math(d, m, a, b) | Op::Charge(d, m, a, b) => self.arithmetic(d, m, a, b),
+                Op::Math(d, m, a, b) | Op::Charge(d, m, a, b) => {
+                    self.arithmetic(d, m, a, b);
+                    if let Some(expected) = predictions.as_ref().and_then(|t| t[d])
+                        && self.fixed[d].is_none()
+                    {
+                        let actual = self.get(d);
+                        let pred = self.truth(actual);
+                        let bad = if expected {
+                            self.fb.ins().band_not(mask, pred)
+                        } else {
+                            self.fb.ins().band(mask, pred)
+                        };
+                        let valid = self.fb.use_var(valid_var);
+                        let valid = self.fb.ins().band_not(valid, bad);
+                        self.fb.def_var(valid_var, valid);
+                        self.fixed[d] = Some(f64::from(expected));
+                    }
+                }
                 Op::Phi(d, c, a, b) => self.join(d, c, a, b),
                 Op::Simparam(d, ref key, default) => {
                     let v = match key.as_str() {
@@ -114,10 +134,14 @@ impl Lower<'_, '_> {
                 Op::CheckZeroProduct(r, div) => {
                     let v = self.get(r);
                     let (primal, grad) = checks[pc];
-                    let mut ok = yes;
+
                     if div {
                         let sq = self.fb.ins().fmul(v, v);
-                        ok = self.truth(sq);
+                        let ok = self.truth(sq);
+                        let bad = self.fb.ins().band_not(mask, ok);
+                        let valid = self.fb.use_var(valid_var);
+                        let valid = self.fb.ins().band_not(valid, bad);
+                        self.fb.def_var(valid_var, valid);
                     }
                     if primal || grad {
                         let mut sum = if primal { v } else { self.num(0.) };
@@ -136,10 +160,6 @@ impl Lower<'_, '_> {
                         let sum = self.fb.ins().fadd(prev, sum);
                         self.fb.def_var(self.guard_sum, sum);
                     }
-                    let bad = self.fb.ins().band_not(mask, ok);
-                    let valid = self.fb.use_var(valid_var);
-                    let valid = self.fb.ins().band_not(valid, bad);
-                    self.fb.def_var(valid_var, valid);
                 }
                 Op::Stamp(row, pair, sign) => {
                     self.stamp_mask = (mask != yes).then_some(mask);

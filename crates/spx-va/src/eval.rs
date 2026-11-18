@@ -198,6 +198,7 @@ pub struct Bound {
 #[cfg(feature = "jit")]
 #[derive(Debug, Clone, Eq, PartialEq, Hash, serde::Serialize)]
 struct CircuitStamp {
+    bias: Option<(Vec<Option<u64>>, [u64; 2])>,
     wires: Vec<Option<usize>>,
     dc: bool,
 }
@@ -225,8 +226,28 @@ impl Bound {
                 }
             })
             .collect();
-        self.circuit = Some(CircuitStamp { wires, dc: dc_only });
+        self.circuit = Some(CircuitStamp {
+            wires,
+            dc: dc_only,
+            bias: None,
+        });
         self.workspace_key = Arc::new(());
+    }
+
+    /// Supply nominal port voltages and supply range for predicting branches.
+    /// The packed kernel validates predictions against each actual bias.
+    #[cfg(feature = "jit")]
+    pub fn predict_bias(&mut self, ports: &[Option<f64>], range: [f64; 2]) {
+        if let Some(stamp) = &mut self.circuit {
+            let known = self
+                .layout
+                .representatives()
+                .iter()
+                .map(|&i| ports.get(i).copied().flatten().map(f64::to_bits))
+                .collect();
+            stamp.bias = Some((known, range.map(f64::to_bits)));
+            self.workspace_key = Arc::new(());
+        }
     }
 
     /// Keep the module-wide unknown set when parameters will change within one matrix factorization pattern.

@@ -135,6 +135,19 @@ def paired(baseline, candidate, runs):
                       f"{median(pair[0]['anchor'] for pair in pairs):.3f}", flush=True)
 
 
+def warm_analysis(baseline, binary, runs, decks, jobs):
+    print("deck HEAD_analysis_ms new_analysis_ms speedup")
+    for deck in decks:
+        with TemporaryDirectory() as before, TemporaryDirectory() as after:
+            builds = ((baseline, before), (binary, after))
+            for exe, cache in builds:
+                sample(exe, deck, jobs, cache, True)
+            rows = [[sample(exe, deck, jobs, cache, True)["analysis"] for exe, cache in builds]
+                    for _ in range(runs)]
+            a, b = map(median, zip(*rows))
+            print(deck.stem, f"{a:.3f}", f"{b:.3f}", f"{a / b:.3f}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=ROOT / "target/release/spx")
@@ -143,19 +156,28 @@ def main():
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--baseline", type=Path,
                         help="interleave this executable with --binary using private warm caches")
-    parser.add_argument("--devices", action="store_true",
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--warm-analysis", action="store_true",
+                      help="repeat only warm interleaved analysis measurements against --baseline")
+    mode.add_argument("--devices", action="store_true",
                         help="profile device evaluations, group wall time and Newton steps")
     parser.add_argument("--deck", type=Path, action="append",
-                        help="select a deck for --devices (repeatable)")
+                        help="select a deck for --devices or --warm-analysis (repeatable)")
     parser.add_argument("--jobs", type=str, default="1",
-                        help="worker count for --devices, or 'default' (default is one)")
+                        help="worker count for device or warm analysis measurements (default is one)")
     args = parser.parse_args()
     if args.jobs != "default" and not (args.jobs.isdecimal() and int(args.jobs) > 0):
         parser.error("--jobs requires a positive integer or 'default'")
-    if args.deck and not args.devices:
-        parser.error("--deck requires --devices")
+    if args.deck and not (args.devices or args.warm_analysis):
+        parser.error("--deck requires --devices or --warm-analysis")
     if args.baseline and args.runs < 7:
         parser.error("interleaved measurements require at least seven pairs")
+    if args.warm_analysis:
+        if not args.baseline:
+            parser.error("--warm-analysis requires --baseline")
+        warm_analysis(args.baseline, args.binary, args.runs, args.deck or DECKS,
+                      [] if args.jobs == "default" else ["-j", args.jobs])
+        return
     if args.devices:
         if args.runs < 5:
             parser.error("--runs must be at least five")

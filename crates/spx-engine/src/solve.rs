@@ -390,12 +390,18 @@ pub(crate) fn newton(
                 ws.rhs[i] = -(a.f[i] + integ.hist[i] - a.b[i]);
             }
         } else {
-            for k in 0..ws.jac.len() {
-                ws.jac[k] = a.g[k] + integ.a0 * a.c[k];
+            for ((dst, &g), &c) in ws.jac.iter_mut().zip(&a.g).zip(&a.c) {
+                *dst = g + integ.a0 * c;
             }
             for i in 0..n {
                 ws.rhs[i] = -(a.f[i] + integ.a0 * a.q[i] + integ.hist[i] - a.b[i]);
             }
+        }
+        let dump = ws.newton_iterations == 1
+            && std::env::var("SPX_PROFILE_MATRIX").as_deref() == Ok("entries");
+        if dump {
+            use std::io::Write;
+            let _ = writeln!(std::io::stderr().lock(), "spx-first-rhs {:?}", ws.rhs);
         }
         let lu_start = ws.timed.then(std::time::Instant::now);
         let lu = ws
@@ -418,11 +424,21 @@ pub(crate) fn newton(
         if let Some(t) = lu_start {
             ws.lu_time += t.elapsed();
         }
+        if dump {
+            use std::io::Write;
+            let _ = writeln!(std::io::stderr().lock(), "spx-first-solution {:?}", ws.rhs);
+        }
         let mut converged = true;
         let mut worst = Vec::new();
         for i in 0..n {
             let old = x[i];
             let new = old + ws.rhs[i];
+            x[i] = new;
+            // Later elements still receive their Newton update. Only the last
+            // allowed iteration needs the full list of tolerance violations.
+            if iter != max_iter && (!converged || iter == 1 || ws.noncon) {
+                continue;
+            }
             let atol = match kinds[i] {
                 UnknownKind::Voltage => opts.vntol,
                 UnknownKind::Current => opts.abstol,
@@ -442,7 +458,6 @@ pub(crate) fn newton(
                     );
                 }
             }
-            x[i] = new;
         }
         if x.iter().any(|v| !v.is_finite()) {
             return Err(NewtonError::Singular);

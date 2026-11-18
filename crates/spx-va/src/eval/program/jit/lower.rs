@@ -61,6 +61,7 @@ pub(super) fn compile(
     circuit: Option<&CircuitStamp>,
     batch: bool,
 ) -> Result<abi::Code, String> {
+    let profile_blocks = std::env::var_os("SPX_PROFILE_VA_BLOCKS").is_some();
     let mut flags = settings::builder();
     let opt = std::env::var("SPX_CLIF_OPT").unwrap_or_else(|_| "none".into());
     let regalloc = std::env::var("SPX_CLIF_REGALLOC").unwrap_or_else(|_| "backtracking".into());
@@ -69,6 +70,10 @@ pub(super) fn compile(
         // floating-point expressions on this workload and increases register spills.
         ("opt_level", opt.as_str()),
         ("regalloc_algorithm", regalloc.as_str()),
+        (
+            "machine_code_cfg_info",
+            if profile_blocks { "true" } else { "false" },
+        ),
         ("enable_probestack", "true"),
         ("probestack_strategy", "inline"),
         ("use_colocated_libcalls", "false"),
@@ -86,7 +91,7 @@ pub(super) fn compile(
     let isa = cranelift_native::builder()?
         .finish(settings::Flags::new(flags))
         .map_err(|e| e.to_string())?;
-    let artifact = disk.map(|entry| {
+    let artifact = disk.filter(|_| !profile_blocks).map(|entry| {
         let target = format!(
             "{} {} {}",
             isa.triple(),
@@ -133,6 +138,7 @@ pub(super) fn compile(
     }
     let mut handoff = split::Handoff::default();
     let mut image = artifact.as_ref().map(|_| vec![0; 4]);
+    let mut block_maps = Vec::new();
     let mid = cut.unwrap_or(p.ops.len());
     for (func, range) in ids.into_iter().zip([0..mid, mid..p.ops.len()]) {
         let mut ctx = module.make_context();
@@ -153,6 +159,13 @@ pub(super) fn compile(
             .map_err(|e| format!("{e:?}"))?;
         if let Some(compiled) = ctx.compiled_code() {
             let bytes = compiled.code_buffer();
+            if profile_blocks {
+                let mut starts = compiled.bb_starts.clone();
+                starts.extend([0, bytes.len() as u32]);
+                starts.sort_unstable();
+                starts.dedup();
+                block_maps.push((func, starts));
+            }
             if std::env::var_os("SPX_PROFILE").is_some() {
                 use std::io::Write;
                 let _ = writeln!(std::io::stderr().lock(), "spx-code {}", bytes.len());
@@ -171,6 +184,25 @@ pub(super) fn compile(
     if let (Some(mut image), Some(entry)) = (image, artifact) {
         image[..4].copy_from_slice(&(handoff.slots as u32).to_le_bytes());
         entry.write(&image);
+    }
+    if profile_blocks {
+        module.finalize_definitions().map_err(|e| e.to_string())?;
+        use std::io::Write;
+        let mut log = std::io::stderr().lock();
+        for (func, starts) in block_maps {
+            let base = module.get_finalized_function(func) as usize;
+            let tag = if batch { "pair" } else { "scalar" };
+            for (block, offsets) in starts.windows(2).enumerate() {
+                let _ = writeln!(
+                    log,
+                    "spx-va-block {:x} {:x} {tag}-{}-{}-{block}",
+                    base + offsets[0] as usize,
+                    offsets[1] - offsets[0],
+                    p.ops.len(),
+                    func.as_u32()
+                );
+            }
+        }
     }
     abi::Code::finalize(pages, id, next, handoff.slots)
 }
@@ -420,6 +452,16 @@ impl Lower<'_, '_> {
         {
             return Some(c);
         }
+        if let ir::InstructionData::Binary {
+            opcode: ir::Opcode::Band,
+            args: [mask, one],
+        } = dfg.insts[inst]
+            && self.constant(one) == Some(1.)
+            && let Some(mask) = dfg.value_def(mask).inst()
+            && dfg.insts[mask].opcode() == ir::Opcode::Bitcast
+        {
+            return dfg.inst_args(mask).first().copied();
+        }
         None
     }
 
@@ -433,7 +475,12 @@ impl Lower<'_, '_> {
     pub fn number_bool(&mut self, flag: V) -> V {
         let one = self.num(1.);
         let zero = self.num(0.);
-        self.select(flag, one, zero)
+        if self.ty == F64X2 {
+            let mask = self.fb.ins().bitcast(F64X2, MemFlagsData::new(), flag);
+            self.fb.ins().band(mask, one)
+        } else {
+            self.select(flag, one, zero)
+        }
     }
     pub fn math_call(&mut self, row: usize, column: usize, x: V, y: V) -> V {
         let table = self.field(self.ptr, offset_of!(Frame, math));
@@ -1001,8 +1048,15 @@ impl Lower<'_, '_> {
         self.fb.seal_block(ok);
     }
     fn accumulate(&mut self, field: usize, index: usize, sign: f64, v: V) {
-        let s = self.num(sign);
-        let v = self.fb.ins().fmul(s, v);
+        let v = if self.regular {
+            if self.constant(v) == Some(0.) {
+                return;
+            }
+            if sign == 1. { v } else { self.fb.ins().fneg(v) }
+        } else {
+            let s = self.num(sign);
+            self.fb.ins().fmul(s, v)
+        };
         let old = self.load(field, index);
         let sum = self.fb.ins().fadd(old, v);
         let sum = if let Some(mask) = self.stamp_mask {

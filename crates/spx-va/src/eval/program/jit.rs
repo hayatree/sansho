@@ -9,6 +9,7 @@ mod guards;
 mod joins;
 mod lower;
 mod packed;
+mod predict;
 mod simplify;
 mod split;
 

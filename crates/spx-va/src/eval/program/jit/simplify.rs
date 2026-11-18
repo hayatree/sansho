@@ -43,11 +43,26 @@ pub(super) fn simplify(f: &mut Function, pure_calls: &HashMap<Inst, (usize, usiz
         }
     }
     let mut live = HashSet::new();
+    let mut unused = HashMap::<_, Vec<usize>>::new();
     for &b in blocks.iter().rev() {
         let mut cursor = f.layout.last_inst(b);
         while let Some(inst) = cursor {
             cursor = f.layout.prev_inst(inst);
             let op = f.dfg.insts[inst].opcode();
+            // Successors have already been sliced: a dead phi must not keep
+            // its incoming arithmetic alive on either predecessor.
+            if op.is_branch() {
+                let dfg = &mut f.dfg;
+                for edge in dfg.insts[inst]
+                    .branch_destination_mut(&mut dfg.jump_tables, &mut dfg.exception_tables)
+                {
+                    if let Some(indices) = unused.get(&edge.block(&dfg.value_lists)) {
+                        for &idx in indices {
+                            edge.remove(idx, &mut dfg.value_lists);
+                        }
+                    }
+                }
+            }
             if !op.is_terminator()
                 && (!op.is_call() || pure_calls.contains_key(&inst))
                 && !op.can_store()
@@ -58,6 +73,19 @@ pub(super) fn simplify(f: &mut Function, pure_calls: &HashMap<Inst, (usize, usiz
                 f.layout.remove_inst(inst);
             } else {
                 live.extend(f.dfg.inst_values(inst));
+            }
+        }
+        if Some(b) != f.layout.entry_block() {
+            let params = f.dfg.block_params(b).to_vec();
+            let mut indices = Vec::new();
+            for (idx, v) in params.into_iter().enumerate().rev() {
+                if !live.contains(&v) {
+                    f.dfg.remove_block_param(v);
+                    indices.push(idx);
+                }
+            }
+            if !indices.is_empty() {
+                unused.insert(b, indices);
             }
         }
     }

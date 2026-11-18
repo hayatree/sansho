@@ -83,7 +83,10 @@ struct Column {
 #[derive(Debug, Default)]
 struct Plan {
     cols: Vec<Column>,
-    scatter: Vec<usize>,
+    // CSC entries that were zero when the symbolic update schedule was recorded.
+    zero_mask: Vec<u64>,
+    input: Vec<(usize, usize)>,
+    updates: Vec<Range<usize>>,
     lower_row: Vec<usize>,
     lower: Vec<f64>,
     upper_row: Vec<usize>,
@@ -100,6 +103,7 @@ struct Sparse {
     stack: MemBuffer,
     work: Vec<f64>,
     plan: Plan,
+    peak_index: usize,
 }
 
 impl std::fmt::Debug for Sparse {
@@ -139,8 +143,11 @@ impl Sparse {
             row: vec![0; n],
             inverse: vec![0; n],
             stack,
-            work: vec![0.; n],
+            // A byte addresses the whole small-system workspace. This permits
+            // bounds-check-free indexed updates without unsafe memory access.
+            work: vec![0.; n.max(256)],
             plan: Plan::default(),
+            peak_index: 0,
         }))
     }
 
@@ -151,18 +158,39 @@ impl Sparse {
                 actual: values.len(),
             });
         }
-        // The signless IEEE encoding orders finite magnitudes below infinities and NaNs.
-        let peak = f64::from_bits(values.iter().map(|x| x.abs().to_bits()).max().unwrap_or(0));
+        // A single entry gives a lower bound for the input peak. Every active
+        // entry flows to a checked pivot, U or L candidate through only sums
+        // and products. A successful refactor therefore also proves finiteness.
+        if !self.plan.cols.is_empty() {
+            let floor = values[self.peak_index].abs();
+            if floor.is_finite()
+                && self
+                    .plan
+                    .refactor(values, &mut self.work, (floor * 1e8).min(f64::MAX))
+            {
+                return Ok(());
+            }
+        }
+        let Some((index, peak)) = values
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, x)| x.abs().to_bits())
+        else {
+            return Err(SolverError::Singular { column: None });
+        };
         if !peak.is_finite() {
             return Err(SolverError::Backend("non-finite matrix entry".into()));
         }
-        if !self.plan.cols.is_empty()
+        if index != self.peak_index
+            && !self.plan.cols.is_empty()
             && self
                 .plan
-                .refactor(values, &mut self.work, (peak * 1e8).min(f64::MAX))
+                .refactor(values, &mut self.work, (peak.abs() * 1e8).min(f64::MAX))
         {
+            self.peak_index = index;
             return Ok(());
         }
+        self.peak_index = index;
         let a = SparseColMatRef::new(self.matrix.as_ref(), values);
         let perm = self.order.col_perm();
         simplicial::factorize_simplicial_numeric_lu(
@@ -191,16 +219,22 @@ impl Sparse {
         let p = &self.plan;
         for (j, c) in p.cols.iter().enumerate() {
             let v = x[j];
-            for k in c.lower.clone() {
-                x[p.lower_row[k]] -= p.lower[k] * v;
-            }
+            subtract_rows(
+                x,
+                &p.lower_row[c.lower.clone()],
+                &p.lower[c.lower.clone()],
+                v,
+            );
         }
         for (j, c) in p.cols.iter().enumerate().rev() {
-            let v = x[j] * (1. / p.diagonal[j]);
+            let v = x[j] * p.diagonal[j];
             x[j] = v;
-            for k in c.upper.clone() {
-                x[p.upper_row[k]] -= p.upper[k] * v;
-            }
+            subtract_rows(
+                x,
+                &p.upper_row[c.upper.clone()],
+                &p.upper[c.upper.clone()],
+                v,
+            );
         }
         for (&v, &r) in x.iter().zip(self.order.col_perm().arrays().0) {
             rhs[r] = v;
@@ -213,6 +247,19 @@ impl Sparse {
     }
 }
 
+#[inline]
+fn subtract_rows(x: &mut [f64], rows: &[usize], factors: &[f64], value: f64) {
+    if let Ok(small) = <&mut [f64; 256]>::try_from(&mut *x) {
+        for (&r, &factor) in rows.iter().zip(factors) {
+            small[usize::from(r as u8)] -= factor * value;
+        }
+    } else {
+        for (&r, &factor) in rows.iter().zip(factors) {
+            x[r] -= factor * value;
+        }
+    }
+}
+
 impl Plan {
     fn record(
         &mut self,
@@ -221,75 +268,156 @@ impl Plan {
         inverse: &[usize],
         lu: &simplicial::SimplicialLu<usize, f64>,
     ) {
+        let dump =
+            self.cols.is_empty() && std::env::var("SPX_PROFILE_MATRIX").as_deref() == Ok("entries");
+        if dump {
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "spx-csc {:?} {:?} {:?}",
+                a.symbolic().col_ptr(),
+                a.symbolic().row_idx(),
+                a.val()
+            );
+        }
         self.cols.clear();
         self.lower_row.clear();
         self.lower.clear();
         self.upper_row.clear();
         self.upper.clear();
         self.diagonal.clear();
-        self.scatter.clear();
-        self.scatter
-            .extend(a.symbolic().row_idx().iter().map(|&i| inverse[i]));
+        self.input.clear();
+        self.zero_mask.resize(a.val().len(), u64::MAX);
+        for (mask, &v) in self.zero_mask.iter_mut().zip(a.val()) {
+            if v.to_bits() != 0 {
+                *mask = 0;
+            }
+        }
+        self.updates.clear();
         let l = lu.l_factor_unsorted();
         let u = lu.u_factor_unsorted();
+        // Overflow in fresh pivoting can contaminate even structural zeroes
+        // through 0 * infinity. Keep those entries for the singular solve.
+        if (0..order.len()).any(|j| {
+            l.val_of_col(j)
+                .iter()
+                .chain(u.val_of_col(j))
+                .any(|v| !v.is_finite())
+        }) {
+            self.zero_mask.fill(0);
+        }
+        let mut present = vec![false; order.len()];
         for (j, &orig) in order.iter().enumerate() {
-            let lower = self.lower.len();
-            let upper = self.upper.len();
-            for (i, &v) in l.row_idx_of_col(j).zip(l.val_of_col(j)) {
-                if i != j {
-                    self.lower_row.push(i);
-                    self.lower.push(v);
+            let start = self.input.len();
+            for k in a.symbolic().col_range(orig) {
+                if self.zero_mask[k] == 0 {
+                    let r = inverse[a.symbolic().row_idx()[k]];
+                    present[r] = true;
+                    self.input.push((k, r));
                 }
             }
-            let mut diag = 0.;
+            // Each reached upper entry updates exactly the lower column recorded
+            // for its pivot. Keep faer's visitation order for every subtraction.
+            let upper = self.upper.len();
             for (i, &v) in u.row_idx_of_col(j).zip(u.val_of_col(j)) {
-                if i == j {
-                    diag = v;
-                } else {
+                if i != j && present[i] {
+                    present[i] = false;
+                    let rows = self.cols[i].lower.clone();
+                    for &r in &self.lower_row[rows.clone()] {
+                        present[r] = true;
+                    }
+                    self.updates.push(rows);
                     self.upper_row.push(i);
                     self.upper.push(v);
                 }
             }
-            self.diagonal.push(diag);
+            let lower = self.lower.len();
+            for (i, &v) in l.row_idx_of_col(j).zip(l.val_of_col(j)) {
+                if i != j && present[i] {
+                    present[i] = false;
+                    self.lower_row.push(i);
+                    self.lower.push(v);
+                }
+            }
+            present[j] = false;
+            let diag = u
+                .row_idx_of_col(j)
+                .zip(u.val_of_col(j))
+                .find_map(|(i, &v)| (i == j).then_some(v))
+                .unwrap_or(0.);
+            self.diagonal.push(1. / diag);
             self.cols.push(Column {
-                input: a.symbolic().col_range(orig),
+                input: start..self.input.len(),
                 lower: lower..self.lower.len(),
                 upper: upper..self.upper.len(),
             });
         }
+        if std::env::var_os("SPX_PROFILE_MATRIX").is_some() {
+            let n = order.len();
+            let nnz = a.val().len();
+            let full: usize = (0..n)
+                .map(|j| l.val_of_col(j).len() + u.val_of_col(j).len() - 1)
+                .sum();
+            let active = self.lower.len() + self.upper.len() + n;
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "spx-matrix n={n} A={nnz} LU={full} fill={} active_A={} active_LU={active}",
+                full - nnz,
+                self.input.len()
+            );
+        }
     }
 
     fn refactor(&mut self, values: &[f64], x: &mut [f64], growth_limit: f64) -> bool {
+        if self
+            .zero_mask
+            .iter()
+            .zip(values)
+            .fold(0, |bits, (&mask, v)| bits | (mask & v.to_bits()))
+            != 0
+        {
+            return false;
+        }
         x.fill(0.);
         for (j, c) in self.cols.iter().enumerate() {
-            for k in c.input.clone() {
-                x[self.scatter[k]] = values[k];
+            for &(src, dst) in &self.input[c.input.clone()] {
+                x[dst] = values[src];
             }
-            for k in c.upper.clone() {
-                let i = self.upper_row[k];
+            for ((&i, u), update) in self.upper_row[c.upper.clone()]
+                .iter()
+                .zip(&mut self.upper[c.upper.clone()])
+                .zip(&self.updates[c.upper.clone()])
+            {
                 let v = std::mem::take(&mut x[i]);
-                if !v.is_finite() || v.abs() > growth_limit {
+                if v.abs().to_bits() > growth_limit.to_bits() {
                     return false;
                 }
-                self.upper[k] = v;
-                for h in self.cols[i].lower.clone() {
-                    x[self.lower_row[h]] -= self.lower[h] * v;
-                }
+                *u = v;
+                subtract_rows(
+                    x,
+                    &self.lower_row[update.clone()],
+                    &self.lower[update.clone()],
+                    v,
+                );
             }
             let diag = std::mem::take(&mut x[j]);
             if !diag.is_normal() || diag.abs() > growth_limit {
                 return false;
             }
-            self.diagonal[j] = diag;
             let reciprocal = 1. / diag;
-            for k in c.lower.clone() {
-                let v = std::mem::take(&mut x[self.lower_row[k]]);
+            self.diagonal[j] = reciprocal;
+            for (&r, l) in self.lower_row[c.lower.clone()]
+                .iter()
+                .zip(&mut self.lower[c.lower.clone()])
+            {
+                let v = std::mem::take(&mut x[r]);
                 // A tie may have a different first candidate in the pivot search.
                 // Bounding every multiplier also catches growth that invalidates the saved pivot.
-                if !v.is_finite() || v.abs() >= diag.abs() {
+                if v.abs().to_bits() >= diag.abs().to_bits() {
                     return false;
                 }
-                self.lower[k] = v * reciprocal;
+                *l = v * reciprocal;
             }
         }
         true
@@ -345,6 +473,36 @@ mod tests {
                 "assembly {iter}"
             );
         }
+        // Entries can become active after the plan has been recorded.
+        let mut a = vec![0.; pattern.nnz()];
+        for col in 0..9 {
+            let entries = pattern.col_ptr()[col]..pattern.col_ptr()[col + 1];
+            for (&row, value) in pattern.row_idx()[entries.clone()]
+                .iter()
+                .zip(&mut a[entries])
+            {
+                if row == col {
+                    *value = 3.;
+                }
+            }
+        }
+        let mut sparse = NewtonLu::new(&pattern).unwrap();
+        for k in 0..a.len() {
+            if a[k] == 0. {
+                a[k] = 0.125;
+            }
+            for _ in 0..2 {
+                let mut x = [1.; 9];
+                let mut reference = x;
+                sparse.factor(&a).unwrap();
+                sparse.solve(&mut x).unwrap();
+                original.factor(&a).unwrap();
+                original.solve(&mut reference).unwrap();
+                assert_eq!(x.map(f64::to_bits), reference.map(f64::to_bits));
+            }
+        }
+        a[0] = f64::INFINITY;
+        assert!(sparse.factor(&a).is_err());
         assert!(solver.factor(&[f64::NAN]).is_err());
         assert!(solver.solve(&mut [0.; 9]).is_err());
     }

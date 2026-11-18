@@ -178,3 +178,15 @@ masked SIMD execution through Cranelift's public IR and host-ISA APIs. Scalar ma
 uses the existing spx shims. Instance pairing, ordered stamp assembly, local model
 card reuse and the timing probes are original work. The IHP models served as test
 inputs. Dependency and licensing inventories are unchanged.
+
+### Verilog-A optimization round 4
+
+The numeric-support traversal and flat column update lists extend the Gilbert–Peierls
+implementation described above. The ordering experiment implements the pivot cost
+from H. M. Markowitz, *The Elimination Form of the Inverse and Its Application to
+Linear Programming* (1957), with a column-relative numerical threshold. It uses
+matrices assembled by this simulator. The guarded SIMD specialization uses speculative
+constant propagation, SSA liveness and replay through the existing scalar evaluator.
+The block sampler uses Cranelift's public block map, POSIX interval timers and Linux
+signal contexts. All implementations are original. The model files served as inputs,
+and no new dependencies were introduced.

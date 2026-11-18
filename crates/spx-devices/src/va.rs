@@ -144,6 +144,19 @@ impl VaGroup {
         }
     }
 
+    /// Pass ground-referenced DC sources to the pure-kernel branch predictor.
+    #[cfg(feature = "jit")]
+    pub fn predict_bias(&mut self, rails: &[Option<f64>], range: [f64; 2]) {
+        for i in &mut self.instances {
+            let bias: Vec<_> = i
+                .ports
+                .iter()
+                .map(|r| r.and_then(|n| rails.get(n).copied().flatten()))
+                .collect();
+            i.bound.predict_bias(&bias, range);
+        }
+    }
+
     /// Match equal specializations within this chunk without changing stamp order.
     #[cfg(feature = "jit")]
     pub fn prepare_pairs(&mut self, temperature: f64) {
@@ -250,20 +263,26 @@ impl VaGroup {
                     if !ok {
                         continue;
                     }
-                    for (lane, id) in [a, b].into_iter().enumerate() {
-                        let buf = &mut instances[id];
+                    let Ok([left, right]) = instances.get_disjoint_mut([a, b]) else {
+                        continue;
+                    };
+                    for buf in [&mut *left, &mut *right] {
                         buf.paired = true;
                         buf.previous = (!ctx.limit).then_some(key);
-                        buf.values.clear();
-                        buf.values.extend(packed_x.iter().skip(lane).step_by(2));
-                        for (dst, src) in [
-                            (&mut buf.cached.f, &packed_output.f),
-                            (&mut buf.cached.q, &packed_output.q),
-                            (&mut buf.cached.df, &packed_output.df),
-                            (&mut buf.cached.dq, &packed_output.dq),
-                        ] {
-                            dst.clear();
-                            dst.extend(src.iter().skip(lane).step_by(2));
+                    }
+                    for (first, second, src) in [
+                        (&mut left.values, &mut right.values, &*packed_x),
+                        (&mut left.cached.f, &mut right.cached.f, &packed_output.f),
+                        (&mut left.cached.q, &mut right.cached.q, &packed_output.q),
+                        (&mut left.cached.df, &mut right.cached.df, &packed_output.df),
+                        (&mut left.cached.dq, &mut right.cached.dq, &packed_output.dq),
+                    ] {
+                        let (pairs, _) = src.as_chunks::<2>();
+                        first.resize(pairs.len(), 0.);
+                        second.resize(pairs.len(), 0.);
+                        for ((a, b), &[x, y]) in first.iter_mut().zip(second).zip(pairs) {
+                            *a = x;
+                            *b = y;
                         }
                     }
                 }

@@ -950,3 +950,19 @@ fn packed_instances_match_individual_stamps_on_divergent_paths() {
     assert!(!pair.evaluate(&[1., 2., 0., 0., 1., 0.], 1e-12, &mut packed));
     assert!(!pair.evaluate(&[f64::NAN, 2., 0., 0., 0., 0.], 1e-12, &mut packed));
 }
+
+#[cfg(feature = "jit")]
+#[test]
+fn packed_prediction_replays_only_for_an_active_mismatch() {
+    // The inner threshold lies beyond the predictor's training biases.
+    let module = compile(
+        "module m(p,q); electrical p,q; analog begin if(V(q)>0) begin if(V(p)>200) I(p)<+2*V(p); else I(p)<+V(p); end end endmodule",
+    );
+    let mut bound = module.bind(&[]).unwrap();
+    bound.specialize_stamp(&[Some(0), Some(1)], false);
+    let pair = module.prepare_circuit_pair(&bound, 300.).unwrap();
+    let mut stamp = EvalOutput::default();
+    assert!(pair.evaluate(&[250., 1., -1., 1.], 1e-12, &mut stamp));
+    assert_eq!(&stamp.f[..2], &[0., 1.]);
+    assert!(!pair.evaluate(&[250., 1., 1., 1.], 1e-12, &mut stamp));
+}

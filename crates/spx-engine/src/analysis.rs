@@ -551,6 +551,9 @@ fn lte_ratio(
             hist.q[1][i],
             hist.q.get(2).map_or(0.0, |q| q[i]),
         ];
+        if qs[0] == qs[1] && qs[1] == qs[2] && (order == 1 || qs[2] == qs[3]) {
+            continue;
+        }
         let d1 = [
             (qs[0] - qs[1]) / (ts[0] - ts[1]),
             (qs[1] - qs[2]) / (ts[1] - ts[2]),
@@ -746,8 +749,8 @@ pub(crate) fn tran(
             hist.clear();
         }
         hist.push(t, &ws.asm.q);
-        qdot.copy_from_slice(&qdot_new);
-        x.copy_from_slice(&x_new);
+        std::mem::swap(&mut qdot, &mut qdot_new);
+        std::mem::swap(&mut x, &mut x_new);
         record(t, &x, &mut times, &mut cols);
         h *= grow;
         if hit_bp {
