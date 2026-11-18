@@ -54,6 +54,8 @@ When in doubt, ask in an issue before writing code.
 
 - All code, comments, documentation and commit messages are in English.
 - `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test` must pass.
+- Run the local CI before merging to main: `tools/ci.sh` (full) or `tools/ci.sh --quick`
+  (fmt, clippy, tests). GitHub Actions runs only on pushes to main and on demand.
 - The library must not panic: return `Result` instead of using `unwrap`/`expect`/`panic!`.
 
 ## 6. Sign-off

@@ -1,9 +1,10 @@
 name: CI
 
+# Runs only when changes land on main (and on demand). Day-to-day checks run
+# locally with tools/ci.sh, which is a superset of this workflow.
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 env:
@@ -17,9 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS (10x) and Windows (2x) minutes are expensive on private repositories:
-        # pull requests run Linux only; pushes to main and manual runs cover all three.
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
