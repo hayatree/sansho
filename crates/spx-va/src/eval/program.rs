@@ -10,6 +10,8 @@ pub(crate) use jit::Cache;
 mod optimize;
 use super::*;
 use crate::math::Math;
+#[cfg(feature = "jit")]
+pub(crate) use history::has_startup;
 pub(crate) use history::history;
 use std::collections::{HashMap, HashSet};
 
@@ -32,7 +34,7 @@ enum Op {
     History(Reg, usize, bool),
     Ddx(Reg, Reg, usize),
     CheckZeroProduct(Reg, bool),
-    Noise(Reg),
+
     IntegralInitial(Reg),
     LimitEnabled(Reg),
     Event(Reg, bool, bool),
@@ -94,6 +96,8 @@ struct Builder<'a> {
     constants: HashMap<u64, Reg>,
     known: Vec<Option<f64>>,
     cse: HashMap<(Math, Reg, Reg), Reg>,
+    inserted: Vec<(Math, Reg, Reg)>,
+    voltages: Vec<Reg>,
     ops: Vec<Op>,
 }
 impl Builder<'_> {
@@ -127,6 +131,7 @@ impl Builder<'_> {
         let r = self.reg();
         self.ops.push(Op::Math(r, op, a, b));
         self.cse.insert((op, a, b), r);
+        self.inserted.push((op, a, b));
         r
     }
     // On a nonreactive path the charge channel vanishes. IEEE multiplication
@@ -171,12 +176,13 @@ impl Builder<'_> {
         v
     }
     fn voltage(&mut self, i: Option<usize>) -> Reg {
-        if let Some(j) = i.and_then(|i| self.b.layout.index(i)) {
-            let r = self.reg();
-            self.ops.push(Op::Unknown(r, j));
-            r
-        } else {
-            self.num(0.)
+        i.and_then(|i| self.b.layout.index(i))
+            .map(|j| self.voltages[j])
+            .unwrap_or_else(|| self.num(0.))
+    }
+    fn leave_arm(&mut self, start: usize) {
+        for key in self.inserted.drain(start..) {
+            self.cse.remove(&key);
         }
     }
     fn cond(
@@ -188,6 +194,7 @@ impl Builder<'_> {
         if let Some(v) = self.known[c] {
             return if v != 0. { a(self) } else { b(self) };
         }
+        let dominating = self.inserted.len();
         let old = self.vars.clone();
         let branch = self.ops.len();
         self.ops.push(Op::IfFalse(c, 0));
@@ -195,11 +202,11 @@ impl Builder<'_> {
         let then = std::mem::replace(&mut self.vars, old);
         let end = self.ops.len();
         self.ops.push(Op::Jump(0));
-        self.cse.clear();
+        self.leave_arm(dominating);
         self.ops[branch] = Op::IfFalse(c, self.ops.len());
         let y = b(self)?;
         self.ops[end] = Op::Jump(self.ops.len());
-        self.cse.clear();
+        self.leave_arm(dominating);
         for (i, a) in then.into_iter().enumerate() {
             let b = self.vars[i];
             if a != b {
@@ -438,11 +445,7 @@ impl Builder<'_> {
                     });
                     r
                 }
-                "white_noise" | "flicker_noise" | "noise_table" => {
-                    let r = self.reg();
-                    self.ops.push(Op::Noise(r));
-                    r
-                }
+                "white_noise" | "flicker_noise" | "noise_table" => z,
                 _ => {
                     let op = Math::named(name)?;
                     let a = self.expr(args.first()?)?;
@@ -722,7 +725,7 @@ impl Program {
         input: &EvalInput<'_>,
         compact_charge: bool,
     ) -> Option<Self> {
-        Self::compile_channels(m, b, input, compact_charge, false)
+        Self::compile_channels(m, b, input, compact_charge, false, false)
     }
     fn compile_channels(
         m: &CompiledModule,
@@ -730,6 +733,7 @@ impl Program {
         input: &EvalInput<'_>,
         compact_charge: bool,
         canonical_charge: bool,
+        project_stamp: bool,
     ) -> Option<Self> {
         let mut builder = Builder {
             m,
@@ -745,10 +749,17 @@ impl Program {
             constants: HashMap::new(),
             known: vec![],
             cse: HashMap::new(),
+            inserted: Vec::new(),
+            voltages: Vec::new(),
             ops: vec![],
         };
         for i in 0..m.slots {
             builder.load(i);
+        }
+        for j in 0..b.layout.unknown_len() {
+            let r = builder.reg();
+            builder.ops.push(Op::Unknown(r, j));
+            builder.voltages.push(r);
         }
         let z = builder.num(0.);
         let zero = builder.scalar(z);
@@ -803,6 +814,22 @@ impl Program {
                 builder.ops.push(Op::Remember(i, v, builder.types[i]))
             }
         }
+        #[cfg(not(feature = "jit"))]
+        let _ = project_stamp;
+        #[cfg(feature = "jit")]
+        if project_stamp && let Some(circuit) = &b.circuit {
+            // Slice the equation graph before charge simplification introduces
+            // guards. Preserve callbacks, limiter effects and retained stores.
+            for op in &mut builder.ops {
+                if let Op::Stamp(row, pair, _) = op {
+                    if circuit.wires[*row].is_none() {
+                        *op = Op::Nop;
+                    } else if circuit.dc {
+                        pair.q = z;
+                    }
+                }
+            }
+        }
         Some(Self::finish(builder, b.layout.unknown_len() + 1))
     }
 }
@@ -812,7 +839,7 @@ pub(super) fn evaluate(
     b: &Bound,
     input: &EvalInput<'_>,
     scratch: &mut Scratch,
-    out: &mut EvalOutput,
+    out: &mut EvalStamp<'_>,
     state: &mut StateIo<'_>,
 ) -> bool {
     let key = (input.temperature.to_bits(), input.mfactor.to_bits());

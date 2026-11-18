@@ -109,7 +109,8 @@ const CHUNK_LINEAR: usize = 1024;
 /// Instances per chunk of a nonlinear device group.
 const CHUNK_NONLINEAR: usize = 64;
 /// Interpreted models have substantially more work per instance than built-in devices.
-const CHUNK_VA: usize = 2;
+const CHUNK_VA_SMALL: usize = 2;
+const CHUNK_VA_LARGE: usize = 6;
 const PARALLEL_MIN_VA: usize = 8;
 /// Minimum number of nonlinear instances for parallel evaluation.
 const PARALLEL_MIN_NONLINEAR: usize = 256;
@@ -424,7 +425,13 @@ pub fn compile(
     opts: &SimOptions,
 ) -> Result<(Circuit, Vec<Diagnostic>), Vec<Diagnostic>> {
     let va_modules = compile_hdl(nl, opts.va_cache)?;
-    compile_cached(nl, opts, &va_modules)
+    let dc_only = nl.analyses.iter().all(|a| {
+        matches!(
+            a,
+            spx_netlist::AnalysisCard::Dc { .. } | spx_netlist::AnalysisCard::Op { .. }
+        )
+    });
+    compile_cached(nl, opts, &va_modules, dc_only)
 }
 
 /// Re-elaborate with immutable compiled modules shared by all analyses of this run.
@@ -432,7 +439,10 @@ pub(crate) fn compile_cached(
     nl: &Netlist,
     opts: &SimOptions,
     va_modules: &BTreeMap<String, Arc<spx_va::CompiledModule>>,
+    dc_only: bool,
 ) -> Result<(Circuit, Vec<Diagnostic>), Vec<Diagnostic>> {
+    #[cfg(not(feature = "jit"))]
+    let _ = dc_only;
     let mut diags: Vec<Diagnostic> = Vec::new();
 
     // --- Node numbering (order of first appearance, ground excluded) ---
@@ -476,6 +486,16 @@ pub(crate) fn compile_cached(
 
     let binding = spx_diag::Phase::start("bind");
     let mut errors = Vec::new();
+    let va_instances = nl
+        .elements
+        .iter()
+        .filter(|e| matches!(e.kind, ElementKind::Va { .. }))
+        .count();
+    let va_chunk = if va_instances >= 32 {
+        CHUNK_VA_LARGE
+    } else {
+        CHUNK_VA_SMALL
+    };
     for e in &nl.elements {
         if let ElementKind::Va {
             nodes,
@@ -551,7 +571,7 @@ pub(crate) fn compile_cached(
             };
             let group = va
                 .entry(card.kind.clone())
-                .or_insert_with(|| Chunked::new(CHUNK_VA));
+                .or_insert_with(|| Chunked::new(va_chunk));
             let chunk = group.cur();
             match chunk.push(
                 Arc::clone(module),
@@ -574,38 +594,6 @@ pub(crate) fn compile_cached(
     let va_count = nonlinear_count;
     if !errors.is_empty() {
         return Err(errors);
-    }
-    #[cfg(feature = "jit")]
-    if !va.is_empty() {
-        let _phase = spx_diag::Phase::start("jit_wall");
-        let enabled = opts.va_jit && spx_va::jit_enabled();
-        let kelvin = opts.temp + 273.15;
-        let origins: HashMap<_, _> = nl
-            .elements
-            .iter()
-            .map(|e| (e.name.as_str(), e.span))
-            .collect();
-        let mut seen = HashSet::new();
-        let mut jobs = Vec::new();
-        for chunk in va
-            .values_mut()
-            .flat_map(|v| v.done.iter_mut().chain([&mut v.cur]))
-        {
-            for (module, bound, name) in chunk.jit_bindings(enabled) {
-                if enabled && seen.insert((&module.name, bound.specialization_key(kelvin, 1.))) {
-                    jobs.push((module, bound, name));
-                }
-            }
-        }
-        use rayon::prelude::*;
-        let results: Vec<_> = jobs
-            .par_iter()
-            .map(|&(m, b, name)| {
-                m.prepare_jit(b, kelvin, 1.)
-                    .map(|d| d.with_span(origins[name]))
-            })
-            .collect();
-        diags.extend(results.into_iter().flatten());
     }
     let mut aliases = Vec::new();
     if !va.is_empty() {
@@ -655,6 +643,39 @@ pub(crate) fn compile_cached(
         }
         node_names = new_names;
         touches = counts;
+    }
+    #[cfg(feature = "jit")]
+    if !va.is_empty() {
+        let _phase = spx_diag::Phase::start("jit_wall");
+        let enabled = opts.va_jit && spx_va::jit_enabled();
+        let kelvin = opts.temp + 273.15;
+        let origins: HashMap<_, _> = nl
+            .elements
+            .iter()
+            .map(|e| (e.name.as_str(), e.span))
+            .collect();
+        let mut seen = HashSet::new();
+        let mut jobs = Vec::new();
+        for chunk in va
+            .values_mut()
+            .flat_map(|v| v.done.iter_mut().chain([&mut v.cur]))
+        {
+            chunk.specialize_stamps(dc_only);
+            for (module, bound, name) in chunk.jit_bindings(enabled) {
+                if enabled && seen.insert((&module.name, bound.specialization_key(kelvin, 1.))) {
+                    jobs.push((module, bound, name));
+                }
+            }
+        }
+        use rayon::prelude::*;
+        let results: Vec<_> = jobs
+            .par_iter()
+            .map(|&(m, b, name)| {
+                m.prepare_jit(b, kelvin, 1.)
+                    .map(|d| d.with_span(origins[name]))
+            })
+            .collect();
+        diags.extend(results.into_iter().flatten());
     }
     if !grounded {
         return Err(vec![

@@ -178,13 +178,18 @@ fn run_analysis(
         && !matches!(card, AnalysisCard::Dc { .. })
     {
         Some(
-            circuit::compile_cached(nl, opts, &ckt.va_modules)
-                .map_err(|ds| {
-                    ds.into_iter().next().unwrap_or_else(|| {
-                        Diagnostic::error("E-ELAB-INTERNAL", "VA analysis elaboration failed")
-                    })
-                })?
-                .0,
+            circuit::compile_cached(
+                nl,
+                opts,
+                &ckt.va_modules,
+                matches!(card, AnalysisCard::Op { .. }),
+            )
+            .map_err(|ds| {
+                ds.into_iter().next().unwrap_or_else(|| {
+                    Diagnostic::error("E-ELAB-INTERNAL", "VA analysis elaboration failed")
+                })
+            })?
+            .0,
         )
     } else {
         None
@@ -200,7 +205,7 @@ fn run_analysis(
             ..
         } => {
             // A sweep modifies a source value, so it works on its own copy of the circuit.
-            let mut own = circuit::compile_cached(nl, opts, &ckt.va_modules)
+            let mut own = circuit::compile_cached(nl, opts, &ckt.va_modules, true)
                 .map_err(|d| {
                     d.into_iter().next().unwrap_or_else(|| {
                         Diagnostic::error("E-ELAB-INTERNAL", "recompilation failed")

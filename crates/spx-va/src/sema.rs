@@ -380,6 +380,14 @@ fn lower(m: &ast::Module, potentials: BTreeSet<String>) -> R<CompiledModule> {
         kernels: Default::default(),
         #[cfg(feature = "jit")]
         artifact: None,
+        #[cfg(feature = "jit")]
+        direct_start: history.is_empty()
+            && l.states == 0
+            && functions.is_empty()
+            && variables
+                .iter()
+                .all(|(_, v)| v.ty != Ty::String && v.init.is_none() && v.dimensions.is_empty())
+            && !body.iter().any(crate::eval::program::has_startup),
         history,
         optional_ports: l.optional_ports,
         param_index,

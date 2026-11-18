@@ -774,3 +774,164 @@ decks and ring21 matched on cold and warm runs. Single-worker and default
 cold runs also produced identical artifact filenames and bytes. Cache tests
 cover concurrent publication, separate corruption of each layer, changed
 includes, both disable switches and restored multi-function code.
+
+## 15. Optimization round 2 — device evaluation and Newton assembly
+
+### Work per iteration
+
+The circuit adapter supplies the bound model's ground connections and tied terminals
+to the compiler after net remapping. A voltage difference between equal, finite nodes
+has a known zero primal. Each ungrounded terminal keeps its own derivative column
+because the ordered matrix gather can observe the rounding of their separate stamps.
+The circuit connections and requested DC stamp participate in both cache keys. An
+entry check sends incompatible inputs through the full evaluator.
+
+The register compiler slices unobserved rows and DC reactive outputs before charge
+simplification, retaining effects such as simulator queries and history updates.
+It shares voltage loads and dominating arithmetic across branches. Backward liveness
+starts at the stamps, charge checks and individual `ddx` reads. Simple two-way joins
+copy their selected inputs on the incoming edges. The compiler can discharge a
+finiteness check from facts valid on that same edge. Fixed predicates from terminal
+ties eliminate unreachable instructions. Simulator callbacks keep their original indices.
+
+In stateless circuit kernels with up to 16 unknowns, a greedy matching pairs tangent
+columns by how often they occur together. Packed double instructions evaluate their
+two independent chains in the original operation order. Sparse inputs keep scalar
+partials. The kernel uses hardware square root, reuses primal math results and reloads
+frame fields and constants after math calls. Finite-output checks and exceptional-value
+replay still apply. A first call can use a prepared specialization when the compiler
+establishes that there are no startup events, functions, live-in variables, limiter
+state or nontrivial variable declarations. The general evaluator can initialize its
+own storage later if necessary.
+
+Newton gathers the resistive system for a static solve. OP and DC sweep kernels omit
+charge-only chains. Transient initialization and AC linearization still have access to
+the full coupled kernel. After transient convergence the simulator evaluates charge at
+the updated solution and gathers only the charge vector. A stateless kernel whose
+remaining runtime inputs are bias and simulator parameters can reuse that complete
+stamp at the next identical bias. The adapter checks voltage, temperature and gmin
+bits, uses its fixed simulator query callback and invalidates the result on rebinding.
+Time-dependent, event-dependent and history-dependent kernels continue to evaluate.
+Ordinary evaluations borrow the instance's final slot slices directly.
+
+The five-stage and 21-stage rings each take two Newton iterations on four transient
+steps and three iterations on the other 302. The time-zero operating point adds
+three iterations. Newton already stops after the converged update. A separate
+experiment used the preceding linearization's charges for accepted history. In
+seven interleaved ring21 pairs its median was 289.6 ms versus 296.6 ms with exact
+charge sampling. On the HEAD time grid, linear interpolation of that experimental
+waveform gave maximum deviations of 40.81 µV at inverter `v(out)`, 9.35 µV at
+ring5 `v(n0)` and 9.85 µV at ring21 `v(n0)`. The cached inverter comparison had
+a maximum voltage difference of 7.999 mV from the oracle. The production implementation
+keeps exact charge sampling and the original convergence test.
+
+Faer computes its symbolic ordering once per workspace. Each Newton update factors
+the new numeric matrix with pivoting. The two-instance VA chunks already ran in
+parallel at eight instances. Six-instance chunks on circuits with at least 32 VA
+instances reduce scheduling overhead. In a seven-pair chunk experiment ring21 default
+analysis fell from 184.2 to 141.1 ms. With eight workers the medians were 145.6
+and 146.4 ms. The ordered gather is independent of chunk boundaries.
+
+### Reproduction
+
+Build HEAD before applying this round and retain its executable at the path supplied
+to `--baseline`. Run from the repository root with the local IHP inputs installed.
+
+```sh
+cargo build --offline --release -p spx-cli --features jit
+python3 benches/run.py --baseline /tmp/spx-head --runs 7
+python3 benches/run.py --devices --runs 7
+python3 benches/compare.py /tmp/spx-head target/release/spx
+```
+
+The benchmark alternates HEAD and candidate launches for each deck and worker setting.
+External wall and instrumented analysis runs have separate private caches. Each cold
+sample starts empty, and its warm sample uses the resulting artifacts. For default
+workers a nearby uninstrumented HEAD run on one worker anchors the wall ratio to the
+maintainer's single-worker measurement. Hardware instruction counting was unavailable
+on this host (`perf_event_paranoid=4`).
+
+### Release measurements
+
+Seven interleaved pairs per deck, cache state and worker setting. Arrows go from
+`9d6711c` to round 2, in milliseconds. Reference times are the maintainer's
+ngspice 44.2 + OSDI measurements. The estimated analysis ratio multiplies the
+maintainer's analysis ratio by the measured new/HEAD analysis time. For wall,
+the multiplier is the measured new wall divided by the nearby single-worker
+HEAD wall. A ratio of 1.00× is parity.
+
+| Deck | ngspice analysis / elapsed | Warm analysis, -j1 | Speedup | Analysis / ref | Warm wall, -j1 | Wall / ref | Warm wall, default | Wall / ref |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| psp_nmos_idvg | 4.9 / 99 | 4.98 → 1.94 | 2.57× | 0.39× | 49.2 → 41.6 | 0.38× | 49.7 → 45.9 | 0.43× |
+| psp_inverter_dc | 6.3 / 103 | 10.77 → 4.38 | 2.46× | 0.59× | 68.6 → 58.2 | 0.56× | 66.4 → 59.0 | 0.57× |
+| psp_inverter_tran | 8.6 / 105 | 16.88 → 6.11 | 2.76× | 0.65× | 71.1 → 57.9 | 0.55× | 62.6 → 54.1 | 0.52× |
+| psp_ring5 | 35.4 / 136 | 139.90 → 60.29 | 2.32× | 1.77× | 209.2 → 121.9 | 0.89× | 147.6 → 113.7 | 0.83× |
+| psp_ring21 | 122.6 / 277 | 551.30 → 229.93 | 2.40× | 1.92× | 704.9 → 358.0 | 1.27× | 372.5 → 266.5 | 0.93× |
+
+| Deck | Warm default analysis | Cold -j1 wall | Cold default wall |
+|---|---:|---:|---:|
+| psp_nmos_idvg | 4.9 → 2.0 | 431.8 → 285.0 | 445.6 → 296.3 |
+| psp_inverter_dc | 10.8 → 4.5 | 644.5 → 396.3 | 474.8 → 338.4 |
+| psp_inverter_tran | 15.5 → 5.9 | 654.3 → 429.1 | 462.4 → 364.0 |
+| psp_ring5 | 75.9 → 52.7 | 777.5 → 500.1 | 540.7 → 416.3 |
+| psp_ring21 | 228.7 → 130.5 | 1257.9 → 719.0 | 770.9 → 556.5 |
+
+The default ring21 analysis runs in 130.5 ms against 229.9 ms on one worker.
+Startup adds roughly another 130 ms to its warm single-worker wall. The supplied
+ratios put single-worker analysis within reference on the first three decks,
+and warm default wall within reference on all five. Ring5 and ring21 still need
+1.77× and 1.92× faster single-worker analysis respectively. Ring21 also needs
+1.27× faster warm single-worker wall.
+
+Detailed `-j1` profiling used seven additional warm runs. The native timer surrounds
+the complete VA evaluator call, including its dispatch and output validation.
+A visit can reuse a stamp without calling the evaluator. The histogram gives
+iterations × number of DC points or transient steps and excludes the transient OP.
+The native, LU and analysis columns are from the same instrumented runs.
+
+| Deck | Device visits | Native calls | Exact reuses | ns/native call | Newton histogram | Native ms | LU factor + solve ms | Analysis ms |
+|---|---:|---:|---:|---:|---|---:|---:|---:|
+| psp_nmos_idvg | 317 | 317 | 0 | 3,108 | 2×46, 3×75 | 0.99 | 0.79 | 2.36 |
+| psp_inverter_dc | 740 | 740 | 0 | 3,567 | 2×1, 3×113, 4×6, 5×1 | 2.64 | 1.38 | 4.80 |
+| psp_inverter_tran | 1,396 | 960 | 436 | 3,833 | 2×183, 3×32, 4×3 | 3.68 | 1.60 | 7.03 |
+| psp_ring5 | 12,240 | 9,180 | 3,060 | 4,177 | 2×4, 3×302 | 38.34 | 18.96 | 65.76 |
+| psp_ring21 | 51,408 | 38,556 | 12,852 | 4,247 | 2×4, 3×302 | 163.75 | 52.39 | 243.86 |
+
+The full-vector driver matched HEAD on all ten IHP decks and the 21-stage ring,
+including internal vectors, timestamps and complex components. Cold one-worker
+and default runs produced identical cache artifacts. The cached verification
+suites passed 14/14 standard decks and 10/10 VA decks.
+
+### Native code and remaining work
+
+Seven interleaved warm ring5 runs per Cranelift setting, with backtracking
+allocation. Each byte pair is the size of the two native functions including
+their constant pools, smaller binding first. Stack references are static counts
+of stack-pointer-relative operands in the x86-64 image from `objdump -D -b binary
+-m i386:x86-64`. They include frame management and measure spill pressure.
+Retired instruction and spill counts require hardware counters.
+
+| Build | Opt level | Analysis ms | Bytes | Stack references |
+|---|---|---:|---:|---:|
+| HEAD | none | 140.32 | 287,264 / 287,776 | 13,289 / 13,296 |
+| HEAD | speed | 309.19 | 859,440 / 860,128 | 44,485 / 44,304 |
+| HEAD | speed_and_size | 305.44 | 859,440 / 860,128 | 44,485 / 44,304 |
+| Round 2 | none | 62.24 | 94,896 / 152,112 | 3,227 / 5,600 |
+| Round 2 | speed | 82.64 | 236,432 / 385,408 | 11,841 / 20,677 |
+| Round 2 | speed_and_size | 82.76 | 236,432 / 385,408 | 11,841 / 20,677 |
+
+The default remains `none`. Static call sites in the two default kernels fell
+from 220 / 221 to 90 / 95. A prototype that scheduled primal math ahead of
+the tangent chains within each basic block increased the ring21 median from
+294.8 to 309.9 ms and was discarded. An exploratory pair of flattened
+ring21 decks placed the same bindings consecutively or alternated them.
+With 917 Newton iterations in both cases, their respective analysis medians
+were 237.8 and 238.9 ms.
+
+Native evaluation still accounts for about 67% of the detailed ring21 time,
+and numeric LU and solve account for 21%. The next device experiment is to
+evaluate independent instances of one binding in SIMD lanes. It will need
+per-instance branch masks and exact scalar math on divergent or exceptional
+lanes. On the solver side, measure numeric storage reuse and guarded reuse of
+the pivot order against the existing faer factorization. Compare every vector
+when changing pivot decisions or floating-point operation order.

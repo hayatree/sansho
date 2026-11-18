@@ -170,6 +170,8 @@ CompiledModule, CompiledModuleImage, "CompiledModule" {
     pub(crate) functions: Vec<Function>,
     pub(crate) body: Vec<Stmt>,
     pub(crate) history: Vec<usize>,
+    #[cfg(feature = "jit")]
+    pub(crate) direct_start: bool,
     pub(crate) slots: usize,
     pub(crate) function_writes: std::collections::BTreeSet<usize>,
     pub(crate) states: usize,

@@ -67,7 +67,7 @@ impl<'a> Frame<'a> {
         input: &'a EvalInput<'_>,
         b: &Bound,
         state: &'a mut StateIo<'_>,
-        out: &'a mut EvalOutput,
+        out: &'a mut EvalStamp<'_>,
         constants: &'a [f64],
         history: &'a mut [f64],
         queries: &'a mut Queries<'_>,

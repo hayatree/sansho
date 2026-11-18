@@ -15,6 +15,13 @@ use cranelift_module::{Module, default_libcall_names};
 use std::mem::offset_of;
 use std::ops::Range;
 
+#[derive(Clone, Copy)]
+pub(super) enum Partial {
+    Scalar(Variable),
+    Constant(f64),
+    Lane(Variable, u8),
+}
+
 pub(super) struct Lower<'a, 'b> {
     pub fb: FunctionBuilder<'a>,
     pub ptr: ir::Type,
@@ -23,15 +30,22 @@ pub(super) struct Lower<'a, 'b> {
     pub(super) n: usize,
     pub(super) primal: Vec<Option<Variable>>,
     // An absent variable denotes a structural +0, including the displacement column.
-    derivatives: Vec<Vec<Option<Variable>>>,
+    pub(super) derivatives: Vec<Vec<Option<Partial>>>,
+    pairs: Vec<(usize, usize)>,
     pub(super) valid: Variable,
     pub(super) guard_sum: Variable,
+    vector_sum: Option<Variable>,
     literals: HashMap<u64, V>,
     fields: HashMap<usize, V>,
     constants: HashMap<Reg, V>,
     noncon: Variable,
     query_index: i64,
     regular: bool,
+    circuit: Option<&'b CircuitStamp>,
+    // Known primals can still have nonzero partials (a tied voltage difference).
+    fixed: Vec<Option<f64>>,
+    unknowns: Vec<Option<usize>>,
+    demand: Vec<Vec<bool>>,
 }
 
 pub(super) fn compile(
@@ -39,6 +53,7 @@ pub(super) fn compile(
     n: usize,
     regular: bool,
     disk: Option<&crate::cache::Artifact>,
+    circuit: Option<&CircuitStamp>,
 ) -> Result<abi::Code, String> {
     let mut flags = settings::builder();
     let opt = std::env::var("SPX_CLIF_OPT").unwrap_or_else(|_| "none".into());
@@ -116,7 +131,16 @@ pub(super) fn compile(
     for (func, range) in ids.into_iter().zip([0..mid, mid..p.ops.len()]) {
         let mut ctx = module.make_context();
         ctx.func.signature = signature.clone();
-        emit(&mut ctx, config, p, n, regular, range, &mut handoff)?;
+        emit(
+            &mut ctx,
+            config,
+            p,
+            n,
+            regular,
+            range,
+            &mut handoff,
+            circuit,
+        )?;
         module
             .define_function(func, &mut ctx)
             .map_err(|e| format!("{e:?}"))?;
@@ -170,6 +194,7 @@ fn decode_image(mut bytes: &[u8], count: usize) -> Option<(usize, Fragments<'_>)
     bytes.is_empty().then_some((slots, fragments))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit(
     ctx: &mut cranelift_codegen::Context,
     config: cranelift_codegen::isa::TargetFrontendConfig,
@@ -178,6 +203,7 @@ fn emit(
     regular: bool,
     range: Range<usize>,
     handoff: &mut split::Handoff,
+    circuit: Option<&CircuitStamp>,
 ) -> Result<(), String> {
     let ptr = config.pointer_type();
     let mut builder_ctx = FunctionBuilderContext::new();
@@ -196,14 +222,33 @@ fn emit(
     let no = fb.ins().iconst(I8, 0);
     fb.def_var(valid, yes);
     fb.def_var(noncon, no);
+    let joins = joins::Joins::new(p);
+    let checks = if regular {
+        guards::required(p, &joins)
+    } else {
+        vec![(true, true); p.ops.len()]
+    };
+    let pairs = super::packed::pairs(p, circuit);
+    let vector_sum = (!pairs.is_empty()).then(|| {
+        let var = fb.declare_var(F64X2);
+        let value = fb.ins().splat(F64X2, zero);
+        fb.def_var(var, value);
+        var
+    });
     let mut lower = Lower {
         fb,
         ptr,
         frame,
         program: p,
+        circuit,
+        fixed: vec![None; p.values.len()],
+        unknowns: vec![None; p.values.len()],
+        demand: guards::tangents(p, n, &checks),
         n,
         primal: vec![None; p.values.len()],
         derivatives: vec![vec![None; n + 1]; p.gradient_count],
+        pairs,
+        vector_sum,
         valid,
         guard_sum,
         literals: HashMap::new(),
@@ -213,7 +258,7 @@ fn emit(
         query_index: 0,
         regular,
     };
-    lower.body(range, handoff)?;
+    lower.body(range, handoff, &joins, &checks)?;
     lower.fb.finalize(config);
     Ok(())
 }
@@ -256,6 +301,9 @@ impl Lower<'_, '_> {
             .store(MemFlagsData::trusted(), value, ptr, (8 * index) as i32);
     }
     fn get(&mut self, r: Reg) -> V {
+        if let Some(value) = self.fixed[r] {
+            return self.num(value);
+        }
         if let Some(var) = self.primal[r] {
             return self.fb.use_var(var);
         }
@@ -279,7 +327,14 @@ impl Lower<'_, '_> {
         self.derivatives
             .get(r)
             .and_then(|row| row[i])
-            .map(|var| self.fb.use_var(var))
+            .map(|part| match part {
+                Partial::Scalar(var) => self.fb.use_var(var),
+                Partial::Constant(value) => self.num(value),
+                Partial::Lane(var, lane) => {
+                    let v = self.fb.use_var(var);
+                    self.fb.ins().extractlane(v, lane)
+                }
+            })
     }
     pub(super) fn constant(&self, v: V) -> Option<f64> {
         let dfg = &self.fb.func.dfg;
@@ -290,14 +345,36 @@ impl Lower<'_, '_> {
         }
     }
     pub(super) fn set_grad(&mut self, r: Reg, i: usize, v: V) {
-        if self.regular && self.constant(v) == Some(0.) {
+        if !self.demand[r][i] || (self.regular && self.constant(v) == Some(0.)) {
             return;
         }
-        let var = self.fb.declare_var(F64);
-        self.fb.def_var(var, v);
-        self.derivatives[r][i] = Some(var);
+        if let Some(value) = self.constant(v) {
+            self.derivatives[r][i] = Some(Partial::Constant(value));
+        } else {
+            let var = self.fb.declare_var(F64);
+            self.fb.def_var(var, v);
+            self.derivatives[r][i] = Some(Partial::Scalar(var));
+        }
     }
+    pub(super) fn predicate(&self, value: V) -> Option<V> {
+        let dfg = &self.fb.func.dfg;
+        let inst = dfg.value_def(dfg.resolve_aliases(value)).inst()?;
+        if let ir::InstructionData::Ternary {
+            opcode: ir::Opcode::Select,
+            args: [c, t, f],
+        } = dfg.insts[inst]
+            && self.constant(t) == Some(1.)
+            && self.constant(f) == Some(0.)
+        {
+            return Some(c);
+        }
+        None
+    }
+
     pub(super) fn truth(&mut self, v: V) -> V {
+        if let Some(c) = self.predicate(v) {
+            return c;
+        }
         let z = self.num(0.);
         self.fb.ins().fcmp(FloatCC::NotEqual, v, z)
     }
@@ -315,7 +392,9 @@ impl Lower<'_, '_> {
             table,
             offset as i32,
         );
-        self.call(f, &[x, y])
+        let value = self.call(f, &[x, y]);
+        self.clear_block();
+        value
     }
     fn call(&mut self, f: V, args: &[V]) -> V {
         let mut sig = ir::Signature::new(self.fb.func.signature.call_conv);
@@ -333,7 +412,13 @@ impl Lower<'_, '_> {
         let inf = self.num(f64::INFINITY);
         self.fb.ins().fcmp(FloatCC::LessThan, abs, inf)
     }
-    fn body(&mut self, range: Range<usize>, handoff: &mut split::Handoff) -> Result<(), String> {
+    fn body(
+        &mut self,
+        range: Range<usize>,
+        handoff: &mut split::Handoff,
+        joins: &joins::Joins,
+        checks: &[(bool, bool)],
+    ) -> Result<(), String> {
         if range.start > 0 {
             handoff.restore(self);
         }
@@ -346,11 +431,7 @@ impl Lower<'_, '_> {
                 }
             }
         }
-        let checks = if self.regular {
-            super::guards::required(self.program)
-        } else {
-            vec![(true, true); ops.len()]
-        };
+        let mut reached = vec![false; ops.len() + 1];
         let mut terminated = false;
         let mut checked = false;
         for (pc, block) in blocks
@@ -360,8 +441,16 @@ impl Lower<'_, '_> {
             .take(range.end + 1)
             .skip(range.start)
         {
+            if terminated && !reached[pc] {
+                // Callback numbers index the original program, including dead arms.
+                self.query_index += i64::from(matches!(ops.get(pc), Some(Op::Simparam(..))));
+                continue;
+            }
             if let Some(block) = block {
                 if !terminated {
+                    for &copy in &joins.fallthrough[pc] {
+                        self.edge_copy(copy);
+                    }
                     self.fb.ins().jump(block, &[]);
                 }
                 self.clear_block();
@@ -372,9 +461,23 @@ impl Lower<'_, '_> {
             if pc == range.end {
                 break;
             }
+            for &copy in &joins.before_jump[pc] {
+                self.edge_copy(copy);
+            }
             let op = &ops[pc];
             match *op {
                 Op::IfFalse(c, j) => {
+                    if let Some(value) = self.fixed[c] {
+                        let target = if value != 0. { pc + 1 } else { j };
+                        reached[target] = true;
+                        self.fb
+                            .ins()
+                            .jump(blocks[target].ok_or("missing constant target")?, &[]);
+                        terminated = true;
+                        continue;
+                    }
+                    reached[pc + 1] = true;
+                    reached[j] = true;
                     let c = self.get(c);
                     let test = self.truth(c);
                     self.fb.ins().brif(
@@ -387,19 +490,31 @@ impl Lower<'_, '_> {
                     terminated = true;
                 }
                 Op::Jump(j) => {
+                    reached[j] = true;
                     self.fb
                         .ins()
                         .jump(blocks[j].ok_or("missing branch target")?, &[]);
                     terminated = true;
                 }
                 Op::Unknown(d, i) => {
+                    self.unknowns[d] = Some(i);
+                    if self.circuit.is_some_and(|s| s.wires[i].is_none()) {
+                        let z = self.num(0.);
+                        self.fixed[d] = Some(0.);
+                        self.set(d, z);
+                        continue;
+                    }
                     let v = self.load(offset_of!(Frame, x), i);
                     self.set(d, v);
                     let one = self.num(1.);
                     self.set_grad(d, i, one);
                 }
                 Op::Math(d, m, a, b) | Op::Charge(d, m, a, b) => self.arithmetic(d, m, a, b),
-                Op::Phi(d, c, a, b) => self.join(d, c, a, b),
+                Op::Phi(d, c, a, b) => {
+                    if !joins.replaced[pc] || self.fixed[c].is_some() {
+                        self.join(d, c, a, b);
+                    }
+                }
                 Op::Ddx(d, a, i) => {
                     let v = self.grad(a, i).unwrap_or_else(|| self.num(0.));
                     self.set(d, v);
@@ -518,12 +633,17 @@ impl Lower<'_, '_> {
                     self.store(offset_of!(Frame, history), 2 * i, f);
                     self.store(offset_of!(Frame, history), 2 * i + 1, q);
                 }
-                Op::Noise(d) => {
-                    let z = self.num(0.);
-                    self.set(d, z);
-                }
                 Op::Nop => {}
             }
+        }
+        if let Some(var) = self.vector_sum {
+            let lanes = self.fb.use_var(var);
+            let a = self.fb.ins().extractlane(lanes, 0);
+            let b = self.fb.ins().extractlane(lanes, 1);
+            let scalar = self.fb.use_var(self.guard_sum);
+            let sum = self.fb.ins().fadd(scalar, a);
+            let sum = self.fb.ins().fadd(sum, b);
+            self.fb.def_var(self.guard_sum, sum);
         }
         if range.end < ops.len() {
             return handoff.save(self, range.end);
@@ -542,18 +662,53 @@ impl Lower<'_, '_> {
     fn arithmetic(&mut self, d: Reg, m: Math, a: Reg, b: Reg) {
         let x = self.get(a);
         let y = self.get(b);
-        let (v, sa, sb) = self.math(
-            m,
-            x,
-            y,
-            d < self.program.gradient_count && a < self.program.gradient_count,
-            d < self.program.gradient_count && b < self.program.gradient_count,
-        );
+        let known = |r: Reg| {
+            self.fixed[r].or_else(|| self.primal[r].is_none().then_some(self.program.values[r]))
+        };
+        let tied = m == Math::Sub
+            && self.circuit.is_some_and(|s| {
+                self.unknowns[a]
+                    .zip(self.unknowns[b])
+                    .is_some_and(|(i, j)| i != j && s.wires[i] == s.wires[j])
+            });
+        let slope_used = |src: Reg| {
+            self.derivatives
+                .get(src)
+                .zip(self.demand.get(d))
+                .is_some_and(|(row, used)| {
+                    row.iter()
+                        .zip(used)
+                        .any(|(part, &used)| used && part.is_some())
+                })
+        };
+        let (v, sa, sb) = if let (Some(x), Some(y)) = (known(a), known(b)) {
+            let (v, sa, sb) = m.apply(x, y);
+            self.fixed[d] = Some(v);
+            (self.num(v), self.num(sa), self.num(sb))
+        } else if tied {
+            self.fixed[d] = Some(0.);
+            (self.num(0.), self.num(1.), self.num(-1.))
+        } else {
+            self.math(m, x, y, slope_used(a), slope_used(b))
+        };
         self.set(d, v);
         if d < self.program.gradient_count {
+            for index in 0..self.pairs.len() {
+                let (i, j) = self.pairs[index];
+                if self.fixed[d].is_none() && self.demand[d][i] && self.demand[d][j] {
+                    self.packed_derivative(d, (i, j), [(a, sa), (b, sb)]);
+                }
+            }
             for i in 0..=self.n {
+                if !self.demand[d][i] || self.derivatives[d][i].is_some() {
+                    continue;
+                }
                 let left = self.grad(a, i).map(|g| self.scaled(g, sa, m, false));
-                let right = self.grad(b, i).map(|g| self.scaled(g, sb, m, true));
+                let right = if a == b && sa == sb {
+                    left
+                } else {
+                    self.grad(b, i).map(|g| self.scaled(g, sb, m, true))
+                };
                 // Even adding +0 to a lone -0 must match the row interpreter.
                 let v = match (left, right) {
                     (None, None) => continue,
@@ -575,7 +730,57 @@ impl Lower<'_, '_> {
             }
         }
     }
+    fn edge_copy(
+        &mut self,
+        joins::Copy {
+            dst,
+            src,
+            condition,
+        }: joins::Copy,
+    ) {
+        if self.fixed[condition].is_some() {
+            return;
+        }
+        let value = self.get(src);
+        let var = *self.primal[dst].get_or_insert_with(|| self.fb.declare_var(F64));
+        self.fb.def_var(var, value);
+        if dst >= self.derivatives.len() {
+            return;
+        }
+        for col in 0..=self.n {
+            if !self.demand[dst][col] {
+                continue;
+            }
+            let g = self.grad(src, col);
+            let existing = self.derivatives[dst][col];
+            if existing.is_none() && g.is_none() {
+                continue;
+            }
+            let v = g.unwrap_or_else(|| self.num(0.));
+            let var = if let Some(Partial::Scalar(var)) = existing {
+                var
+            } else {
+                self.fb.declare_var(F64)
+            };
+            self.fb.def_var(var, v);
+            self.derivatives[dst][col] = Some(Partial::Scalar(var));
+        }
+    }
+
     fn join(&mut self, d: Reg, c: Reg, a: Reg, b: Reg) {
+        if let Some(choice) = self.fixed[c] {
+            let r = if choice != 0. { a } else { b };
+            self.fixed[d] = self.fixed[r]
+                .or_else(|| self.primal[r].is_none().then_some(self.program.values[r]));
+            let v = self.get(r);
+            self.set(d, v);
+            for i in 0..=self.n {
+                if let Some(g) = self.grad(r, i) {
+                    self.set_grad(d, i, g);
+                }
+            }
+            return;
+        }
         let c = self.get(c);
         let test = self.truth(c);
         let x = self.get(a);
@@ -619,10 +824,16 @@ impl Lower<'_, '_> {
         self.set_grad(dst, self.n, t);
     }
     fn stamp(&mut self, row: usize, pair: Pair, sign: f64) {
+        if self.circuit.is_some_and(|s| s.wires[row].is_none()) {
+            return;
+        }
         for (r, res, jac) in [
             (pair.f, offset_of!(Frame, f), offset_of!(Frame, df)),
             (pair.q, offset_of!(Frame, q), offset_of!(Frame, dq)),
         ] {
+            if res == offset_of!(Frame, q) && self.circuit.is_some_and(|s| s.dc) {
+                continue;
+            }
             let x = self.get(r);
             let t = self.grad(r, self.n).unwrap_or_else(|| self.num(0.));
             let v = self.fb.ins().fadd(x, t);
@@ -635,6 +846,16 @@ impl Lower<'_, '_> {
         }
     }
     fn charge_guard(&mut self, r: Reg, v: V, primal: bool, grad: bool, div: bool) {
+        if self.fixed[r].is_some_and(|x| x.is_finite() && (!div || x * x != 0.))
+            && (!grad
+                || self.derivatives.get(r).is_none_or(|row| {
+                    row.iter().all(|g| {
+                        g.is_none() || matches!(g, Some(Partial::Constant(x)) if x.is_finite())
+                    })
+                }))
+        {
+            return;
+        }
         let mut valid = self.fb.use_var(self.valid);
         if div {
             let square = self.fb.ins().fmul(v, v);
@@ -647,7 +868,17 @@ impl Lower<'_, '_> {
             let mut sum = if primal { v } else { self.num(0.) };
             if grad {
                 for i in 0..self.n {
-                    if let Some(g) = self.grad(r, i) {
+                    if let Some(acc) = self.vector_sum
+                        && let Some(Partial::Lane(var, lane)) =
+                            self.derivatives.get(r).and_then(|row| row[i])
+                    {
+                        if lane == 0 {
+                            let v = self.fb.use_var(var);
+                            let prev = self.fb.use_var(acc);
+                            let next = self.fb.ins().fadd(prev, v);
+                            self.fb.def_var(acc, next);
+                        }
+                    } else if let Some(g) = self.grad(r, i) {
                         sum = self.fb.ins().fadd(sum, g);
                     }
                 }
@@ -703,6 +934,12 @@ impl Lower<'_, '_> {
             return self.num(crate::dual::scaled(g, s));
         }
         if self.regular {
+            if factor == Some(1.) {
+                return g;
+            }
+            if factor == Some(-1.) {
+                return self.fb.ins().fneg(g);
+            }
             if partial == Some(1.) {
                 return slope;
             }

@@ -29,7 +29,6 @@ impl Program {
                 | Op::IntegralInitial(d)
                 | Op::Previous(d, _)
                 | Op::LimitValue { dst: d, .. }
-                | Op::Noise(d)
                 | Op::Time(d)
                 | Op::Analysis(d, _) => Some(*d),
                 _ => None,
@@ -237,7 +236,6 @@ impl Program {
                     Op::Ddx(d, a, i) => Op::Ddx(map[d], map[a], i),
                     Op::Phi(d, c, a, b) => Op::Phi(map[d], map[c], map[a], map[b]),
                     Op::CheckZeroProduct(a, div) => Op::CheckZeroProduct(map[a], div),
-                    Op::Noise(d) => Op::Noise(map[d]),
                     Op::Time(d) => Op::Time(map[d]),
                     Op::Simparam(d, k, a) => Op::Simparam(map[d], k, a.map(|r| map[r])),
                     Op::Analysis(d, k) => Op::Analysis(map[d], k),

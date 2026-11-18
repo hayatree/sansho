@@ -107,3 +107,20 @@ pub(crate) fn history(body: &[Stmt], slots: usize) -> Vec<usize> {
         .filter_map(|(i, v)| v.then_some(i))
         .collect()
 }
+
+/// A bias-only program may execute from the first call when startup events
+/// and declaration initializers have no work to do.
+#[cfg(feature = "jit")]
+pub(crate) fn has_startup(s: &Stmt) -> bool {
+    match s {
+        Stmt::Event { startup, body, .. } => *startup || has_startup(body),
+        Stmt::Block(_, body) => body.iter().any(has_startup),
+        Stmt::If(_, a, b) => has_startup(a) || b.as_deref().is_some_and(has_startup),
+        Stmt::Case(_, arms) => arms.iter().any(|(_, s)| has_startup(s)),
+        Stmt::For(init, _, step, body) => {
+            has_startup(init) || has_startup(step) || has_startup(body)
+        }
+        Stmt::While(_, body) | Stmt::Repeat(_, body) => has_startup(body),
+        _ => false,
+    }
+}

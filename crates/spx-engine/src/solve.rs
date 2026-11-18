@@ -49,6 +49,8 @@ pub(crate) struct Assembled {
 /// Reusable per-job workspace.
 #[derive(Debug)]
 pub(crate) struct Workspace {
+    timed: bool,
+    lu_time: std::time::Duration,
     pub assemblies: usize,
     pub newton_calls: usize,
     pub newton_iterations: usize,
@@ -76,6 +78,8 @@ impl Workspace {
         let n = ckt.dim();
         let nnz = ckt.pattern.nnz();
         Self {
+            timed: spx_diag::profile_devices(),
+            lu_time: std::time::Duration::ZERO,
             assemblies: 0,
             newton_calls: 0,
             newton_iterations: 0,
@@ -155,6 +159,40 @@ pub(crate) fn assemble(
     opts: &SimOptions,
     gshunt: f64,
 ) {
+    assemble_for(ckt, ctx, x, ws, opts, gshunt, Assembly::Full);
+}
+
+/// Sample the exact converged charges and update device state without rebuilding the matrix.
+pub(crate) fn assemble_charges(
+    ckt: &Circuit,
+    ctx: &EvalCtx,
+    x: &[f64],
+    ws: &mut Workspace,
+    opts: &SimOptions,
+) -> Result<(), Diagnostic> {
+    assemble_for(ckt, ctx, x, ws, opts, 0., Assembly::Charges);
+    if let Some(d) = ws.slots.iter().find_map(|s| s.error.as_ref()) {
+        return Err(d.clone());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Assembly {
+    Full,
+    Resistive,
+    Charges,
+}
+
+fn assemble_for(
+    ckt: &Circuit,
+    ctx: &EvalCtx,
+    x: &[f64],
+    ws: &mut Workspace,
+    opts: &SimOptions,
+    gshunt: f64,
+    request: Assembly,
+) {
     ws.assemblies += 1;
     let par = ckt.parallel && rayon::current_num_threads() > 1;
     let eval = |((group, s), (current, accepted)): EvalItem<'_>| {
@@ -180,10 +218,17 @@ pub(crate) fn assemble(
     let slots = &ws.slots;
     let a = &mut ws.asm;
     let gm = &ckt.gather;
+    if request != Assembly::Resistive {
+        gather(&mut a.q, &gm.q, slots, |s| &s.q, par);
+    }
+    if request == Assembly::Charges {
+        return;
+    }
     gather(&mut a.g, &gm.g, slots, |s| &s.g, par);
-    gather(&mut a.c, &gm.c, slots, |s| &s.c, par);
+    if request == Assembly::Full {
+        gather(&mut a.c, &gm.c, slots, |s| &s.c, par);
+    }
     gather(&mut a.f, &gm.f, slots, |s| &s.f, par);
-    gather(&mut a.q, &gm.q, slots, |s| &s.q, par);
     gather(&mut a.b, &gm.b, slots, |s| &s.b, par);
     for &(i, v) in &ws.clamp {
         let d = ckt.node_diag[i];
@@ -295,17 +340,31 @@ pub(crate) fn newton(
         if iter > 1 {
             ctx.init_junctions = false;
         }
-        assemble(ckt, &ctx, x, ws, opts, gshunt);
+        let static_step = integ.a0 == 0.;
+        let request = if static_step {
+            Assembly::Resistive
+        } else {
+            Assembly::Full
+        };
+        assemble_for(ckt, &ctx, x, ws, opts, gshunt, request);
         if let Some(d) = ws.slots.iter().find_map(|s| s.error.clone()) {
             return Err(NewtonError::Device(Box::new(d)));
         }
         let a = &ws.asm;
-        for k in 0..ws.jac.len() {
-            ws.jac[k] = a.g[k] + integ.a0 * a.c[k];
+        if static_step {
+            ws.jac.copy_from_slice(&a.g);
+            for i in 0..n {
+                ws.rhs[i] = -(a.f[i] + integ.hist[i] - a.b[i]);
+            }
+        } else {
+            for k in 0..ws.jac.len() {
+                ws.jac[k] = a.g[k] + integ.a0 * a.c[k];
+            }
+            for i in 0..n {
+                ws.rhs[i] = -(a.f[i] + integ.a0 * a.q[i] + integ.hist[i] - a.b[i]);
+            }
         }
-        for i in 0..n {
-            ws.rhs[i] = -(a.f[i] + integ.a0 * a.q[i] + integ.hist[i] - a.b[i]);
-        }
+        let lu_start = ws.timed.then(std::time::Instant::now);
         match ws.lu.factor(&ws.jac) {
             Ok(()) => {}
             Err(SolverError::Singular { .. }) => return Err(NewtonError::Singular),
@@ -315,6 +374,9 @@ pub(crate) fn newton(
             Ok(()) => {}
             Err(SolverError::Singular { .. }) => return Err(NewtonError::Singular),
             Err(e) => return Err(NewtonError::Solver(e)),
+        }
+        if let Some(t) = lu_start {
+            ws.lu_time += t.elapsed();
         }
         let mut converged = true;
         let mut worst = Vec::new();
@@ -347,6 +409,16 @@ pub(crate) fn newton(
         }
         // A linear circuit is solved exactly by one Newton step.
         if ckt.linear || (converged && iter > 1 && !ws.noncon && !ctx.init_junctions) {
+            if ws.timed {
+                use std::io::Write;
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "spx-newton {} {} {}",
+                    ctx.time,
+                    iter,
+                    ws.lu_time.as_nanos()
+                );
+            }
             return Ok(iter);
         }
         if max_iter == iter {

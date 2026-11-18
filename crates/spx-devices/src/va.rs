@@ -5,7 +5,7 @@ use crate::{
     DeviceGroup, EvalCtx, Mode, Node, SlotOffsets, Slots, StampBuilder, StateRef, Unknowns, volt,
 };
 use spx_diag::Diagnostic;
-use spx_va::{Analysis, Bound, CompiledModule, EvalInput, EvalOutput, Scratch, StateIo};
+use spx_va::{Analysis, Bound, CompiledModule, EvalInput, Scratch, StateIo};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -26,6 +26,8 @@ struct Instance {
 pub struct VaGroup {
     #[cfg(feature = "jit")]
     disable_jit: bool,
+    #[cfg(feature = "jit")]
+    dc_only: bool,
     buffers: std::sync::Mutex<Buffers>,
     module: Option<Arc<CompiledModule>>,
     instances: Vec<Instance>,
@@ -33,9 +35,45 @@ pub struct VaGroup {
 
 #[derive(Debug, Default)]
 struct Buffers {
-    scratch: Vec<Scratch>,
+    #[cfg(feature = "jit")]
+    profile: DeviceProfile,
+    instances: Vec<InstanceBuffer>,
+}
+
+#[derive(Debug, Default)]
+struct InstanceBuffer {
+    scratch: Scratch,
     values: Vec<f64>,
-    result: EvalOutput,
+    #[cfg(feature = "jit")]
+    cached: spx_va::EvalOutput,
+    #[cfg(feature = "jit")]
+    previous: Option<(u64, u64)>,
+}
+
+#[cfg(feature = "jit")]
+#[derive(Debug, Default)]
+struct DeviceProfile {
+    native: usize,
+    interpreted: usize,
+    reused: usize,
+    elapsed: std::time::Duration,
+}
+
+#[cfg(feature = "jit")]
+impl Drop for DeviceProfile {
+    fn drop(&mut self) {
+        if self.native + self.interpreted + self.reused > 0 {
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "spx-device {} {} {} {}",
+                self.native,
+                self.interpreted,
+                self.reused,
+                self.elapsed.as_nanos()
+            );
+        }
+    }
 }
 
 /// Resolve SPICE's case-insensitive parameter names to the declared VA spelling.
@@ -58,6 +96,15 @@ impl VaGroup {
             return m.prepare_jit(&i.bound, kelvin, 1.);
         }
         None
+    }
+
+    /// Provide circuit connections to the specializer after net remapping.
+    #[cfg(feature = "jit")]
+    pub fn specialize_stamps(&mut self, dc_only: bool) {
+        self.dc_only = dc_only;
+        for i in &mut self.instances {
+            i.bound.specialize_stamp(&i.ports, dc_only);
+        }
     }
 
     /// Configure all instances and enumerate their final layouts for parallel preparation.
@@ -202,14 +249,37 @@ impl DeviceGroup for VaGroup {
             return;
         };
         let Buffers {
-            values,
-            result,
-            scratch,
-        } = &mut *buffers;
-        scratch.resize_with(self.len(), Scratch::default);
-        for (k, i) in self.instances.iter().enumerate() {
+            instances,
             #[cfg(feature = "jit")]
-            scratch[k].set_jit(!self.disable_jit);
+            profile,
+        } = &mut *buffers;
+        instances.resize_with(self.len(), InstanceBuffer::default);
+        #[cfg(feature = "jit")]
+        let timed = spx_diag::profile_devices();
+        for (k, (i, buffer)) in self.instances.iter().zip(instances).enumerate() {
+            let InstanceBuffer {
+                values, scratch, ..
+            } = buffer;
+            #[cfg(feature = "jit")]
+            {
+                scratch.set_jit(!self.disable_jit);
+                if !self.disable_jit
+                    && ctx.mode == Mode::Tran
+                    && buffer.previous == Some((ctx.temp.to_bits(), ctx.gmin.to_bits()))
+                    && values
+                        .iter()
+                        .zip(&i.nodes)
+                        .all(|(v, &n)| v.to_bits() == volt(x, n).to_bits())
+                {
+                    if timed {
+                        profile.reused += 1;
+                    }
+                    let result = &buffer.cached;
+                    out.core_dyn(&mut at, &result.f, &result.q, &result.df, &result.dq);
+                    continue;
+                }
+                buffer.previous = None;
+            }
             values.clear();
             values.extend(i.nodes.iter().map(|&n| volt(x, n)));
             let start = k * m.state_len();
@@ -232,16 +302,29 @@ impl DeviceGroup for VaGroup {
             };
             // Per-instance variables and specialization live in the chunk workspace. No implicit gmin stamp:
             // models opt in through $simparam("gmin").
-            m.eval_with_scratch(
+            let mut result = out.va_stamp(&mut at, i.nodes.len());
+            #[cfg(feature = "jit")]
+            let start_time = timed.then(std::time::Instant::now);
+            m.eval_into(
                 &i.bound,
                 &input,
                 StateIo {
                     accepted: &state.accepted[start..end],
                     current: &mut state.current[start..end],
                 },
-                &mut scratch[k],
-                result,
+                scratch,
+                &mut result,
             );
+            #[cfg(feature = "jit")]
+            if let Some(start_time) = start_time {
+                let elapsed = start_time.elapsed();
+                if scratch.used_jit() {
+                    profile.native += 1;
+                    profile.elapsed += elapsed;
+                } else {
+                    profile.interpreted += 1;
+                }
+            }
             if let Some(d) = result.diagnostic.take() {
                 out.error = Some(d.with_note(format!("VA instance {}", i.name)));
                 return;
@@ -271,15 +354,29 @@ impl DeviceGroup for VaGroup {
                     }
                 }
             }
+            #[cfg(feature = "jit")]
+            if !ctx.limit && ctx.mode == Mode::Tran && scratch.bias_only() {
+                let cached = &mut buffer.cached;
+                for (storage, stamp) in [
+                    (&mut cached.f, &*result.f),
+                    (&mut cached.q, &*result.q),
+                    (&mut cached.df, &*result.df),
+                    (&mut cached.dq, &*result.dq),
+                ] {
+                    storage.clear();
+                    storage.extend_from_slice(stamp);
+                }
+                buffer.previous = Some((ctx.temp.to_bits(), ctx.gmin.to_bits()));
+            }
             out.noncon |= result.noncon;
-            out.core_dyn(&mut at, &result.f, &result.q, &result.df, &result.dq);
         }
     }
     fn set_param(&mut self, instance: &str, param: &str, value: f64) -> bool {
         let Some(m) = &self.module else { return false };
-        let Some(i) = self.instances.iter_mut().find(|i| i.name == instance) else {
+        let Some(index) = self.instances.iter().position(|i| i.name == instance) else {
             return false;
         };
+        let i = &mut self.instances[index];
         let mut params = i.params.clone();
         for (name, value) in parameter_names(m, &[(param.into(), value)]) {
             if let Some(p) = params.iter_mut().find(|p| p.0 == name) {
@@ -293,8 +390,20 @@ impl DeviceGroup for VaGroup {
                 if i.swept {
                     bound.retain_sweep_layout();
                 }
+                #[cfg(feature = "jit")]
+                bound.specialize_stamp(&i.ports, self.dc_only);
                 i.copies = m.parallel_copies(&bound);
                 i.bound = bound;
+                // A sweep changes the equations even at the same bias.
+                if let Some(buffer) = self
+                    .buffers
+                    .get_mut()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .instances
+                    .get_mut(index)
+                {
+                    *buffer = InstanceBuffer::default();
+                }
                 i.params = params;
                 true
             }

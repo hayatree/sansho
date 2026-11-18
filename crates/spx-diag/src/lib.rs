@@ -275,6 +275,12 @@ fn kind_name(k: CulpritKind) -> &'static str {
 
 impl std::error::Error for Diagnostic {}
 
+/// Enable the detailed Newton/device counters separately from phase benchmarks.
+pub fn profile_devices() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SPX_PROFILE_DEVICES").is_some())
+}
+
 /// Optional wall-clock probe for startup and analysis benchmarks.
 #[derive(Debug)]
 pub struct Phase(&'static str, Option<std::time::Instant>);

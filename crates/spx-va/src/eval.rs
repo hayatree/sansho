@@ -65,15 +65,15 @@ pub struct StateIo<'a> {
 }
 /// Device residuals and dense, row-major Jacobians.
 #[derive(Debug, Default, Clone)]
-pub struct EvalOutput {
+pub struct StampBuffers<T> {
     /// Resistive residual, one entry per unknown.
-    pub f: Vec<f64>,
+    pub f: T,
     /// Charge residual, one entry per unknown.
-    pub q: Vec<f64>,
+    pub q: T,
     /// Derivative of `f` with respect to all unknowns.
-    pub df: Vec<f64>,
+    pub df: T,
     /// Derivative of `q` with respect to all unknowns.
-    pub dq: Vec<f64>,
+    pub dq: T,
     /// A limiter changed a voltage.
     pub noncon: bool,
     /// Runtime failure, including model error tasks or iteration exhaustion.
@@ -81,6 +81,11 @@ pub struct EvalOutput {
     /// Source diagnostic for an unsupported operation reached during evaluation.
     pub diagnostic: Option<Diagnostic>,
 }
+/// Owned device residuals and Jacobians for standalone evaluation.
+pub type EvalOutput = StampBuffers<Vec<f64>>;
+/// Borrowed stamp slots supplied by a circuit assembler.
+pub type EvalStamp<'a> = StampBuffers<&'a mut [f64]>;
+
 #[derive(Debug, Clone)]
 struct Value {
     f: Dual,
@@ -159,6 +164,12 @@ impl Scratch {
         self.disable_jit = !enabled;
     }
 
+    /// Whether the last native result can be reused for bit-identical unknowns,
+    /// binding, temperature, multiplier, gmin and side-effect-free simulator queries.
+    pub fn bias_only(&self) -> bool {
+        self.machine.bias_only()
+    }
+
     /// Whether the last specialized evaluation used a native kernel.
     pub fn used_jit(&self) -> bool {
         self.machine.used_jit()
@@ -169,6 +180,8 @@ impl Scratch {
 /// for separate instances sharing these parameters.
 #[derive(Debug)]
 pub struct Bound {
+    #[cfg(feature = "jit")]
+    circuit: Option<CircuitStamp>,
     sim: BindOptions,
     layout: Layout,
     connected_ports: usize,
@@ -178,10 +191,50 @@ pub struct Bound {
     identity: Arc<()>,
     workspace_key: Arc<()>,
 }
+/// The simulator discards grounded rows and columns during assembly. Equal
+/// entries name the same unknown, but retain separate stamp columns and order.
+#[cfg(feature = "jit")]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, serde::Serialize)]
+struct CircuitStamp {
+    wires: Vec<Option<usize>>,
+    dc: bool,
+}
+
 impl Bound {
+    /// Specialize native stamps for a circuit adapter. Grounded rows and columns
+    /// are unused, and DC-only clients also discard the reactive stamp.
+    #[cfg(feature = "jit")]
+    pub fn specialize_stamp(&mut self, ports: &[Option<usize>], dc_only: bool) {
+        let wires = self
+            .layout
+            .representatives()
+            .iter()
+            .enumerate()
+            .map(|(row, &rep)| {
+                if let Some(net) = ports.get(rep) {
+                    net.and_then(|n| {
+                        self.layout
+                            .representatives()
+                            .iter()
+                            .position(|&r| ports.get(r) == Some(&Some(n)))
+                    })
+                } else {
+                    Some(row)
+                }
+            })
+            .collect();
+        self.circuit = Some(CircuitStamp { wires, dc: dc_only });
+        self.workspace_key = Arc::new(());
+    }
+
     /// Keep the module-wide unknown set when parameters will change within one matrix factorization pattern.
     pub fn retain_sweep_layout(&mut self) {
         self.layout.retain_all();
+        #[cfg(feature = "jit")]
+        {
+            self.circuit = None;
+        }
+        self.workspace_key = Arc::new(());
     }
 
     /// Unknown layout specialized for these model and instance parameters.
@@ -364,6 +417,8 @@ impl CompiledModule {
             }
         }
         let mut bound = Bound {
+            #[cfg(feature = "jit")]
+            circuit: None,
             connected_ports,
             layout: Layout::default(),
             sim,
@@ -395,7 +450,7 @@ impl CompiledModule {
             } else {
                 let mut scratch = Scratch::default();
                 let mut current = [];
-                let mut out = EvalOutput::default();
+                let mut out = EvalStamp::default();
                 let mut runtime = Runtime {
                     drives: vec![],
                     integrals: vec![],
@@ -430,7 +485,7 @@ impl CompiledModule {
         for (i, p) in self.params.iter().enumerate() {
             let mut scratch = Scratch::default();
             let mut current = [];
-            let mut out = EvalOutput::default();
+            let mut out = EvalStamp::default();
             let mut r = Runtime {
                 drives: vec![],
                 integrals: vec![],
@@ -521,23 +576,50 @@ impl CompiledModule {
         &self,
         b: &Bound,
         input: &EvalInput<'_>,
-        mut state: StateIo<'_>,
+        state: StateIo<'_>,
         scratch: &mut Scratch,
         out: &mut EvalOutput,
     ) {
         let n = b.layout.unknown_len();
         out.f.resize(n, 0.);
-        out.f.fill(0.);
         out.q.resize(n, 0.);
-        out.q.fill(0.);
         out.df.resize(n * n, 0.);
-        out.df.fill(0.);
         out.dq.resize(n * n, 0.);
+        let mut stamp = EvalStamp {
+            f: &mut out.f[..],
+            q: &mut out.q[..],
+            df: &mut out.df[..],
+            dq: &mut out.dq[..],
+            ..Default::default()
+        };
+        self.eval_into(b, input, state, scratch, &mut stamp);
+        out.error = stamp.error;
+        out.diagnostic = stamp.diagnostic;
+        out.noncon = stamp.noncon;
+    }
+
+    /// Evaluate directly into caller-owned dense stamp slots.
+    pub fn eval_into(
+        &self,
+        b: &Bound,
+        input: &EvalInput<'_>,
+        mut state: StateIo<'_>,
+        scratch: &mut Scratch,
+        out: &mut EvalStamp<'_>,
+    ) {
+        let n = b.layout.unknown_len();
+        out.f.fill(0.);
+        out.q.fill(0.);
+        out.df.fill(0.);
         out.dq.fill(0.);
         out.diagnostic = None;
         out.error = None;
         out.noncon = false;
-        if input.x.len() != n
+        if out.f.len() != n
+            || out.q.len() != n
+            || out.df.len() != n * n
+            || out.dq.len() != n * n
+            || input.x.len() != n
             || state.current.len() < self.states
             || state.accepted.len() < self.states
             || !Arc::ptr_eq(&b.identity, &self.identity)
@@ -565,7 +647,15 @@ impl CompiledModule {
             scratch.width = n;
             scratch.machine = program::Machine::default();
         }
-        if scratch.initialized && program::evaluate(self, b, input, scratch, out, &mut state) {
+        // Keep initialized false until the general evaluator has initialized its
+        // own slots. A later unsupported specialization can still enter it cold.
+        #[cfg(feature = "jit")]
+        let direct_start = self.direct_start && !scratch.disable_jit && b.circuit.is_some();
+        #[cfg(not(feature = "jit"))]
+        let direct_start = false;
+        if (scratch.initialized || direct_start)
+            && program::evaluate(self, b, input, scratch, out, &mut state)
+        {
             return;
         }
         // Retained numeric variables are history, independent of this call's unknowns.
@@ -642,19 +732,19 @@ struct CallFrame {
     outputs: Vec<Option<Value>>,
 }
 
-struct Runtime<'a, 'b> {
+struct Runtime<'a, 'b, 's> {
     drives: Vec<Drive>,
     integrals: Vec<Option<Value>>,
     module: &'a CompiledModule,
     bound: &'a Bound,
     input: &'a EvalInput<'a>,
     state: StateIo<'b>,
-    out: &'b mut EvalOutput,
+    out: &'b mut EvalStamp<'s>,
     scratch: &'b mut Scratch,
     n: usize,
     depth: usize,
 }
-impl Runtime<'_, '_> {
+impl Runtime<'_, '_, '_> {
     fn fail(&mut self, msg: impl Into<String>) {
         if self.out.error.is_none() {
             self.out.error = Some(msg.into());

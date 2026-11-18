@@ -316,6 +316,22 @@ impl Slots {
         at.c += n * n;
     }
 
+    /// Borrow the next VA instance's final contribution slots.
+    fn va_stamp(&mut self, at: &mut SlotOffsets, n: usize) -> spx_va::EvalStamp<'_> {
+        let stamp = spx_va::EvalStamp {
+            f: &mut self.f[at.f..at.f + n],
+            q: &mut self.q[at.q..at.q + n],
+            df: &mut self.g[at.g..at.g + n * n],
+            dq: &mut self.c[at.c..at.c + n * n],
+            ..Default::default()
+        };
+        at.f += n;
+        at.q += n;
+        at.g += n * n;
+        at.c += n * n;
+        stamp
+    }
+
     /// Allocate zeroed slots matching a layout.
     pub fn for_layout(l: &StampLayout) -> Self {
         Self {

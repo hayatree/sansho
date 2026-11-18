@@ -4,7 +4,9 @@
 mod abi;
 mod arithmetic;
 mod guards;
+mod joins;
 mod lower;
+mod packed;
 mod split;
 
 use super::*;
@@ -12,6 +14,7 @@ use std::io::Write;
 
 #[derive(PartialEq, Eq, Hash, Debug, serde::Serialize)]
 struct Key {
+    circuit: Option<CircuitStamp>,
     parameters: Vec<(u64, Option<Arc<str>>)>,
     given: Vec<bool>,
     layout: Vec<Option<usize>>,
@@ -29,6 +32,7 @@ pub(crate) struct Cache(Mutex<HashMap<Key, Cell>>);
 
 #[derive(Debug)]
 struct Kernel {
+    bias_only: bool,
     code: abi::Code,
     constants: Vec<f64>,
     queries: Vec<String>,
@@ -47,6 +51,7 @@ impl Bound {
     }
     fn native_key(&self, temperature: f64, mfactor: f64) -> Key {
         Key {
+            circuit: self.circuit.clone(),
             tnom: self.sim.tnom.to_bits(),
             gmin: self.sim.gmin.to_bits(),
             parameters: self
@@ -119,6 +124,7 @@ impl CompiledModule {
                             self.states,
                             spec.regular,
                             native.as_ref(),
+                            b.circuit.as_ref(),
                         )
                     });
             match result {
@@ -148,7 +154,7 @@ impl CompiledModule {
         {
             return Ok((spec, Some(entry.child(&[b"native", &bytes]))));
         }
-        let p = Program::compile(self, b, input, self.states == 0)
+        let p = Program::compile_channels(self, b, input, self.states == 0, false, true)
             .ok_or("binding requires the general evaluator")?;
         let regular = self.states == 0
             && !p
@@ -156,7 +162,7 @@ impl CompiledModule {
                 .iter()
                 .any(|op| matches!(op, Op::Ddx(..) | Op::Remember(..)));
         let program = if regular {
-            Program::compile_channels(self, b, input, true, true)
+            Program::compile_channels(self, b, input, true, true, true)
                 .ok_or("charge specialization failed")?
         } else {
             p
@@ -185,6 +191,7 @@ impl Kernel {
         states: usize,
         regular: bool,
         disk: Option<&crate::cache::Artifact>,
+        circuit: Option<&CircuitStamp>,
     ) -> Result<Self, String> {
         // Every native displacement is a signed 32-bit byte offset.
         for elements in [
@@ -221,9 +228,28 @@ impl Kernel {
             .collect();
 
         // Some backend resource/ISA failures are reported by Cranelift as unwinds.
-        let code = std::panic::catch_unwind(|| lower::compile(&p, n, regular, disk))
-            .map_err(|_| "native backend failed during compilation".to_string())??;
+        let code = std::panic::catch_unwind(|| {
+            lower::compile(&p, n, regular, disk, circuit.filter(|_| regular))
+        })
+        .map_err(|_| "native backend failed during compilation".to_string())??;
+        let bias_only = regular
+            && p.ops.iter().all(|op| {
+                matches!(
+                    op,
+                    Op::Math(..)
+                        | Op::Charge(..)
+                        | Op::Nop
+                        | Op::Unknown(..)
+                        | Op::CheckZeroProduct(..)
+                        | Op::Simparam(..)
+                        | Op::IfFalse(..)
+                        | Op::Jump(..)
+                        | Op::Phi(..)
+                        | Op::Stamp(..)
+                )
+            });
         Ok(Self {
+            bias_only,
             code,
             regular,
             constants: p.values,
@@ -249,6 +275,13 @@ pub(super) struct Instance {
 }
 
 impl Machine {
+    pub(in crate::eval) fn bias_only(&self) -> bool {
+        self.native
+            .kernel
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some_and(|k| k.bias_only)
+    }
     pub(in crate::eval) fn used_jit(&self) -> bool {
         self.native.kernel.is_some()
     }
@@ -278,7 +311,7 @@ impl Instance {
         b: &Bound,
         input: &EvalInput<'_>,
         slots: &mut [Slot],
-        out: &mut EvalOutput,
+        out: &mut EvalStamp<'_>,
         state: &mut StateIo<'_>,
     ) -> Dispatch {
         let key = (input.temperature.to_bits(), input.mfactor.to_bits());
@@ -295,7 +328,12 @@ impl Instance {
             } else {
                 None
             };
-            if self.kernel.is_some() {
+            if self
+                .kernel
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .is_some_and(|k| !k.bias_only)
+            {
                 self.history.clear();
                 self.history.extend(
                     slots
@@ -307,6 +345,19 @@ impl Instance {
         let Some(kernel) = self.kernel.as_ref().and_then(std::sync::Weak::upgrade) else {
             return Dispatch::Interpreter;
         };
+        if let Some(stamp) = &b.circuit
+            && ((stamp.dc && input.analysis != Analysis::Dc)
+                || stamp.wires.iter().enumerate().any(|(i, &net)| match net {
+                    None => input.x[i].to_bits() != 0,
+                    Some(j) if i != j => {
+                        !input.x[i].is_finite() || input.x[i].to_bits() != input.x[j].to_bits()
+                    }
+                    _ => false,
+                }))
+        {
+            self.flush(slots);
+            return Dispatch::Interpreter;
+        }
         self.replay.clear();
         let mut queries = abi::Queries {
             keys: &kernel.queries,
@@ -336,9 +387,9 @@ impl Instance {
                 || out
                     .df
                     .iter()
-                    .chain(&out.dq)
-                    .chain(&out.q)
-                    .chain(&out.f)
+                    .chain(out.dq.iter())
+                    .chain(out.q.iter())
+                    .chain(out.f.iter())
                     .all(|g| g.is_finite()))
         {
             return Dispatch::Finished;
@@ -358,6 +409,88 @@ impl Instance {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projected_stamp_preserves_live_columns_and_callback_order() {
+        let ast = crate::parse_va(
+            r#"module m(p,a,b,z); electrical p,a,b,z;
+          real u, k, v;
+          analog begin
+            if (V(a,b) != 0) k=$simparam("apart",1);
+            else k=$simparam("tied",2);
+            if (V(p)>0) u=V(a,p)*V(a,p); else u=exp(V(b,p));
+            v=u*k + V(z)*V(p);
+            I(p,a)<+v + ddt(u*V(p));
+            I(z)<+v;
+          end endmodule"#,
+            &crate::NoVaFiles,
+        )
+        .unwrap();
+        let m = crate::compile_module(&ast, None).unwrap();
+        for dc_only in [true, false] {
+            let full = m.bind(&[]).unwrap();
+            let mut adapted = m.bind(&[]).unwrap();
+            adapted.specialize_stamp(&[Some(0), Some(1), Some(1), None], dc_only);
+            let (mut native, mut reference) = (Scratch::default(), Scratch::default());
+            reference.set_jit(false);
+            for bias in [0.5, -0.2, 0.1] {
+                let x = [bias, 0.75, 0.75, 0.];
+                let mut stamps = [EvalOutput::default(), EvalOutput::default()];
+                for ((bound, scratch), out) in [(&full, &mut reference), (&adapted, &mut native)]
+                    .into_iter()
+                    .zip(&mut stamps)
+                {
+                    let calls = std::cell::RefCell::new(Vec::new());
+                    let query = |key: &str| {
+                        calls.borrow_mut().push(key.to_string());
+                        Some(1.3)
+                    };
+                    let input = EvalInput {
+                        x: &x,
+                        temperature: 300.,
+                        mfactor: 1.,
+                        gmin: 1e-12,
+                        abstime: 0.,
+                        analysis: if dc_only {
+                            Analysis::Dc
+                        } else {
+                            Analysis::Tran
+                        },
+                        initial_step: false,
+                        final_step: false,
+                        limit: false,
+                        simparams: &query,
+                    };
+                    m.eval_with_scratch(
+                        bound,
+                        &input,
+                        StateIo {
+                            accepted: &[],
+                            current: &mut [],
+                        },
+                        scratch,
+                        out,
+                    );
+                    assert!(out.error.is_none());
+                    assert_eq!(calls.into_inner(), ["tied"]);
+                }
+                assert!(native.used_jit());
+                for row in 0..3 {
+                    assert_eq!(stamps[0].f[row].to_bits(), stamps[1].f[row].to_bits());
+                    if !dc_only {
+                        assert_eq!(stamps[0].q[row].to_bits(), stamps[1].q[row].to_bits());
+                    }
+                    for col in 0..3 {
+                        let k = row * 4 + col;
+                        assert_eq!(stamps[0].df[k].to_bits(), stamps[1].df[k].to_bits());
+                        if !dc_only {
+                            assert_eq!(stamps[0].dq[k].to_bits(), stamps[1].dq[k].to_bits());
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn equal_bindings_share_pages_owned_by_the_module() {

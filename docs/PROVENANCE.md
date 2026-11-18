@@ -154,3 +154,13 @@ relative to an open directory descriptor. Typed compiler data uses the
 workspace's serde and serde_json packages. These are Cargo dependencies.
 No code from these packages was ported. The offline license, ban and source
 checks use the workspace deny.toml.
+
+### Verilog-A optimization round 2
+
+Circuit-specific stamp projection, forward tangent pairing, SSA edge copies,
+backward derivative liveness and finiteness propagation are original implementations
+based on the chain rule, SSA construction and data-flow analysis. The implementation
+uses the existing Cranelift public IR and frontend APIs. The charge-history optimization
+uses exact equality of the simulator inputs to a side-effect-free evaluation. The
+existing Newton update, voltage limiting and integration equations are preserved.
+The timing probes use Rust and Python monotonic clocks. This round adds no dependencies.

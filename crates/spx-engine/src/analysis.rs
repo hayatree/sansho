@@ -639,7 +639,7 @@ pub(crate) fn tran(
     let mut eval_ctx = ctx;
     eval_ctx.limit = false;
     ws.restore();
-    assemble(ckt, &eval_ctx, &x, &mut ws, opts, 0.0);
+    crate::solve::assemble_charges(ckt, &eval_ctx, &x, &mut ws, opts)?;
     if uic {
         ws.commit();
     }
@@ -706,7 +706,7 @@ pub(crate) fn tran(
         // Charges at the converged point (state is updated consistently for commit).
         eval_ctx.time = ctx.time;
         eval_ctx.final_step = ctx.final_step;
-        assemble(ckt, &eval_ctx, &x_new, &mut ws, opts, 0.0);
+        crate::solve::assemble_charges(ckt, &eval_ctx, &x_new, &mut ws, opts)?;
         for i in 0..n {
             qdot_new[i] = integ.a0 * ws.asm.q[i] + integ.hist[i];
         }

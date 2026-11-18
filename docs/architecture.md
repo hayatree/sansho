@@ -160,8 +160,9 @@ Results are therefore bit-identical regardless of thread count or scheduling. Ex
 8 bytes × number of contributions.
 
 Elaboration fixes the chunk size at 1,024 for linear devices, 64 for built-in nonlinear devices
-and two for Verilog-A instances. Each VA chunk keeps reusable input and stamp buffers
-and an interpreter workspace for each instance. Device evaluation uses Rayon when the circuit
+and two for Verilog-A instances on circuits with fewer than 32 VA instances. Larger
+VA circuits use six instances per chunk. Each instance has reusable local inputs and an
+evaluator workspace. Its evaluator writes directly into the chunk's final stamp slots. Device evaluation uses Rayon when the circuit
 has at least eight VA instances or 256 nonlinear instances. Every value of `G`, `C`, `f`, `q`
 and `b` is gathered in its original source order. The VA assembly test compares the bits of every
 time point and signal on one, two and five threads.

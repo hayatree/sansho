@@ -9,7 +9,7 @@ impl Program {
         b: &Bound,
         input: &EvalInput<'_>,
         slots: &mut [Slot],
-        out: &mut EvalOutput,
+        out: &mut EvalStamp<'_>,
         state: &mut StateIo<'_>,
         mut query: impl FnMut(&str) -> Option<f64>,
     ) -> bool {
@@ -133,7 +133,6 @@ impl Program {
                         && (a >= gradient_count
                             || rows[a * w..(a + 1) * w].iter().all(|x| x.is_finite()));
                 }
-                Op::Noise(d) => values[d] = 0.,
                 Op::Time(d) => values[d] = input.abstime,
                 Op::History(d, i, q) => {
                     values[d] = slots[i]

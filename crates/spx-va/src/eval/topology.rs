@@ -50,7 +50,7 @@ pub(super) fn layout(m: &CompiledModule, b: &Bound, input: &EvalInput<'_>) -> La
             ],
             ..Scratch::default()
         };
-        let mut out = EvalOutput::default();
+        let mut out = EvalStamp::default();
         let runtime = Runtime {
             module: m,
             bound: b,
@@ -119,7 +119,7 @@ pub(super) fn layout(m: &CompiledModule, b: &Bound, input: &EvalInput<'_>) -> La
 }
 
 struct Propagation<'a, 'b> {
-    runtime: Runtime<'a, 'b>,
+    runtime: Runtime<'a, 'b, 'b>,
     modes: &'b mut [Mode],
 }
 impl Propagation<'_, '_> {

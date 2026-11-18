@@ -16,7 +16,9 @@ mod limit;
 mod math;
 mod parser;
 mod sema;
-pub use eval::{Analysis, BindOptions, Bound, EvalInput, EvalOutput, Layout, Scratch, StateIo};
+pub use eval::{
+    Analysis, BindOptions, Bound, EvalInput, EvalOutput, EvalStamp, Layout, Scratch, StateIo,
+};
 pub use ir::{CompiledModule, ParamInfo};
 pub use sema::compile_module;
 pub mod preproc;
