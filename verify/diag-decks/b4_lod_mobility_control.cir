@@ -1,0 +1,19 @@
+* BSIM4 mobility stress and an equivalent explicit mobility on independent drains
+* Provenance: original test of the BSIM4 4.8.2 Technical Manual, equations 14.3-5.
+* All three devices have the same drawn dimensions, temperature and terminal bias.
+* The reference-spacing and close-spacing devices share the very same model.
+* The control has U0 multiplied by (1 + rho_close) / (1 + rho_reference).
+.param lod_ratio={(1+4e-8*(1/0.56u+1/0.86u))/(1+4e-8*2/1.06u)}
+.model layout nmos level=54 version=4.8.2 vth0=0.4 k1=0.48 k2=0.015
++ u0=0.032 ku0=4e-8 saref=1u sbref=1u kvsat=0 kvth0=0
+.model control nmos level=54 version=4.8.2 vth0=0.4 k1=0.48 k2=0.015
++ u0={0.032*lod_ratio}
+vref dr 0 0.05
+vclose dc 0 0.05
+vcontrol du 0 0.05
+vg g 0 0
+mref dr g 0 0 layout w=2u l=0.12u sa=1u sb=1u
+mclose dc g 0 0 layout w=2u l=0.12u sa=0.5u sb=0.8u
+mcontrol du g 0 0 control w=2u l=0.12u
+.dc vg 0 1.2 10m
+.end

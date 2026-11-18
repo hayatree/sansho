@@ -306,7 +306,7 @@ impl Size {
         let edge = wj * nf;
         let perimeter = |length: f64| {
             if p.get("permod", 1.) == 1. {
-                (length - edge).max(0.)
+                length - edge
             } else {
                 length
             }

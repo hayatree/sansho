@@ -46,44 +46,66 @@ The numerical comparison suite exercises fewer combinations than this table. In 
 5. Effective CV flat-band and drain bias use 20 mV smoothing. The flat-band radical uses the magnitude of the zero-bias flat-band voltage, with a 1e-30 V floor to define its derivative at zero. The accumulation centroid transition width is 1e-3 TOXE. The capMod 2 surface-potential transition uses 1 mV. Overdrive below 1e-25 V has zero partitioned inversion charge. Negative XPART suppresses intrinsic charge. XPART below, equal to and above 0.5 select 40/60, 50/50 and 0/100 saturation partition respectively. CKAPPA has a lower bound of 0.01 V.
 6. Oxide tunneling uses 10 mV edge-voltage smoothing. The channel partition expressions use a dimensionless 1e-4 symmetric regularization, adding 2e-4 to their shared denominator. An omitted PIGCD uses the oxide-barrier approximation with a 1e-12 V overdrive floor. GIDL mode 1 limits the body-voltage denominator using GIDLCLAMP, with a minimum magnitude of 1e-12 V.
 7. Junction charge integrates the reverse-bias depletion capacitance and continues the capacitance linearly in forward bias. Limiting currents use tangent continuations. We use ln(T/TNOM) for the junction saturation-density power law so the multiplier is one at nominal temperature. The printed logarithm in equations 13.39–45 is singular there. Temperature coefficients of junction capacitance are fractional per kelvin, consistent with Appendix A.13. Built-in junction potentials are bounded below by 10 mV. Trap-assisted current uses its forward asymptote within 1e-4 of the characteristic-voltage pole, measured as a fraction of that voltage.
-8. Explicit resistive branches have a 1 µΩ series floor and a 1 mΩ body floor. The reduced body networks retain their node layout with GBMIN and low-resistance ties. Omitted diffusion geometry uses shared interior rectangles and isolated, shared or merged ends. Point contacts use a rectangular spreading-resistance estimate. An explicit zero perimeter or area overrides a derived value. Omitted NRD/NRS follow §12.2.2, which derives or disables diffusion resistance.
+8. Explicit resistive branches have a 1 µΩ series floor and a 1 mΩ body floor. The reduced body networks retain their node layout with GBMIN and low-resistance ties. Omitted diffusion geometry uses shared interior rectangles and isolated, shared or merged ends. Point contacts use a rectangular spreading-resistance estimate. An explicit zero perimeter or area overrides a derived value. With PERMOD=1, §12.2.1 subtracts the gate edge from a supplied total perimeter. The result can be negative when a wrapper supplies zero. The manual leaves this case unspecified. We use nonnegative physical lengths for leakage and reverse depletion. In forward bias the three terms of §11.2 give a single affine capacitance. We retain the signed perimeter in its intercept and slope, each bounded below by zero to keep the continuation passive. Charge is continuous and zero at zero junction bias. An undersized perimeter can give different one-sided capacitances there. Gate-edge leakage uses its own width even when bottom area and isolation perimeter are zero. Omitted NRD/NRS follow §12.2.2, which derives or disables diffusion resistance.
 9. Stress sums evaluate the first 128 fingers individually, then integrate the reciprocal tail with endpoint and first derivative corrections. WPE needs layout moments. SC alone with active WPE produces E-UNSUPPORTED because the manual refers calculation of those moments to an external mask-distribution specification. Nonzero MTRLMOD also produces E-UNSUPPORTED. Parameter checks cover invalid selectors, positive dimensions and selected extreme dimensions or oxide thicknesses. A warning about an unused model coefficient identifies a coverage or inactive-branch limitation.
-10. Newton iterations limit gate and drain steps and both junction biases. The junction limiter uses a minimum reference current of 1e-30 A solely to calculate its critical voltage. For UIC, the integrator takes a short follow-up step (one sixteenth of the initial interval) after a first-step voltage jump over 0.1 V plus VNTOL. This resolves the decay of the initial displacement-current impulse. The simulator and reference can still accept different time grids.
+10. Newton iterations limit gate and drain steps and both junction biases. The junction limiter uses a minimum reference current of 1e-30 A solely to calculate its critical voltage. After a first-step UIC voltage jump over 0.1 V plus VNTOL, the integrator limits the follow-up step by the shortest positive local Cii/Gii among registered junction-body nodes that moved by more than VNTOL. These diagonal values are from the last Newton linearization and estimate the local RC relaxation time. The step stays between the timestep floor and the first interval. Without a responding RC node the existing one-sixteenth rule applies.
+11. Every intrinsic terminal, overlap terminal and physical junction contributes its unassembled charge to transient error control, including ground-connected terminals. The integrator uses the same divided differences and tolerances as for the summed MNA rows, including internal nodes. Local histories advance only on acceptance. On startup it holds the first interval for a second sample before growth unless a UIC jump requires reduction. It clips the proposed interval at source corners. After a corner, one backward-Euler step supplies a right-sided current for trapezoidal integration. Until three accepted charge samples are available, error control can use the first-order estimate.
 
 ## Comparison with the cached reference
 
-The generic bin/layout sweep combines two short multi-finger transistors with different SA/SB spacings and a long device. The combined drain current falls 1.65% below the reference at 1.2 V. A diagnostic simulation with KU0 set to zero in a temporary input reduced the discrepancy to 0.05% at that point. This isolates the difference to the mobility/velocity stress correction in §14.1.1. The delivered model applies the manual's correction. The available reference records the sum of the three currents.
+### Mobility stress
 
-The SKY130 inverter and ring have their worst scores at internal body-network nodes. On the inverter the worst sample is just before the end of the first input ramp. Its output node differs by 3.1 mV and the next stage by 26.5 mV at their respective worst samples. On the ring the worst sample is 76 fs into UIC startup. Both the junction displacement current and its interpolation depend on the early timesteps. In a diagnostic build forced to step on the reference time grid, the inverter score fell from 7.888 to 4.039 and the ring score from 11.400 to 1.331. Time discretization explains part of each discrepancy. The remaining equation-level difference has not been isolated.
+Equations 14.3–6 and §14.1.3 specify the ratio `(1 + rho) / (1 + rho_ref)`. Both rhos use KU0 divided by the same size and temperature factor. Only the actual inverse isolation distances are averaged over fingers. For `b4_n_lod_ku0` the inverse-distance sum is 2.948505 per µm, compared with 1.886792 per µm for the reference geometry. Its U0 multiplier is 1.039488. For `b4_n_lod_nf` the four-finger average gives 0.958365 as the U0 multiplier. The unit tests exercise the size factor, reference normalization, nonzero TKU0 and distinct mobility and velocity ratios.
+
+All saved values in the 121-point KU0-only reference are identical to the zero-KU0/KVSAT control reference. With KU0 zero, equation 14.6 also gives unit velocity scaling in the control. As a separate experiment, suppressing only the U0 multiplier in spx produced scores of 0.220 for KU0, 0.237 for NF and 0.017 for the combined bin/layout deck. Velocity scaling, threshold shifts and the spacing average were active in that experiment. The delivered model retains equation 14.5. The cached traces establish the missing measurable mobility response, but do not identify its cause inside the reference run.
+
+### Body-network transients
+
+Figure 9.3 and §11.2 place each junction between its physical diffusion and the corresponding db or sb body node. Intrinsic bulk charge belongs to bNodePrime. The generic ramp test exposed an integration restart error on those nodes. At 300.1 ps both simulators reached −35.03 µV on db. At 300.3 ps B4-1's second backward-Euler step gave 203.55 µV against 330.17 µV in the reference. Returning to trapezoidal integration after the first right-sided derivative resolves that discrepancy. Holding the initial interval until a second startup sample is available also resolves the initial ramp errors.
+
+The SKY130 inverter has a second effect. Its second-stage wrappers pass zero perimeter, and the output briefly swings outside the supply rails. Evaluating spx's discrete KCL on the saved voltages at 175 ps gave a 1.74 µA drain-body discrepancy on the second NMOS, with the opposite discrepancy at the output. The reverse-biased junction at 177 ps agreed to within 0.1 nA. Retaining the signed perimeter in the forward capacitance reduced the inverter score from 4.112 after the restart fixes to 0.190.
+
+The five-stage SKY130 ring begins with a 1.8 V supply imposed on a zero-initialized supply node under UIC. The first accepted samples at 20 fs agree within tolerance across all signals. At the next reference sample, 28.0002 fs, the fourth NMOS internal body is at 152.936 mV. The spx waveform interpolates to 125.740 mV there. On that body row the saved 20–28 fs interval has a 7.5 µA KCL residual using backward Euler and a 2.06 mA residual using trapezoidal integration. At the following sample, 44 fs, the residuals are 1.48 mA and 3.49 µA respectively. These measurements support a backward-Euler step followed by trapezoidal integration. In a separate refinement experiment we kept the same first accepted state and limited subsequent intervals through 200 fs to 0.25 fs and then 0.125 fs. The values were 124.205 and 124.185 mV. Refining this part of the spx trajectory does not reproduce the coarse reference sample. From 10 ps onward the worst score over all signals, using the full-deck normalization, is 0.367. The source of the reference's initial post-impulse step size remains unresolved.
 
 ### Cached deck results
 
-The score and maximum absolute error belong to the signal with the highest normalized error in each deck. A score at or below 1 passes. Times are the median of three separate release-mode CLI processes on a warm filesystem.
+Worst signal and maximum absolute difference use the ordinary verification harness. A score at or below 1 passes. All 30 cached decks ran. Four exceed tolerance.
 
-| Deck | Worst signal | Score | Maximum absolute error | Check / run (s) |
-|---|---|---:|---:|---:|
-| `b4_cs_ac` | `v(d)` | 0.038 | 1.672e-4 V | — |
-| `b4_inverter_tran` | `i(vin)` | 0.021 | 8.272e-8 A | — |
-| `b4_n_bin_layout` | `i(vd)` | **8.235** | 3.080e-5 A | — |
-| `b4_n_capmod` | `i(vg)` | 0.998 | 7.700e-6 A | — |
-| `b4_n_diode` | `i(vb)` | 0.487 | 1.022e-5 A | — |
-| `b4_n_idvd` | `i(vd)` | 0.375 | 4.186e-7 A | — |
-| `b4_n_idvg_lin` | `i(vd)` | 0.250 | 2.885e-8 A | — |
-| `b4_n_idvg_sat` | `i(vd)` | 0.216 | 2.407e-7 A | — |
-| `b4_n_igate` | `i(vd)` | 0.031 | 4.984e-8 A | — |
-| `b4_n_mobmod` | `i(vd)` | 0.135 | 3.309e-8 A | — |
-| `b4_n_rnet` | `i(vd)` | 0.144 | 3.927e-7 A | — |
-| `b4_n_temp` | `i(vd)` | 0.064 | 4.194e-8 A | — |
-| `b4_n_tempmod` | `i(vd)` | 0.041 | 7.214e-8 A | — |
-| `b4_p_iv` | `i(vd)` | 0.215 | 1.660e-8 A | — |
-| `b4_ring5` | `v(a)` | 0.234 | 3.007e-3 V | — |
-| `sky_cs_ac` | `v(m.xn.msky130_fd_pr__nfet_01v8#body)` | 0.181 | 4.167e-7 V | 0.154 / 0.167 |
-| `sky_inverter_tran` | `v(m.xn2.msky130_fd_pr__nfet_01v8#dbody)` | **7.888** | 1.144e-4 V | 0.188 / 0.217 |
-| `sky_nfet_idvd` | `i(vd)` | 0.137 | 3.659e-7 A | 0.163 / 0.154 |
-| `sky_nfet_iv` | `i(vd)` | 0.119 | 1.717e-8 A | 0.164 / 0.158 |
-| `sky_pfet_iv` | `i(vs)` | 0.173 | 2.918e-7 A | 0.158 / 0.209 |
-| `sky_ring5` | `v(m.x1.xn.msky130_fd_pr__nfet_01v8#sbody)` | **11.400** | 6.759e-3 V | 0.169 / 0.220 |
+| Deck | Worst signal | Score | Maximum absolute difference |
+|---|---|---:|---:|
+| `b4_cs_ac` | `v(d)` | 0.038 | 1.672e-4 V |
+| `b4_inverter_tran` | `v(out)` | 0.015 | 1.930e-4 V |
+| `b4_n_bin_layout` | `i(vd)` | **8.235** | 3.080e-5 A |
+| `b4_n_capmod` | `i(vg)` | 0.036 | 2.744e-7 A |
+| `b4_n_diode` | `i(vb)` | 0.487 | 1.022e-5 A |
+| `b4_n_idvd` | `i(vd)` | 0.375 | 4.186e-7 A |
+| `b4_n_idvg_lin` | `i(vd)` | 0.250 | 2.885e-8 A |
+| `b4_n_idvg_sat` | `i(vd)` | 0.216 | 2.407e-7 A |
+| `b4_n_igate` | `i(vd)` | 0.031 | 4.984e-8 A |
+| `b4_n_lod_ku0` | `i(vd)` | **12.886** | 1.895e-5 A |
+| `b4_n_lod_kvsat` | `i(vd)` | 0.220 | 3.233e-7 A |
+| `b4_n_lod_kvth0` | `i(vd)` | 0.777 | 2.336e-6 A |
+| `b4_n_lod_nf` | `i(vd)` | **14.234** | 4.383e-5 A |
+| `b4_n_mobmod` | `i(vd)` | 0.135 | 3.309e-8 A |
+| `b4_n_nf_geo` | `i(vd)` | 0.220 | 6.427e-7 A |
+| `b4_n_rbody_tran` | `v(m1#dbody)` | 0.012 | 6.013e-8 V |
+| `b4_n_rnet` | `i(vd)` | 0.144 | 3.927e-7 A |
+| `b4_n_temp` | `i(vd)` | 0.064 | 4.194e-8 A |
+| `b4_n_tempmod` | `i(vd)` | 0.041 | 7.214e-8 A |
+| `b4_n_wpe` | `i(vd)` | 0.220 | 3.233e-7 A |
+| `b4_p_iv` | `i(vd)` | 0.215 | 1.660e-8 A |
+| `b4_ring5` | `v(a)` | 0.231 | 2.972e-3 V |
+| `sky_cs_ac` | `v(m.xn.msky130_fd_pr__nfet_01v8#body)` | 0.180 | 4.161e-7 V |
+| `sky_inverter_tran` | `v(m.xn2.msky130_fd_pr__nfet_01v8#body)` | 0.190 | 2.726e-6 V |
+| `sky_nfet_charge` | `v(m.xm1.msky130_fd_pr__nfet_01v8#body)` | 0.020 | 7.073e-8 V |
+| `sky_nfet_idvd` | `i(vd)` | 0.137 | 3.659e-7 A |
+| `sky_nfet_iv` | `i(vd)` | 0.119 | 1.717e-8 A |
+| `sky_pfet_charge` | `i(vb)` | 0.010 | 3.796e-9 A |
+| `sky_pfet_iv` | `i(vs)` | 0.173 | 2.918e-7 A |
+| `sky_ring5` | `v(m.x4.xn.msky130_fd_pr__nfet_01v8#body)` | **9.795** | 2.720e-2 V |
 
-The original cached deck suite passed 14/14 and the JIT Verilog-A suite passed 10/10. Their raw waveform values matched a separate build of the unchanged checkout.
+The original 14 decks and ten JIT Verilog-A decks passed and all 24 spx raw files matched their pre-change SHA-256 digests. The ten Verilog-A decks also passed in the interpreter. Two new inputs in `verify/diag-decks` await maintainer references. The mobility control measures separate drain currents for two spacings on one model card alongside a device with the hand-calculated mobility. The close-spacing and explicit-mobility currents agree at every spx sweep point. The tight-tolerance ring keeps the 2 ps maximum timestep and the initial UIC jump.
 
-The release microbenchmark measured 431.3 ns per intrinsic current, charge and both four-terminal Jacobians with default selectors. External network stamps and the matrix solve are excluded. The maintainer reports approximately 16 s for ngspice to load the SKY130 library.
+In B4-1, median check / run times in seconds for three warm release CLI invocations were 0.154 / 0.167 for `sky_cs_ac`, 0.188 / 0.217 for `sky_inverter_tran`, 0.163 / 0.154 for `sky_nfet_idvd`, 0.164 / 0.158 for `sky_nfet_iv`, 0.158 / 0.209 for `sky_pfet_iv` and 0.169 / 0.220 for `sky_ring5`.
+
+The B4-1 release microbenchmark measured 431.3 ns per intrinsic current, charge and both four-terminal Jacobians with default selectors. External network stamps and the matrix solve are excluded. The maintainer reports approximately 16 s for ngspice to load the SKY130 library.

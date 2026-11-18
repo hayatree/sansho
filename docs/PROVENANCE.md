@@ -24,7 +24,7 @@ that introduces the code.
 | PULSE / SIN / EXP / PWL waveforms and defaults | `spx-devices/src/waveform.rs` | Nagel (1975); commonly documented SPICE3 defaults |
 | DAE form `dq/dt + f = b`, deterministic slot assembly | `spx-devices`, `spx-engine/src/solve.rs` | Original design (`docs/architecture.md` D1, D4) |
 | Newton iteration, SPICE convergence test | `spx-engine/src/solve.rs` | Nagel (1975) |
-| Backward Euler / trapezoidal integration, breakpoint handling | `spx-engine/src/analysis.rs` | Nagel (1975); standard numerical ODE texts |
+| Backward Euler / trapezoidal integration, breakpoint handling | `spx-engine/src/analysis.rs` | Nagel (1975); standard numerical ODE texts. Device-local charge error estimates and the internal RC startup bound are original applications of divided differences and linearized KCL. |
 | Topology checks (DC path, voltage-source loops) | `spx-engine/src/circuit.rs` | Ho, Ruehli & Brennan (1975); union-find (textbook) |
 | ASCII raw file layout | `spx-output` | Publicly documented SPICE3/ngspice rawfile format |
 | Sparse LU | `spx-sparse/src/faer_backend.rs` | `faer` crate (MIT), used as a library dependency |

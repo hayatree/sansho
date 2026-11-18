@@ -287,6 +287,11 @@ fn resistance_and_junction_network_jacobians() {
                     let mut builder = StampBuilder::new(&u);
                     group.setup(&mut builder).unwrap();
                     let layout = builder.finish();
+                    // Four intrinsic terminals, four overlap terminals and two
+                    // signed contributions from each physical junction, even if
+                    // other cores for the series networks intervene in slot order.
+                    assert_eq!(layout.lte_q.len(), 12);
+                    assert_eq!(layout.relaxation_nodes.len(), if body == 0 { 0 } else { 2 });
                     let n = u.len();
                     let eval = |v: &[f64]| {
                         let mut slots = Slots {
@@ -308,6 +313,9 @@ fn resistance_and_junction_network_jacobians() {
                             },
                             &mut slots,
                         );
+                        for (slot, &q) in slots.q.iter().enumerate() {
+                            assert!(q == 0. || layout.lte_q.contains(&slot));
+                        }
                         let matrix = |keys: &[(Node, Node)], data: &[f64]| {
                             let mut mat = vec![0.; n * n];
                             for (&(row, col), &val) in keys.iter().zip(data) {
@@ -361,6 +369,81 @@ fn resistance_and_junction_network_jacobians() {
                     }
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn junction_with_only_a_gate_edge_and_a_signed_perimeter_correction() {
+    let model = params(&[
+        ("jswgs", 1e-9),
+        ("cjswgs", 4e-10),
+        ("cjsws", 1e-10),
+        ("mjswgs", 0.5),
+        ("mjsws", 0.25),
+    ]);
+    let width = 1e-6;
+    for j in Junction::pair(&model, [0.; 2], [-width; 2], width, 1., 300.15, 300.15) {
+        assert!((j.isat - 1e-15).abs() < 1e-29);
+        let eval = |v| j.eval(Dual::<1>::var(v, 0), 0.).1;
+        let forward = eval(0.2);
+        let c0 = width * (4e-10 - 1e-10);
+        let slope = width * (4e-10 * 0.5 - 1e-10 * 0.25);
+        assert!((forward.v - 0.2 * (c0 + 0.1 * slope)).abs() < 1e-29);
+        assert!((forward.d[0] - (c0 + 0.2 * slope)).abs() < 1e-29);
+        assert!((eval(-0.2).d[0] - width * 4e-10 / 1.2_f64.sqrt()).abs() < 1e-29);
+        assert_eq!(eval(0.).v, 0.);
+    }
+}
+
+#[test]
+fn mobility_stress_uses_reference_distances_and_kelvin_temperature_ratio() {
+    let model = params(&[
+        ("ku0", 4e-8),
+        ("kvsat", 0.2),
+        ("tku0", 1.5),
+        ("saref", 0.7e-6),
+        ("sbref", 0.9e-6),
+        ("lku0", 0.1e-6),
+        ("llodku0", 1.),
+    ]);
+    for nf in [1, 4] {
+        let geometry = Mos1Geometry {
+            l: 0.2e-6,
+            w: 2e-6,
+            ..Default::default()
+        };
+        let instance = params(&[
+            ("nf", f64::from(nf)),
+            ("sa", 0.3e-6),
+            ("sb", 0.4e-6),
+            ("sd", 0.25e-6),
+        ]);
+        for t in [27., 87.] {
+            let bind = Binding {
+                model: &model,
+                instance: &instance,
+                geometry,
+                polarity: 1.,
+                temp: t,
+                tnom: 27.,
+                scale: 1.,
+            };
+            let mut size = Size::new(&model, &instance, geometry, 1., t, 27.).unwrap();
+            let (mobility, velocity) = (size.u0, size.vsat);
+            layout::stress(&mut size, &bind, 1.).unwrap();
+            let k = 4e-8 / ((1. + 0.1e-6 / geometry.l) * (1. + 1.5 * (t - 27.) / 300.15));
+            let average = (0..nf)
+                .map(|finger| {
+                    let offset = f64::from(finger) * 0.45e-6;
+                    1. / (0.4e-6 + offset) + 1. / (0.5e-6 + offset)
+                })
+                .sum::<f64>()
+                / f64::from(nf);
+            let reference = 1. / 0.8e-6 + 1. / 1e-6;
+            let ratio = |k: f64| (1. + k * average) / (1. + k * reference);
+            assert!((size.u0 / mobility - ratio(k)).abs() < 1e-14);
+            assert!((size.vsat / velocity - ratio(0.2 * k)).abs() < 1e-14);
         }
     }
 }

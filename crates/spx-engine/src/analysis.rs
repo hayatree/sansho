@@ -517,6 +517,22 @@ fn integration(
     }
 }
 
+/// Charge history starts with the MNA rows. Device-local samples follow in
+/// stamp order, including slots connected to ground or cancelling at a node.
+fn charge_sample<'a>(
+    ws: &'a Workspace,
+    slots: &[(usize, usize)],
+    buffer: &'a mut Vec<f64>,
+) -> &'a [f64] {
+    if slots.is_empty() {
+        return &ws.asm.q;
+    }
+    buffer.clear();
+    buffer.extend_from_slice(&ws.asm.q);
+    buffer.extend(slots.iter().map(|&(group, slot)| ws.slots[group].q[slot]));
+    buffer
+}
+
 /// Ratio of the estimated local truncation error to its tolerance (≤ 1 means acceptable),
 /// computed from divided differences of the charges over the new point and the history.
 #[allow(clippy::too_many_arguments)]
@@ -647,9 +663,20 @@ pub(crate) fn tran(
         ws.commit();
     }
     let mut hist = History::default();
-    hist.push(0.0, &ws.asm.q);
-    let mut qdot = vec![0.0; n];
-    let mut qdot_new = vec![0.0; n];
+    // The leading entries are the MNA equations. Track individual device charges
+    // after them so that cancellation at a shared node cannot mask local error.
+    let local_slots: Vec<_> = ckt
+        .layouts
+        .iter()
+        .enumerate()
+        .flat_map(|(group, layout)| layout.lte_q.iter().map(move |&slot| (group, slot)))
+        .collect();
+    let tracks_device_charges = !local_slots.is_empty();
+    let mut buffer = Vec::new();
+    let charges = charge_sample(&ws, &local_slots, &mut buffer);
+    hist.push(0.0, charges);
+    let mut qdot = vec![0.0; charges.len()];
+    let mut qdot_new = vec![0.0; charges.len()];
 
     let mut times = Vec::new();
     let mut cols: Vec<Vec<f64>> = vec![Vec::new(); n];
@@ -669,7 +696,7 @@ pub(crate) fn tran(
     let mut bp_idx = 0;
     // The first step is taken without error control, so start small.
     let mut h = 0.01 * hmax.min(bps.first().copied().unwrap_or(tstop));
-    let mut integ = Integration::dc(n);
+    let mut integ = Integration::dc(charges.len());
     let mut x_new = x.clone();
     while t < tstop - eps {
         attempted_steps += 1;
@@ -677,12 +704,19 @@ pub(crate) fn tran(
         h = h.min(hmax);
         if t + h >= next_bp - eps {
             h = next_bp - t;
-        } else if t + 2.0 * h > next_bp {
-            // Avoid leaving a sliver before the breakpoint.
+        } else if !tracks_device_charges && t + 2.0 * h > next_bp {
+            // Nodal-only control balances the final two intervals. With local
+            // charge estimates, retain the proposed step until the corner clips it.
             h = 0.5 * (next_bp - t);
         }
-        // Order 1 until enough history exists since the last breakpoint.
-        let order = if hist.len() >= 3 { 2 } else { 1 };
+        // After a source corner one backward-Euler step gives a right-sided
+        // current for every tracked charge. Trap only needs that one derivative.
+        let restart_trap = tracks_device_charges && bp_idx > 0 && opts.method == Method::Trap;
+        let order = if hist.len() >= 3 || (restart_trap && hist.len() >= 2) {
+            2
+        } else {
+            1
+        };
         integration(opts.method, order, h, &hist, &qdot, &mut integ);
         ctx.time = t + h;
         ctx.final_step = ctx.time >= tstop - eps;
@@ -710,8 +744,9 @@ pub(crate) fn tran(
         eval_ctx.time = ctx.time;
         eval_ctx.final_step = ctx.final_step;
         crate::solve::assemble_charges(ckt, &eval_ctx, &x_new, &mut ws, opts)?;
-        for i in 0..n {
-            qdot_new[i] = integ.a0 * ws.asm.q[i] + integ.hist[i];
+        let charges = charge_sample(&ws, &local_slots, &mut buffer);
+        for i in 0..charges.len() {
+            qdot_new[i] = integ.a0 * charges[i] + integ.hist[i];
         }
         // Truncation-error control (needs order + 1 history points).
         // A UIC voltage jump may place a displacement-current impulse in the first
@@ -726,20 +761,45 @@ pub(crate) fn tran(
                     *kind == spx_devices::UnknownKind::Voltage
                         && (new - old).abs() > 0.1 + opts.vntol
                 });
-        let mut grow = if voltage_jump { 0.0625 } else { 2.0 };
-        if hist.len() > order {
+        let mut grow = if voltage_jump {
+            // A UIC charge jump invalidates extrapolation from the initial
+            // derivative. Where the device has internal RC storage, limit the
+            // next step by its local linearized relaxation time.
+            let relaxation = ckt
+                .layouts
+                .iter()
+                .flat_map(|l| &l.relaxation_nodes)
+                .filter(|&&i| (x_new[i] - x[i]).abs() > opts.vntol)
+                .filter_map(|&i| {
+                    let diag = ckt.node_diag[i];
+                    let c = ws.asm.c.get(diag)?;
+                    let g = ws.asm.g.get(diag)?;
+                    (*g > 0. && *c > 0.).then(|| c / g)
+                })
+                .reduce(f64::min);
+            relaxation.map_or(0.0625, |tau| tau.max(hmin).min(h) / h)
+        } else if tracks_device_charges && accepted_steps == 0 {
+            // No curvature estimate yet. Acquire a second sample at the initial step.
+            1.0
+        } else {
+            2.0
+        };
+        if hist.len() >= 2 {
+            // Use the conservative first-order estimate while the third divided
+            // difference is unavailable at a trapezoidal restart.
+            let error_order = order.min(hist.len() - 1);
             let r = lte_ratio(
                 opts.method,
-                order,
+                error_order,
                 h,
                 ctx.time,
-                &ws.asm.q,
+                charges,
                 &qdot_new,
                 &qdot,
                 &hist,
                 opts,
             );
-            let factor = 0.9 * r.max(1e-12).powf(-1.0 / (order as f64 + 1.0));
+            let factor = 0.9 * r.max(1e-12).powf(-1.0 / (error_order as f64 + 1.0));
             if r > 1.0 {
                 let h_new = h * factor.clamp(0.125, 0.9);
                 if h_new >= hmin {
@@ -752,7 +812,6 @@ pub(crate) fn tran(
         }
         accepted_steps += 1;
         // Accept.
-        ws.commit();
         t += h;
         let hit_bp = (t - next_bp).abs() <= eps;
         if hit_bp {
@@ -760,7 +819,8 @@ pub(crate) fn tran(
             bp_idx += 1;
             hist.clear();
         }
-        hist.push(t, &ws.asm.q);
+        hist.push(t, charges);
+        ws.commit();
         std::mem::swap(&mut qdot, &mut qdot_new);
         std::mem::swap(&mut x, &mut x_new);
         record(t, &x, &mut times, &mut cols);

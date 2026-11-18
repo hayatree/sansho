@@ -18,7 +18,7 @@ All decks are original circuits written for this project. Raw files go to `verif
 
 ## Built-in BSIM4 and SKY130
 
-`verify/bsim4-decks` contains 15 PDK-independent level-54 decks. The six decks in
+`verify/bsim4-decks` contains 22 PDK-independent level-54 decks. The eight decks in
 `verify/sky130-decks` select the TT section of the externally installed volare
 `sky130A/libs.tech/ngspice/sky130.lib.spice` under `va-models/volare-sky130`.
 The deck-local `.spiceinit` applies to the reference simulator.
@@ -31,6 +31,11 @@ cargo run --offline --release -p spx-verify -- --cached verify/sky130-decks
 Omit `--cached` when generating fresh black-box references. Scores use the same tolerances
 and waveform interpolation as the existing suites. Current discrepancies and the equation
 coverage are recorded in [the BSIM4 model notes](../docs/bsim4.md).
+
+The B4-2 diagnostic inputs are `verify/diag-decks/b4_lod_mobility_control.cir`
+and `verify/diag-decks/sky130/sky_ring5_uic_tight.cir`. Pass both paths to the harness
+to generate their first references. The SKY130 input shares the TT suite's
+deck-local reference settings.
 
 ## Production Verilog-A decks
 

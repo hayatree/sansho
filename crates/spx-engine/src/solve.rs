@@ -21,7 +21,7 @@ use crate::options::SimOptions;
 pub(crate) struct Integration {
     /// Coefficient of `q` (0 for DC).
     pub a0: f64,
-    /// History term (one entry per unknown).
+    /// Nodal history terms, optionally followed by device-local terms for LTE.
     pub hist: Vec<f64>,
 }
 

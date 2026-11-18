@@ -305,15 +305,18 @@ impl DeviceGroup for Bsim4s {
     fn setup(&mut self, b: &mut StampBuilder<'_>) -> Result<(), Diagnostic> {
         for d in &mut self.instances {
             d.at = b.counts();
-            b.core(&d.inner);
-            b.core(&d.overlap_nodes());
+            b.charge_core(&d.inner);
+            b.charge_core(&d.overlap_nodes());
             for side in 0..2 {
-                b.core(&[d.body[side], d.inner[2 * side]]);
+                b.charge_core(&[d.body[side], d.inner[2 * side]]);
                 if d.inner[2 * side] != d.nodes[2 * side] {
                     b.core(&d.series_nodes(side));
                 }
             }
             if d.network.body.is_some() {
+                for node in d.body {
+                    b.relaxation_node(node);
+                }
                 for (a, z) in d.body_branches() {
                     b.resistor(a, z);
                 }

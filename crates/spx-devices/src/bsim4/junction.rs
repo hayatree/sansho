@@ -19,6 +19,7 @@ pub(super) struct Junction {
     forward: f64,
     reverse: f64,
     cap: [[f64; 3]; 3],
+    forward_cap: [f64; 2],
     traps: [[f64; 3]; 3],
 }
 
@@ -49,14 +50,10 @@ impl Junction {
                 + get("xtis", "xtid", 3.) * (t / tn).ln())
                 / n)
                 .exp();
-            let surface =
-                area[side] * get("jss", "jsd", 1e-4) + perim[side] * get("jsws", "jswd", 0.);
+            let surface = area[side] * get("jss", "jsd", 1e-4)
+                + perim[side].max(0.) * get("jsws", "jswd", 0.);
             let gate_edge = edge * get("jswgs", "jswgd", 0.);
-            let isat = if area[side] <= 0. && perim[side] <= 0. {
-                0.
-            } else {
-                jtemp * (surface + gate_edge)
-            };
+            let isat = jtemp * (surface + gate_edge);
             let bv = get("bvs", "bvd", 10.);
             let xjbv = get("xjbvs", "xjbvd", 1.);
             let fwd = get("ijthsfwd", "ijthdfwd", 0.1);
@@ -110,6 +107,12 @@ impl Junction {
                     get(ms, md, m0),
                 ]
             });
+            // In forward bias all three capacitances are affine in V. Combine the
+            // signed perimeter correction before enforcing a passive continuation.
+            let forward_cap = [
+                cap.iter().map(|&[c, _, _]| c).sum::<f64>().max(0.),
+                cap.iter().map(|&[c, p, m]| c * m / p).sum::<f64>().max(0.),
+            ];
             let traps = std::array::from_fn(|k| {
                 let (js, jd, vs, vd, ns, nd, xs, xd, ts, td, geo) = match k {
                     0 => (
@@ -127,7 +130,7 @@ impl Junction {
                         "xtsswd",
                         "tnjtssw",
                         "tnjtsswd",
-                        perim[side],
+                        perim[side].max(0.),
                     ),
                     _ => (
                         "jtsswgs",
@@ -154,6 +157,7 @@ impl Junction {
             });
             Self {
                 traps,
+                forward_cap,
                 mode,
                 isat,
                 nvt,
@@ -191,9 +195,14 @@ impl Junction {
         } else {
             self.exponential(v)
         };
-        let q = self.cap.iter().fold(Dual::cst(0.), |sum, &[c, p, m]| {
-            sum + depletion_charge(v, c, p, m, 0.)
-        });
+        let q = if v.v >= 0. {
+            v * (self.forward_cap[0] + 0.5 * self.forward_cap[1] * v)
+        } else {
+            // A reverse-biased depletion region needs a nonnegative physical extent.
+            self.cap.iter().fold(Dual::cst(0.), |sum, &[c, p, m]| {
+                sum + depletion_charge(v, c.max(0.), p, m, 0.)
+            })
+        };
         let mut total = current + gmin * v;
         for [amplitude, voltage, slope] in self.traps {
             if amplitude > 0. && slope > 0. {

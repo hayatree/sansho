@@ -237,10 +237,15 @@ planned.
   failure.
 - Initial conditions: OP → `.ic` / `UIC`, `.nodeset` (planned).
 
-Implemented in M2: trapezoidal (default) and variable-step BDF2 (`.options method=gear`);
-backward Euler for the first steps after t = 0 and after every breakpoint (history is reset there);
-LTE from divided differences of the assembled charge vector with SPICE `trtol`/`chgtol`/`reltol`
-semantics; rejected steps shrink by at least 10 %, accepted steps grow by at most 2×.
+Transient integration supports trapezoidal (default) and variable-step BDF2
+(`.options method=gear`). Backward Euler starts the analysis and restarts it after source
+breakpoints. The charge LTE uses divided differences with `trtol`, `chgtol` and `reltol`.
+It checks all assembled rows. BSIM4 also registers its intrinsic, overlap and junction charge
+slots so cancellation between contributions cannot hide their errors. With local charge
+tracking, trapezoidal integration resumes once a backward-Euler step supplies the right-sided
+derivative after a corner. Rejected steps shrink by at least 10%, and accepted steps grow by
+at most 2×. [BSIM4 startup and restart conventions](bsim4.md#numerical-conventions-and-limitations)
+
 
 ### 5.4 Small-signal analyses
 

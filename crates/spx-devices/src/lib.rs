@@ -120,6 +120,10 @@ pub struct StampLayout {
     pub f: Vec<Node>,
     /// Rows of `q`.
     pub q: Vec<Node>,
+    /// Charge slots also monitored before summation for transient error control.
+    pub lte_q: Vec<usize>,
+    /// Internal RC storage nodes whose relaxation times bound a transient restart.
+    pub relaxation_nodes: Vec<usize>,
     /// Rows of `b` (independent sources).
     pub b: Vec<Node>,
 }
@@ -217,6 +221,18 @@ impl<'a> StampBuilder<'a> {
         for &r in nodes {
             self.q(r);
         }
+    }
+
+    /// Declare a core whose terminal charges must also be tested individually for LTE.
+    pub fn charge_core(&mut self, nodes: &[Node]) {
+        let first = self.layout.q.len();
+        self.core(nodes);
+        self.layout.lte_q.extend(first..self.layout.q.len());
+    }
+
+    /// Register a local capacitive node with a resistive discharge path.
+    pub fn relaxation_node(&mut self, node: Node) {
+        self.layout.relaxation_nodes.extend(node);
     }
 
     /// Finish and return the layout.
