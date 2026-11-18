@@ -6,10 +6,12 @@ use super::*;
 /// Prepared two-instance kernel for the circuit adapter's default simulator queries.
 #[derive(Debug, Clone)]
 pub struct CircuitPair {
-    kernel: Arc<Kernel>,
+    batch: Arc<BatchCode>,
     stamp: CircuitStamp,
     tnom: f64,
 }
+
+pub(super) type BatchCell = Arc<std::sync::OnceLock<Option<Arc<BatchCode>>>>;
 
 #[derive(Debug)]
 pub(super) struct BatchCode {
@@ -20,11 +22,28 @@ pub(super) struct BatchCode {
 impl CompiledModule {
     /// Prepare a packed evaluation for a pure, bias-dependent circuit specialization.
     pub fn prepare_circuit_pair(&self, b: &Bound, temperature: f64) -> Option<CircuitPair> {
+        self.prepare_projected_pair(b, temperature, &[])
+    }
+
+    /// Prepare a pair with zero seeds for the supplied local Newton increments.
+    /// Residuals and the derivatives for the remaining columns retain their usual layout.
+    pub fn prepare_projected_pair(
+        &self,
+        b: &Bound,
+        temperature: f64,
+        fixed_columns: &[usize],
+    ) -> Option<CircuitPair> {
         if !crate::jit_enabled() || !self.direct_start || !Arc::ptr_eq(&self.identity, &b.identity)
         {
             return None;
         }
-        let stamp = b.circuit.as_ref()?;
+        let mut stamp = b.circuit.clone()?;
+        if fixed_columns.iter().any(|&i| i >= stamp.wires.len()) {
+            return None;
+        }
+        stamp.fixed_columns.extend_from_slice(fixed_columns);
+        stamp.fixed_columns.sort_unstable();
+        stamp.fixed_columns.dedup();
         let input = EvalInput {
             x: &[],
             temperature,
@@ -46,8 +65,14 @@ impl CompiledModule {
         {
             return None;
         }
-        kernel
-            .batch
+        let cell = kernel
+            .batches
+            .lock()
+            .ok()?
+            .entry(stamp.fixed_columns.clone())
+            .or_default()
+            .clone();
+        let batch = cell
             .get_or_init(|| {
                 let disk = self.artifact.as_ref().and_then(|a| {
                     serde_json::to_vec(&b.native_key(temperature, 1.))
@@ -68,13 +93,17 @@ impl CompiledModule {
                 if constants.len() > i32::MAX as usize / 16 {
                     return None;
                 }
+                let native = native.and_then(|artifact| {
+                    let columns = serde_json::to_vec(&stamp.fixed_columns).ok()?;
+                    Some(artifact.child(&[b"packed-columns", &columns]))
+                });
                 std::panic::catch_unwind(|| {
                     lower::compile(
                         &spec.program,
                         stamp.wires.len(),
                         true,
                         native.as_ref(),
-                        Some(stamp),
+                        Some(&stamp),
                         Some(&indices),
                     )
                 })
@@ -85,12 +114,12 @@ impl CompiledModule {
                     }
                 })
                 .ok()
-                .map(|code| BatchCode { code, constants })
+                .map(|code| Arc::new(BatchCode { code, constants }))
             })
             .as_ref()?;
         Some(CircuitPair {
-            kernel,
-            stamp: stamp.clone(),
+            batch: Arc::clone(batch),
+            stamp,
             tnom: b.sim.tnom,
         })
     }
@@ -124,9 +153,7 @@ impl CircuitPair {
             v.clear();
             v.resize(len, 0.);
         }
-        let Some(batch) = self.kernel.batch.get().and_then(Option::as_ref) else {
-            return false;
-        };
+        let batch = &self.batch;
         let input = EvalInput {
             x,
             temperature: 0.,

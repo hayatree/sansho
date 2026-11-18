@@ -38,7 +38,7 @@ pub(crate) struct Cache(Mutex<HashMap<Key, Cell>>);
 struct Kernel {
     bias_only: bool,
     code: abi::Code,
-    batch: std::sync::OnceLock<Option<batch::BatchCode>>,
+    batches: Mutex<HashMap<Vec<usize>, batch::BatchCell>>,
     constants: Vec<f64>,
     queries: Vec<String>,
     stores: Vec<(usize, Ty)>,
@@ -256,7 +256,7 @@ impl Kernel {
         Ok(Self {
             bias_only,
             code,
-            batch: Default::default(),
+            batches: Default::default(),
             regular,
             constants: p.values,
             queries,

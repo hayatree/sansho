@@ -45,6 +45,14 @@ impl NewtonLu {
         })
     }
 
+    /// Original column eliminated last by the simplicial Newton factorization.
+    pub fn last_column(&self) -> Option<usize> {
+        match &self.backend {
+            Backend::Sparse(s) => s.order.col_perm().arrays().0.last().copied(),
+            Backend::General(_) => None,
+        }
+    }
+
     /// Factor a new numeric assembly, reverting to partial pivoting if needed.
     pub fn factor(&mut self, values: &[f64]) -> Result<(), SolverError> {
         let result = match &mut self.backend {

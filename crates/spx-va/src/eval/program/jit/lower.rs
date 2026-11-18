@@ -810,6 +810,9 @@ impl Lower<'_, '_> {
         }
         let v = self.load(offset_of!(Frame, x), i);
         self.set(d, v);
+        if self.circuit.is_some_and(|s| s.fixed_columns.contains(&i)) {
+            return;
+        }
         let one = self.num(1.);
         self.set_grad(d, i, one);
     }

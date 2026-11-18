@@ -198,6 +198,7 @@ pub struct Bound {
 #[cfg(feature = "jit")]
 #[derive(Debug, Clone, Eq, PartialEq, Hash, serde::Serialize)]
 struct CircuitStamp {
+    fixed_columns: Vec<usize>,
     bias: Option<(Vec<Option<u64>>, [u64; 2])>,
     wires: Vec<Option<usize>>,
     dc: bool,
@@ -244,6 +245,7 @@ impl Bound {
             })
             .collect();
         self.circuit = Some(CircuitStamp {
+            fixed_columns: Vec::new(),
             wires,
             dc: dc_only,
             bias: None,

@@ -21,6 +21,14 @@ struct Instance {
     params: Vec<(String, f64)>,
 }
 
+#[cfg(feature = "jit")]
+#[derive(Debug)]
+struct PairGroup {
+    members: Vec<usize>,
+    kernel: spx_va::CircuitPair,
+    fixed_node: Node,
+}
+
 /// All instances of one compiled module, in fixed netlist order.
 #[derive(Debug, Default)]
 pub struct VaGroup {
@@ -29,7 +37,7 @@ pub struct VaGroup {
     #[cfg(feature = "jit")]
     dc_only: bool,
     #[cfg(feature = "jit")]
-    pairs: Vec<(Vec<usize>, spx_va::CircuitPair)>,
+    pairs: Vec<PairGroup>,
     #[cfg(feature = "jit")]
     pair_temp: u64,
     buffers: std::sync::Mutex<Buffers>,
@@ -59,12 +67,12 @@ struct InstanceBuffer {
     #[cfg(feature = "jit")]
     cached: spx_va::EvalOutput,
     #[cfg(feature = "jit")]
-    previous: Option<(u64, u64)>,
+    previous: Option<(u64, u64, Node)>,
 }
 
 #[cfg(feature = "jit")]
 impl InstanceBuffer {
-    fn same_bias(&self, nodes: &[Node], x: &[f64], key: (u64, u64)) -> bool {
+    fn same_bias(&self, nodes: &[Node], x: &[f64], key: (u64, u64, Node)) -> bool {
         self.previous == Some(key)
             && self
                 .values
@@ -160,6 +168,11 @@ impl VaGroup {
     /// Match equal specializations within this chunk without changing stamp order.
     #[cfg(feature = "jit")]
     pub fn prepare_pairs(&mut self, temperature: f64) {
+        self.prepare_pairs_for(temperature, None);
+    }
+
+    #[cfg(feature = "jit")]
+    fn prepare_pairs_for(&mut self, temperature: f64, fixed_node: Node) {
         self.pairs.clear();
         self.pair_temp = temperature.to_bits();
         if self.disable_jit || self.instances.len() < 2 {
@@ -169,30 +182,43 @@ impl VaGroup {
             return;
         };
         let mut keys = std::collections::HashMap::new();
-        let mut groups = Vec::<Vec<usize>>::new();
+        let mut groups = Vec::<(Vec<usize>, Vec<usize>)>::new();
         for (k, i) in self.instances.iter().enumerate() {
             if i.swept || i.copies != 1. {
                 continue;
             }
-            let key = i.bound.specialization_key(temperature, 1.);
+            let columns: Vec<_> = i
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(j, &n)| (fixed_node.is_some() && n == fixed_node).then_some(j))
+                .collect();
+            let key = (i.bound.specialization_key(temperature, 1.), columns.clone());
             let index = *keys.entry(key).or_insert_with(|| {
-                groups.push(Vec::new());
+                groups.push((Vec::new(), columns));
                 groups.len() - 1
             });
-            groups[index].push(k);
+            groups[index].0.push(k);
         }
-        for group in groups {
+        for (group, columns) in groups {
             if group.len() > 1
-                && let Some(kernel) =
-                    module.prepare_circuit_pair(&self.instances[group[0]].bound, temperature)
+                && let Some(kernel) = module.prepare_projected_pair(
+                    &self.instances[group[0]].bound,
+                    temperature,
+                    &columns,
+                )
             {
-                self.pairs.push((group, kernel));
+                self.pairs.push(PairGroup {
+                    members: group,
+                    kernel,
+                    fixed_node: if columns.is_empty() { None } else { fixed_node },
+                });
             }
         }
     }
 
     #[cfg(feature = "jit")]
-    fn eval_pairs(&self, ctx: &EvalCtx, x: &[f64], buffers: &mut Buffers) {
+    fn eval_pairs(&self, ctx: &EvalCtx, x: &[f64], buffers: &mut Buffers, fixed_node: Node) {
         let Buffers {
             instances,
             pending,
@@ -205,8 +231,16 @@ impl VaGroup {
         }
         let timed = spx_diag::profile_devices();
         if !self.disable_jit && ctx.mode == Mode::Tran && ctx.temp.to_bits() == self.pair_temp {
-            for (group, kernel) in &self.pairs {
-                let key = (ctx.temp.to_bits(), ctx.gmin.to_bits());
+            for PairGroup {
+                members: group,
+                kernel,
+                fixed_node: required,
+            } in &self.pairs
+            {
+                if required.is_some() && *required != fixed_node {
+                    continue;
+                }
+                let key = (ctx.temp.to_bits(), ctx.gmin.to_bits(), fixed_node);
                 pending.clear();
                 pending.extend(
                     group
@@ -436,6 +470,83 @@ impl DeviceGroup for VaGroup {
         Ok(())
     }
     fn eval(&self, ctx: &EvalCtx, x: &[f64], state: StateRef<'_>, out: &mut Slots) {
+        self.evaluate(ctx, x, state, out, None);
+    }
+    #[cfg(feature = "jit")]
+    fn eval_fixed_voltage(
+        &self,
+        ctx: &EvalCtx,
+        x: &[f64],
+        state: StateRef<'_>,
+        out: &mut Slots,
+        node: usize,
+    ) {
+        self.evaluate(ctx, x, state, out, Some(node));
+    }
+    #[cfg(feature = "jit")]
+    fn prepare_newton_pairs(&mut self, temperature: f64, fixed_node: Node) {
+        self.prepare_pairs_for(temperature, fixed_node);
+    }
+    fn set_param(&mut self, instance: &str, param: &str, value: f64) -> bool {
+        let Some(m) = &self.module else { return false };
+        let Some(index) = self.instances.iter().position(|i| i.name == instance) else {
+            return false;
+        };
+        let i = &mut self.instances[index];
+        let mut params = i.params.clone();
+        for (name, value) in parameter_names(m, &[(param.into(), value)]) {
+            if let Some(p) = params.iter_mut().find(|p| p.0 == name) {
+                p.1 = value;
+            } else {
+                params.push((name, value));
+            }
+        }
+        match m.bind_connected_instance(&i.model, &params, i.port_count) {
+            Ok(mut bound) if i.swept || bound.layout() == i.bound.layout() => {
+                if i.swept {
+                    bound.retain_sweep_layout();
+                }
+                #[cfg(feature = "jit")]
+                bound.specialize_stamp(&i.ports, self.dc_only);
+                i.copies = m.parallel_copies(&bound);
+                i.bound = bound;
+                #[cfg(feature = "jit")]
+                self.pairs.retain(|pair| !pair.members.contains(&index));
+                // A sweep changes the equations even at the same bias.
+                if let Some(buffer) = self
+                    .buffers
+                    .get_mut()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .instances
+                    .get_mut(index)
+                {
+                    *buffer = InstanceBuffer::default();
+                }
+                i.params = params;
+                true
+            }
+            _ => false,
+        }
+    }
+    fn param(&self, instance: &str, param: &str) -> Option<f64> {
+        let m = self.module.as_ref()?;
+        let i = self.instances.iter().find(|i| i.name == instance)?;
+        let names = parameter_names(m, &[(param.into(), 0.)]);
+        m.param(&i.bound, &names[0].0)
+    }
+}
+
+impl VaGroup {
+    fn evaluate(
+        &self,
+        ctx: &EvalCtx,
+        x: &[f64],
+        state: StateRef<'_>,
+        out: &mut Slots,
+        fixed_node: Node,
+    ) {
+        #[cfg(not(feature = "jit"))]
+        let _ = fixed_node;
         let Some(m) = &self.module else { return };
         let mut at = SlotOffsets::default();
         let Ok(mut buffers) = self.buffers.lock() else {
@@ -449,7 +560,7 @@ impl DeviceGroup for VaGroup {
             .instances
             .resize_with(self.len(), InstanceBuffer::default);
         #[cfg(feature = "jit")]
-        self.eval_pairs(ctx, x, &mut buffers);
+        self.eval_pairs(ctx, x, &mut buffers, fixed_node);
         let Buffers {
             instances,
             #[cfg(feature = "jit")]
@@ -469,7 +580,11 @@ impl DeviceGroup for VaGroup {
                 buffer.scratch.set_jit(!self.disable_jit);
                 if !self.disable_jit
                     && ctx.mode == Mode::Tran
-                    && buffer.same_bias(&i.nodes, x, (ctx.temp.to_bits(), ctx.gmin.to_bits()))
+                    && buffer.same_bias(
+                        &i.nodes,
+                        x,
+                        (ctx.temp.to_bits(), ctx.gmin.to_bits(), fixed_node),
+                    )
                 {
                     if timed {
                         profile.reused += 1;
@@ -569,56 +684,9 @@ impl DeviceGroup for VaGroup {
                     storage.clear();
                     storage.extend_from_slice(stamp);
                 }
-                buffer.previous = Some((ctx.temp.to_bits(), ctx.gmin.to_bits()));
+                buffer.previous = Some((ctx.temp.to_bits(), ctx.gmin.to_bits(), fixed_node));
             }
             out.noncon |= result.noncon;
         }
-    }
-    fn set_param(&mut self, instance: &str, param: &str, value: f64) -> bool {
-        let Some(m) = &self.module else { return false };
-        let Some(index) = self.instances.iter().position(|i| i.name == instance) else {
-            return false;
-        };
-        let i = &mut self.instances[index];
-        let mut params = i.params.clone();
-        for (name, value) in parameter_names(m, &[(param.into(), value)]) {
-            if let Some(p) = params.iter_mut().find(|p| p.0 == name) {
-                p.1 = value;
-            } else {
-                params.push((name, value));
-            }
-        }
-        match m.bind_connected_instance(&i.model, &params, i.port_count) {
-            Ok(mut bound) if i.swept || bound.layout() == i.bound.layout() => {
-                if i.swept {
-                    bound.retain_sweep_layout();
-                }
-                #[cfg(feature = "jit")]
-                bound.specialize_stamp(&i.ports, self.dc_only);
-                i.copies = m.parallel_copies(&bound);
-                i.bound = bound;
-                #[cfg(feature = "jit")]
-                self.pairs.retain(|(members, _)| !members.contains(&index));
-                // A sweep changes the equations even at the same bias.
-                if let Some(buffer) = self
-                    .buffers
-                    .get_mut()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .instances
-                    .get_mut(index)
-                {
-                    *buffer = InstanceBuffer::default();
-                }
-                i.params = params;
-                true
-            }
-            _ => false,
-        }
-    }
-    fn param(&self, instance: &str, param: &str) -> Option<f64> {
-        let m = self.module.as_ref()?;
-        let i = self.instances.iter().find(|i| i.name == instance)?;
-        let names = parameter_names(m, &[(param.into(), 0.)]);
-        m.param(&i.bound, &names[0].0)
     }
 }

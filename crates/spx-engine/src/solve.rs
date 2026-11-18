@@ -187,7 +187,16 @@ pub(crate) fn assemble_charges(
     ws: &mut Workspace,
     opts: &SimOptions,
 ) -> Result<(), Diagnostic> {
-    assemble_for(ckt, ctx, x, ws, opts, 0., Assembly::Charges);
+    let fixed = fixed_voltage(ckt, ctx, x);
+    assemble_for(
+        ckt,
+        ctx,
+        x,
+        ws,
+        opts,
+        0.,
+        Assembly::Charges(fixed.map(|v| v.node)),
+    );
     if let Some(d) = ws.slots.iter().find_map(|s| s.error.as_ref()) {
         return Err(d.clone());
     }
@@ -198,7 +207,20 @@ pub(crate) fn assemble_charges(
 enum Assembly {
     Full,
     Resistive,
-    Charges,
+    Charges(Option<usize>),
+    Transient(Option<usize>),
+}
+
+fn fixed_voltage(ckt: &Circuit, ctx: &EvalCtx, x: &[f64]) -> Option<crate::circuit::FixedVoltage> {
+    let fixed = ckt.fixed_voltage?;
+    // Adding either zero sign to a +0 iterate yields +0. A negative-zero
+    // iterate can instead expose the sign of a zero triangular update.
+    (ctx.mode == Mode::Tran
+        && ctx.time > 0.
+        && ctx.source_factor == 1.
+        && x[fixed.node].to_bits() == fixed.voltage.to_bits()
+        && !x.iter().any(|v| v.to_bits() == (-0.0f64).to_bits()))
+    .then_some(fixed)
 }
 
 fn assemble_for(
@@ -215,7 +237,12 @@ fn assemble_for(
     let eval = |((group, s), (current, accepted)): EvalItem<'_>| {
         s.noncon = false;
         s.error = None;
-        group.eval(ctx, x, StateRef { accepted, current }, s);
+        let state = StateRef { accepted, current };
+        if let Assembly::Charges(Some(node)) | Assembly::Transient(Some(node)) = request {
+            group.eval_fixed_voltage(ctx, x, state, s, node);
+        } else {
+            group.eval(ctx, x, state, s);
+        }
     };
     let started = ws.timed.then(std::time::Instant::now);
     let states = ws.state.iter_mut().zip(ws.accepted.iter());
@@ -242,11 +269,11 @@ fn assemble_for(
     if request != Assembly::Resistive {
         gather(&mut a.q, &gm.q, slots, |s| &s.q, par);
     }
-    if request == Assembly::Charges {
+    if matches!(request, Assembly::Charges(_)) {
         return;
     }
     gather(&mut a.g, &gm.g, slots, |s| &s.g, par);
-    if request == Assembly::Full {
+    if matches!(request, Assembly::Full | Assembly::Transient(_)) {
         gather(&mut a.c, &gm.c, slots, |s| &s.c, par);
     }
     gather(&mut a.f, &gm.f, slots, |s| &s.f, par);
@@ -374,10 +401,15 @@ pub(crate) fn newton(
             ctx.init_junctions = false;
         }
         let static_step = integ.a0 == 0.;
+        let fixed = if static_step {
+            None
+        } else {
+            fixed_voltage(ckt, &ctx, x).filter(|v| integ.hist[v.equation] == 0.)
+        };
         let request = if static_step {
             Assembly::Resistive
         } else {
-            Assembly::Full
+            Assembly::Transient(fixed.map(|v| v.node))
         };
         assemble_for(ckt, &ctx, x, ws, opts, gshunt, request);
         if let Some(d) = ws.slots.iter().find_map(|s| s.error.clone()) {
@@ -395,6 +427,20 @@ pub(crate) fn newton(
             }
             for i in 0..n {
                 ws.rhs[i] = -(a.f[i] + integ.a0 * a.q[i] + integ.hist[i] - a.b[i]);
+            }
+        }
+        if let Some(fixed) = fixed {
+            // The last pivot is the ideal source equation. Its Newton correction
+            // is zero, so no earlier equation needs an upper entry in this column.
+            let start = ckt.pattern.col_ptr()[fixed.node];
+            let end = ckt.pattern.col_ptr()[fixed.node + 1];
+            for (&r, a) in ckt.pattern.row_idx()[start..end]
+                .iter()
+                .zip(&mut ws.jac[start..end])
+            {
+                if r != fixed.equation && a.is_finite() {
+                    *a = 0.;
+                }
             }
         }
         let dump = ws.newton_iterations == 1

@@ -24,6 +24,14 @@ use crate::options::SimOptions;
 /// Marker for slots that touch ground and are discarded.
 pub(crate) const DISCARD: usize = usize::MAX;
 
+/// A ground-referenced voltage constraint in the last elimination column.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FixedVoltage {
+    pub node: usize,
+    pub equation: usize,
+    pub voltage: f64,
+}
+
 /// A compiled, immutable circuit.
 #[derive(Debug)]
 pub struct Circuit {
@@ -34,6 +42,7 @@ pub struct Circuit {
     pub(crate) groups: Vec<Box<dyn DeviceGroup>>,
     pub(crate) layouts: Vec<StampLayout>,
     pub(crate) pattern: CscPattern,
+    pub(crate) fixed_voltage: Option<FixedVoltage>,
     /// Per unknown: value index of the diagonal if it is a node voltage, else [`DISCARD`]
     /// (for rshunt / gmin stepping).
     pub(crate) node_diag: Vec<usize>,
@@ -709,14 +718,6 @@ pub(crate) fn compile_cached(
             })
             .collect();
         diags.extend(results.into_iter().flatten());
-        // Below eight instances the two-device chunks seldom share a binding.
-        if enabled && !dc_only && va_instances >= 8 {
-            va.values_mut()
-                .flat_map(|v| v.done.iter_mut().chain([&mut v.cur]))
-                .collect::<Vec<_>>()
-                .into_par_iter()
-                .for_each(|chunk| chunk.prepare_pairs(kelvin));
-        }
     }
     if !grounded {
         return Err(vec![
@@ -1005,6 +1006,8 @@ pub(crate) fn compile_cached(
     diodes.into_groups(&mut groups);
     bjts.into_groups(&mut groups);
     mos1.into_groups(&mut groups);
+    #[cfg(feature = "jit")]
+    let first_va = groups.len();
     for group in va.into_values() {
         group.into_groups(&mut groups);
     }
@@ -1052,6 +1055,47 @@ pub(crate) fn compile_cached(
             })
             .collect()
     };
+    #[cfg(feature = "jit")]
+    let fixed_voltage = if opts.va_jit && spx_va::jit_enabled() && !dc_only && va_instances >= 8 {
+        let _phase = spx_diag::Phase::start("jit_wall");
+        let fixed = spx_sparse::NewtonLu::new(&pattern)
+            .ok()
+            .and_then(|lu| lu.last_column())
+            .and_then(|last| {
+                nl.elements.iter().find_map(|e| {
+                    let ElementKind::VoltageSource { p, n, source } = &e.kind else {
+                        return None;
+                    };
+                    if source.tran.is_some() || swept.contains(e.name.as_str()) {
+                        return None;
+                    }
+                    let dc = spx_devices::dc_value(source);
+                    let voltage = match (node(p), node(n)) {
+                        (Some(r), None) if r == last => dc,
+                        (None, Some(r)) if r == last => -dc,
+                        _ => return None,
+                    };
+                    let equation = unknowns.branch(&e.name)?;
+                    // The source owns its branch equation. Controlled sources can read its
+                    // current, but never add a residual or a charge to this row.
+                    voltage.is_finite().then_some(FixedVoltage {
+                        node: last,
+                        equation,
+                        voltage,
+                    })
+                })
+            });
+        use rayon::prelude::*;
+        groups[first_va..]
+            .par_iter_mut()
+            .for_each(|g| g.prepare_newton_pairs(opts.temp + 273.15, fixed.map(|v| v.node)));
+        fixed
+    } else {
+        None
+    };
+    #[cfg(not(feature = "jit"))]
+    let fixed_voltage = None;
+
     let gmap = resolve(greq);
     let cmap = resolve(creq);
     let slots_to = |maps: &[Vec<usize>]| {
@@ -1103,6 +1147,7 @@ pub(crate) fn compile_cached(
             groups,
             layouts,
             pattern,
+            fixed_voltage,
             node_diag,
             linear,
             no_dc_path,

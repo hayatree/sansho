@@ -900,6 +900,7 @@ fn packed_instances_match_individual_stamps_on_divergent_paths() {
     let mut b = m.bind(&[]).unwrap();
     b.specialize_stamp(&[Some(0), Some(1), None], false);
     let pair = m.prepare_circuit_pair(&b, 300.).unwrap();
+    let projected = m.prepare_projected_pair(&b, 300., &[1]).unwrap();
     let mut packed = EvalOutput::default();
     for (p, q) in [
         ([0.4, -0.3], [-0.1, 2.]),
@@ -907,6 +908,21 @@ fn packed_instances_match_individual_stamps_on_divergent_paths() {
         ([0.3, 0.7], [0.4, 0.8]),
     ] {
         assert!(pair.evaluate(&[p[0], p[1], q[0], q[1], 0., 0.], 1e-12, &mut packed));
+        let mut reduced = EvalOutput::default();
+        assert!(projected.evaluate(&[p[0], p[1], q[0], q[1], 0., 0.], 1e-12, &mut reduced));
+        for (full, constrained) in [(&packed.f, &reduced.f), (&packed.q, &reduced.q)] {
+            assert!(
+                full.iter()
+                    .zip(constrained)
+                    .all(|(x, y)| x.to_bits() == y.to_bits())
+            );
+        }
+        for (full, constrained) in [(&packed.df, &reduced.df), (&packed.dq, &reduced.dq)] {
+            for (i, (x, y)) in full.iter().zip(constrained).enumerate() {
+                let expected = if i / 2 % 3 == 1 { 0. } else { *x };
+                assert_eq!(expected.to_bits(), y.to_bits());
+            }
+        }
         for lane in 0..2 {
             let mut out = EvalOutput::default();
             let input = EvalInput {

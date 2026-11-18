@@ -486,5 +486,22 @@ The packed kernel checks predictions in each active lane and uses masks at
 divergent branches. A failed guard discards both lanes and triggers scalar
 evaluation. Each instance writes its original slots in deterministic order.
 
+During transient Newton iteration, a constant ground-referenced source can
+fix the last voltage increment in the sparse elimination order to exactly
+zero. At the specified voltage the paired kernel can omit the corresponding
+AD seed columns. The circuit checks the source, ordering and iterate before
+selecting this kernel. Full and projected stamps have distinct cache keys.
+
+Round 6 warm time ratios against ngspice 44.2 with OSDI models, estimated
+from 41 interleaved release pairs against `63b70bd`, appear below.
+
+| Deck | Analysis −j1 | Wall −j1 | Wall default |
+|---|---:|---:|---:|
+| nmos_idvg | 0.205× | 0.512× | 0.591× |
+| inverter_dc | 0.333× | 0.552× | 0.460× |
+| inverter_tran | 0.414× | 0.563× | 0.574× |
+| ring5 | 0.572× | 0.682× | 0.548× |
+| ring21 | 0.760× | 0.650× | 0.493× |
+
 See [Performance](performance.md) for PSP measurements, the round history and
 commands for reproducing the full-vector comparison and timings.

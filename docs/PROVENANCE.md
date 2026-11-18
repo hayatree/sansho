@@ -201,3 +201,14 @@ accelerator implements FIPS PUB 180-4, sections 5 and 6.2, using the SHA,
 SSSE3 and SSE4.1 instruction semantics exposed by Rust's x86-64 intrinsics.
 The portable path uses the existing hmac-sha256 dependency. No third-party
 source or model text was incorporated.
+
+### Verilog-A optimization round 6
+
+The ideal-source constraint follows the modified nodal formulation of Ho,
+Ruehli and Brennan (1975). Its use in the final elimination column follows
+from the left-looking LU and triangular solves already implemented here.
+The packed lowering uses the forward-mode chain rule with a zero seed for
+a constrained voltage. The implementation, work-count instrumentation and
+static stack-operand counter are original. The counter reads spx's emitted
+machine code through Linux procfs and disassembles it with the system
+objdump. Third-party models served only as simulator test inputs.

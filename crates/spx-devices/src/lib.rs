@@ -483,6 +483,22 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
     /// consistent, and set [`Slots::noncon`].
     fn eval(&self, ctx: &EvalCtx, x: &[f64], state: StateRef<'_>, out: &mut Slots);
 
+    /// Evaluate a Newton assembly whose specified voltage increment is exactly zero.
+    fn eval_fixed_voltage(
+        &self,
+        ctx: &EvalCtx,
+        x: &[f64],
+        state: StateRef<'_>,
+        out: &mut Slots,
+        _node: usize,
+    ) {
+        self.eval(ctx, x, state, out);
+    }
+
+    /// Prepare transient pair kernels after the matrix ordering is known.
+    #[cfg(feature = "jit")]
+    fn prepare_newton_pairs(&mut self, _temperature: f64, _fixed_node: Node) {}
+
     /// Write the AC excitation into the `b` slots. Default: no excitation.
     fn eval_ac(&self, out: &mut AcSlots) {
         out.re.iter_mut().for_each(|v| *v = 0.0);

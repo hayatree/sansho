@@ -4,10 +4,11 @@
 Provenance: original benchmark driver using Python's monotonic clock.
 """
 import argparse
+from collections import Counter
 import os
+import re
 from pathlib import Path
 from statistics import median
-from collections import Counter
 import subprocess
 from tempfile import TemporaryDirectory
 from time import perf_counter_ns
@@ -53,7 +54,10 @@ def device_sample(binary, deck, cache, jobs):
     env = dict(os.environ, SPX_CACHE_DIR=cache, SPX_CACHE="1", SPX_VA_JIT="1",
                SPX_PROFILE_DEVICES="1", SPX_PROFILE="1")
     run = subprocess.run([binary, "run", *jobs, deck], env=env, check=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                         capture_output=True, text=True)
+    tran = re.search(r"^Transient: (\d+) accepted steps, (\d+) rejected, (\d+) Newton iterations",
+                    run.stdout, re.MULTILINE)
+    accepted, rejected, iterations = map(int, tran.groups()) if tran else ("-", "-", "-")
     native = interpreted = reused = elapsed = lu = factor = steps = 0
     attempted = finished = workers = group_ns = assemblies = 0
     analysis = 0.0
@@ -78,22 +82,26 @@ def device_sample(binary, deck, cache, jobs):
         elif line.startswith("spx-factor "):
             steps, factor = map(int, line.split()[1:])
         elif line.startswith("spx-newton "):
-            _, t, iterations, total_lu = line.split()
+            _, t, step_iterations, total_lu = line.split()
             if float(t) > 0 or deck in DECKS[:2]:
-                counts[int(iterations)] += 1
+                counts[int(step_iterations)] += 1
             lu = int(total_lu)
     if deck.resolve() in DECKS and not native:
         raise RuntimeError(f"no native evaluations counted for {deck}")
     return ((native + interpreted + reused, native, interpreted, reused,
-             dict(sorted(counts.items())), finished, attempted, steps, workers, assemblies),
+             dict(sorted(counts.items())), finished, attempted, steps, workers, assemblies,
+             accepted, rejected, iterations),
             (elapsed / native if native else 0, elapsed / 1e6, lu / 1e6,
              factor / (1000 * steps) if steps else float("nan"),
-             group_ns / 1e6 if workers else float("nan"), analysis))
+             group_ns / 1e6 if workers else float("nan"), analysis,
+             (group_ns - elapsed) / (native + interpreted + reused)
+             if workers == 1 and native else float("nan")))
 
 
 def device_counts(binary, runs, baseline, decks, jobs):
     print("deck build visits native interpreted reused Newton_histogram paired attempted "
-          "factors workers assemblies JIT_ns/eval JIT_ms LU_ms factor_us group_ms analysis_ms")
+          "factors workers assemblies accepted rejected Newton_iterations JIT_ns/eval "
+          "JIT_ms LU_ms factor_us group_ms analysis_ms group_other_ns/visit")
     for deck in decks:
         with TemporaryDirectory() as a, TemporaryDirectory() as b:
             builds = ([("HEAD", baseline, a)] if baseline else []) + [("new", binary, b)]
@@ -135,14 +143,15 @@ def paired(baseline, candidate, runs):
                       f"{median(pair[0]['anchor'] for pair in pairs):.3f}", flush=True)
 
 
-def warm_analysis(baseline, binary, runs, decks, jobs):
-    print("deck HEAD_analysis_ms new_analysis_ms speedup")
+def warm_timing(baseline, binary, runs, decks, jobs, metric):
+    print(f"deck HEAD_{metric}_ms new_{metric}_ms speedup")
+    profile = metric == "analysis"
     for deck in decks:
         with TemporaryDirectory() as before, TemporaryDirectory() as after:
             builds = ((baseline, before), (binary, after))
             for exe, cache in builds:
-                sample(exe, deck, jobs, cache, True)
-            rows = [[sample(exe, deck, jobs, cache, True)["analysis"] for exe, cache in builds]
+                sample(exe, deck, jobs, cache, profile)
+            rows = [[sample(exe, deck, jobs, cache, profile)[metric] for exe, cache in builds]
                     for _ in range(runs)]
             a, b = map(median, zip(*rows))
             print(deck.stem, f"{a:.3f}", f"{b:.3f}", f"{a / b:.3f}", flush=True)
@@ -159,24 +168,27 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--warm-analysis", action="store_true",
                       help="repeat only warm interleaved analysis measurements against --baseline")
+    mode.add_argument("--warm-wall", action="store_true",
+                      help="repeat only uninstrumented warm process timings against --baseline")
     mode.add_argument("--devices", action="store_true",
                         help="profile device evaluations, group wall time and Newton steps")
     parser.add_argument("--deck", type=Path, action="append",
-                        help="select a deck for --devices or --warm-analysis (repeatable)")
+                        help="select a deck for --devices, --warm-analysis or --warm-wall (repeatable)")
     parser.add_argument("--jobs", type=str, default="1",
                         help="worker count for device or warm analysis measurements (default is one)")
     args = parser.parse_args()
     if args.jobs != "default" and not (args.jobs.isdecimal() and int(args.jobs) > 0):
         parser.error("--jobs requires a positive integer or 'default'")
-    if args.deck and not (args.devices or args.warm_analysis):
-        parser.error("--deck requires --devices or --warm-analysis")
+    if args.deck and not (args.devices or args.warm_analysis or args.warm_wall):
+        parser.error("--deck requires --devices, --warm-wall or --warm-analysis")
     if args.baseline and args.runs < 7:
         parser.error("interleaved measurements require at least seven pairs")
-    if args.warm_analysis:
+    if args.warm_analysis or args.warm_wall:
         if not args.baseline:
-            parser.error("--warm-analysis requires --baseline")
-        warm_analysis(args.baseline, args.binary, args.runs, args.deck or DECKS,
-                      [] if args.jobs == "default" else ["-j", args.jobs])
+            parser.error("warm interleaved timings require --baseline")
+        warm_timing(args.baseline, args.binary, args.runs, args.deck or DECKS,
+                    [] if args.jobs == "default" else ["-j", args.jobs],
+                    "wall" if args.warm_wall else "analysis")
         return
     if args.devices:
         if args.runs < 5:
