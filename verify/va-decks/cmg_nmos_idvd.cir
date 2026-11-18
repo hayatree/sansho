@@ -1,0 +1,14 @@
+* BSIM-CMG n-FinFET Id-Vd at three gate biases
+* Requires va-models/bsimcmg/bsimcmg.va (BSIM-CMG 111.2.1) with its adjacent includes.
+* Provenance: original BSIM-CMG test circuit; generic parameter values chosen for spx.
+.hdl "../../va-models/bsimcmg/bsimcmg.va"
+.model nfin bsimcmg_va type=1 geomod=1 bulkmod=1 rdsmod=0 tfin=8n hfin=40n fpitch=40n eot=1.0n phig=4.35 nbody=5e23 u0=0.035 vsat=1.0e5 cdsc=5e-3 dvt0=0.1 dvt1=0.5 eta0=0.05 rshs=50 cgso=1e-10 cgdo=1e-10 cjs=5e-4
+vd d 0 0
+vg1 g1 0 0.4
+vg2 g2 0 0.6
+vg3 g3 0 0.9
+n1 d g1 0 0 0 nfin l=20n nfin=4
+n2 d g2 0 0 0 nfin l=20n nfin=4
+n3 d g3 0 0 0 nfin l=20n nfin=4
+.dc vd 0 1.0 10m
+.end
