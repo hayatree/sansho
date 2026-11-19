@@ -182,7 +182,7 @@ fn rectifier_transient_matches_builtin() {
     let common = "V1 in 0 SIN(0 1 1meg)
 R1 in out 1k
 C1 out 0 10p
-.options reltol=1e-8 abstol=1e-16 chgtol=1e-20
+.options reltol=1e-8 abstol=1e-16 chgtol=1e-20 bypass=0
 .tran 0.1n 2u 0 0.1n
 ";
     let va = simulate(&format!(
