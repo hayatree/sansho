@@ -167,6 +167,23 @@ struct Derived {
     cbs_sw: f64,
 }
 
+impl Derived {
+    fn has_storage(&self) -> bool {
+        [
+            self.cox_total,
+            self.cgs_ov,
+            self.cgd_ov,
+            self.cgb_ov,
+            self.cbd,
+            self.cbs,
+            self.cbd_sw,
+            self.cbs_sw,
+        ]
+        .iter()
+        .any(|&c| c != 0.)
+    }
+}
+
 /// All level-1 MOSFET instances.
 #[derive(Debug, Default)]
 pub struct Mos1s {
@@ -313,6 +330,11 @@ impl DeviceGroup for Mos1s {
                 b.resistor(self.ext[i][2], self.int[i][2]);
             }
             b.core(&self.int[i]);
+            if self.derived[i].has_storage() {
+                for _ in 0..5 {
+                    b.tracked_q(None);
+                }
+            }
         }
         Ok(())
     }
@@ -450,6 +472,9 @@ impl DeviceGroup for Mos1s {
                 (qbd + qbs - qgb) * sgn,
             ];
             out.core(&mut at, &i_t, &q_t, &act, &lin);
+            if dv.has_storage() {
+                out.q[at.q..at.q + 5].copy_from_slice(&[qgs.v, qgd.v, qgb.v, qbd.v, qbs.v]);
+            }
         }
     }
 }

@@ -153,8 +153,9 @@ pub trait DeviceGroup: Send + Sync {
 1. Each group writes contributions into `Slots { g: [f64], c: [f64], f: [f64], q: [f64] }`. Slot
    positions within a group are fixed.
 2. The gather map stores a per-group scatter table in the original accumulation
-   order. Arrays above 2,048 destinations also have a CSR-style table for
-   destination-parallel reduction.
+   order. Native circuits stream these tables, with conductance and charge
+   assembly in independent tasks. Circuits containing Verilog-A devices also
+   have a CSR-style table for arrays above 2,048 destinations.
 3. The summation can be parallelized per matrix value k (each k is independent; its summation order
    is fixed).
 
@@ -220,7 +221,13 @@ publication. Section 16 describes two-lane native circuit evaluation and timing 
   a limited Newton iteration. Residuals use the saved derivatives at the
   current iterate. Overlap, junctions and limiting histories are evaluated
   normally. Gate resistance modes 2 and 3 use the full evaluation. Exact
-  charge sampling resumes before time-step acceptance.
+  charge sampling resumes before time-step acceptance. Within one elaboration,
+  instances with the same selected BSIM4 card and bit-identical ordered
+  instance parameters share validated geometry, network and temperature data.
+  Limiters and the last Newton linearization remain per instance. A 32-entry
+  cache per device chunk also reuses intrinsic results across instances with
+  the same model binding and bit-identical terminal voltages. Bindings that emit
+  warnings are evaluated individually to preserve their source diagnostics.
 
 ### 5.2 DC operating point fallback chain
 
@@ -247,12 +254,32 @@ planned.
 
 Transient integration supports trapezoidal (default) and variable-step BDF2
 (`.options method=gear`). Backward Euler starts the analysis and restarts it after source
-breakpoints. The charge LTE uses divided differences with `trtol`, `chgtol` and `reltol`.
-It checks all assembled rows. BSIM4 also registers its intrinsic, overlap and junction charge
-slots so cancellation between contributions cannot hide their errors. With local charge
-tracking, trapezoidal integration resumes once a backward-Euler step supplies the right-sided
-derivative after a corner. Rejected steps shrink by at least 10%, and accepted steps grow by
-at most 2×. [BSIM4 startup and restart conventions](bsim4.md#numerical-conventions-and-limitations)
+breakpoints. BDF2 starts once three accepted charge samples are available.
+After a source corner, one backward-Euler step supplies the right-sided current
+for trapezoidal integration on dynamic circuits. An order-one estimate covers
+the restart until enough samples exist for a third divided difference.
+
+For step size `h`, the charge error estimate is the magnitude of the second
+divided difference times `h²` for backward Euler, and of the third divided
+difference times `h³/2` for trapezoidal integration. For BDF2 the factor is
+`h² s² / (s + h)`, where `s = h + h_previous`. The derivative interpolation
+remainder gives `h s`. Dividing by the leading BDF coefficient converts this
+current defect into a charge error. For equal steps this gives `4 h³/3`.
+
+Each charge uses the largest magnitude at the new and last accepted points
+as its scale. Its error budget is `trtol × max(reltol × max(|q|, chgtol),
+h × (abstol + reltol × |dq/dt|))`, using both points for the current scale as
+well. All assembled DAE rows participate. The controller also checks each
+linear capacitor, the three Meyer and two junction charges of each MOS1 with
+storage, diode and BJT terminal charges, and the individual BSIM4 intrinsic,
+overlap and junction stamps. Voltage and branch-current Newton convergence
+use `vntol` and `abstol` respectively. Every converged trial with sufficient
+history undergoes the LTE test, including one-iteration linear solves.
+
+History advances on acceptance. Growth is capped at 2× and excess error at
+the step floor produces a diagnostic. A positive explicit `TMAX` sets the
+ceiling. The default is `min(TSTEP, (TSTOP − TSTART)/50)`. Raw output records
+the accepted time grid. [BSIM4 startup and restart conventions](bsim4.md#numerical-conventions-and-limitations)
 
 
 ### 5.4 Small-signal analyses

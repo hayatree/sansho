@@ -112,7 +112,7 @@ impl DeviceGroup for Capacitors {
             b.c(p, n);
             b.c(n, p);
             b.c(n, n);
-            b.q(p);
+            b.tracked_q(p);
             b.q(n);
         }
         Ok(())

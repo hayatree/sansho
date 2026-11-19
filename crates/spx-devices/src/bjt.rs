@@ -181,7 +181,7 @@ impl DeviceGroup for Bjts {
                     b.resistor(self.ext[i][k], self.int[i][k]);
                 }
             }
-            b.core(&self.int[i]);
+            b.charge_core(&self.int[i]);
         }
         Ok(())
     }

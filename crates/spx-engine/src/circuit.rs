@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use spx_devices::bjt::BjtModel;
-use spx_devices::bsim4::{Binding, Bsim4s};
+use spx_devices::bsim4::{Binding, Bsim4s, PreparedModel};
 use spx_devices::diode::DiodeModel;
 use spx_devices::mos1::{Mos1Geometry, Mos1Model};
 use spx_devices::{
@@ -81,7 +81,11 @@ pub(crate) struct Gather {
 impl Gather {
     /// Keep the source order for contiguous single-worker reads. The optional
     /// transpose allows parallel workers to own disjoint destination ranges.
-    fn build(len: usize, entries: impl Iterator<Item = (usize, usize, usize)> + Clone) -> Self {
+    fn build(
+        len: usize,
+        split_rows: bool,
+        entries: impl Iterator<Item = (usize, usize, usize)> + Clone,
+    ) -> Self {
         let mut by_group = Vec::<Vec<_>>::new();
         for (g, k, d) in entries.clone() {
             if by_group.len() <= g {
@@ -89,7 +93,7 @@ impl Gather {
             }
             by_group[g].push((k, d));
         }
-        let by_destination = (len > crate::solve::GATHER_CHUNK).then(|| {
+        let by_destination = (split_rows && len > crate::solve::GATHER_CHUNK).then(|| {
             let mut ptr = vec![0usize; len + 1];
             for (_, _, d) in entries.clone() {
                 ptr[d + 1] += 1;
@@ -882,6 +886,7 @@ pub(crate) fn compile_cached(
     let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
     let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
     let mut mos1 = Chunked::<Mos1s>::new(CHUNK_NONLINEAR);
+    let mut bsim4_models = HashMap::<_, Arc<PreparedModel>>::new();
     let mut bsim4 = Chunked::<Bsim4s>::new(CHUNK_NONLINEAR);
     let mut model_cache = ModelCache::new(&nl.models, opts);
     for e in &nl.elements {
@@ -1010,6 +1015,23 @@ pub(crate) fn compile_cached(
                         .find(|(k, _)| k == "level")
                         .is_some_and(|(_, v)| *v == 54.)
                 {
+                    // Temperature, scale and geometry defaults are fixed for this compile.
+                    // Preserve parameter order (later aliases/duplicates can override).
+                    let key = (
+                        model.as_str(),
+                        params
+                            .iter()
+                            .map(|(k, v)| (k.as_str(), v.to_bits()))
+                            .collect::<Vec<_>>(),
+                    );
+                    let nodes = [node(d), node(g), node(s), node(b)];
+                    if let Some(prepared) = bsim4_models.get(&key) {
+                        bsim4
+                            .cur()
+                            .push_prepared(&e.name, nodes, *off, Arc::clone(prepared));
+                        nonlinear_count += 1;
+                        continue;
+                    }
                     let p = ModelParams::new(&card.params);
                     let binding = Binding {
                         model: &p,
@@ -1020,17 +1042,19 @@ pub(crate) fn compile_cached(
                         tnom: opts.tnom,
                         scale: opts.scale,
                     };
-                    match bsim4.cur().push(
-                        &e.name,
-                        [node(d), node(g), node(s), node(b)],
-                        *off,
-                        binding,
-                    ) {
-                        Ok(warnings) => {
+                    match PreparedModel::new(&e.name, binding) {
+                        Ok((prepared, warnings)) => {
+                            let before = diags.len();
                             diags.extend(warnings.into_iter().map(|d| d.with_span(e.span)));
-                            nonlinear_count += 1;
                             ModelCache::warn_ignored(card, &p.unused(), &mut diags);
                             warn_instance(e, &inst, &mut diags);
+                            // Re-evaluate exceptional bindings so each diagnostic retains
+                            // its instance name and source span.
+                            if diags.len() == before {
+                                bsim4_models.insert(key, Arc::clone(&prepared));
+                            }
+                            bsim4.cur().push_prepared(&e.name, nodes, *off, prepared);
+                            nonlinear_count += 1;
                         }
                         Err(d) => errors.push(d.with_span(e.span)),
                     }
@@ -1195,12 +1219,15 @@ pub(crate) fn compile_cached(
             .collect::<Vec<_>>()
     };
     let nnz = pattern.nnz();
+    // Large native groups stream their source-ordered maps, with G and C in
+    // separate tasks. The smaller VA groups use a destination-parallel gather.
+    let split_rows = va_instances > 0;
     let gather = GatherMaps {
-        g: Gather::build(nnz, slots_to(&gmap).into_iter()),
-        c: Gather::build(nnz, slots_to(&cmap).into_iter()),
-        f: Gather::build(n, rows_to(|l| &l.f).into_iter()),
-        q: Gather::build(n, rows_to(|l| &l.q).into_iter()),
-        b: Gather::build(n, rows_to(|l| &l.b).into_iter()),
+        g: Gather::build(nnz, split_rows, slots_to(&gmap).into_iter()),
+        c: Gather::build(nnz, split_rows, slots_to(&cmap).into_iter()),
+        f: Gather::build(n, split_rows, rows_to(|l| &l.f).into_iter()),
+        q: Gather::build(n, split_rows, rows_to(|l| &l.q).into_iter()),
+        b: Gather::build(n, split_rows, rows_to(|l| &l.b).into_iter()),
     };
     // Shunts connect physical electrical nodes, including internal device terminals.
     let node_diag = (0..n)

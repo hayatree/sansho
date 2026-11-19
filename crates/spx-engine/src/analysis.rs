@@ -550,11 +550,16 @@ fn lte_ratio(
         hist.t[1],
         hist.t.get(2).copied().unwrap_or(0.0),
     ];
-    // LTE = C · h^(k+1) · (k+1)! · DD_(k+1).
+    // Convert the derivative defect to a charge error by dividing by a0.
+    // Differentiating the BDF2 interpolation remainder at the new point
+    // gives h * (h + h_prev) * DD3; 1/a0 = h * span / (span + h).
     let coeff = match (order, method) {
         (1, _) => h * h,
         (_, Method::Trap) => 0.5 * h * h * h,
-        (_, Method::Gear) => 4.0 / 3.0 * h * h * h,
+        (_, Method::Gear) => {
+            let span = h + (ts[1] - ts[2]);
+            h * h * span * (span / (span + h))
+        }
     };
     let mut worst = 0.0f64;
     for i in 0..q_new.len() {
@@ -567,30 +572,27 @@ fn lte_ratio(
         if qs[0] == qs[1] && qs[1] == qs[2] && (order == 1 || qs[2] == qs[3]) {
             continue;
         }
-        let d1 = [
-            (qs[0] - qs[1]) / (ts[0] - ts[1]),
-            (qs[1] - qs[2]) / (ts[1] - ts[2]),
-            (qs[2] - qs[3]) / (ts[2] - ts[3]),
-        ];
-        let d2 = [
-            (d1[0] - d1[1]) / (ts[0] - ts[2]),
-            (d1[1] - d1[2]) / (ts[1] - ts[3]),
-        ];
+        let slope = (qs[0] - qs[1]) / (ts[0] - ts[1]);
+        let previous = (qs[1] - qs[2]) / (ts[1] - ts[2]);
+        let curvature = (slope - previous) / (ts[0] - ts[2]);
         let dd = if order == 1 {
-            d2[0]
+            curvature
         } else {
-            (d2[0] - d2[1]) / (ts[0] - ts[3])
+            let older = (qs[2] - qs[3]) / (ts[2] - ts[3]);
+            let previous_curvature = (previous - older) / (ts[1] - ts[3]);
+            (curvature - previous_curvature) / (ts[0] - ts[3])
         };
         let lte = (coeff * dd).abs();
         if lte == 0.0 {
             continue;
         }
-        let qtol = (opts.reltol * qs[0].abs().max(qs[1].abs())).max(opts.chgtol);
+        let qtol = opts.reltol * qs[0].abs().max(qs[1].abs()).max(opts.chgtol);
         let itol = (opts.abstol + opts.reltol * qdot_new[i].abs().max(qdot_old[i].abs())) * h;
         let r = lte / (opts.trtol * qtol.max(itol));
-        if r.is_finite() {
-            worst = worst.max(r);
+        if !r.is_finite() {
+            return f64::INFINITY;
         }
+        worst = worst.max(r);
     }
     worst
 }
@@ -636,11 +638,9 @@ pub(crate) fn tran(
     // Default maximum step as in SPICE: min(tstep, (tstop - tstart) / 50).
     let hmax = tmax
         .filter(|&t| t > 0.0)
-        .unwrap_or(f64::INFINITY)
-        .min(tstep)
-        .min((tstop - tstart) / 50.0);
-    let hmin = 1e-9 * hmax;
-    let eps = 1e-9 * hmax;
+        .unwrap_or_else(|| tstep.min((tstop - tstart) / 50.0));
+    let hmin = 1e-9 * hmax.min(tstep).min(tstop - tstart);
+    let eps = hmin;
 
     let mut bps: Vec<f64> = Vec::new();
     for g in &ckt.groups {
@@ -668,7 +668,12 @@ pub(crate) fn tran(
         .enumerate()
         .flat_map(|(group, layout)| layout.lte_q.iter().map(move |&slot| (group, slot)))
         .collect();
-    let tracks_device_charges = ckt.layouts.iter().any(|l| l.has_independent_charges);
+    // An assembled C stamp also implies a potential dynamic state (e.g. a
+    // direct Verilog-A ddt contribution with no separate history variable).
+    let has_storage = ckt
+        .layouts
+        .iter()
+        .any(|l| l.has_independent_charges || !l.c.is_empty());
     let mut buffer = Vec::new();
     let charges = charge_sample(&ws, &local_slots, &mut buffer);
     hist.push(0.0, charges);
@@ -702,16 +707,18 @@ pub(crate) fn tran(
         attempted_steps += 1;
         let next_bp = bps.get(bp_idx).copied().unwrap_or(tstop);
         h = h.min(hmax);
+        // Corner snapping can stretch a minimum-size proposal by eps. Keep
+        // its original size so an LTE failure there cannot retry it forever.
+        let proposed_h = h;
         if t + h >= next_bp - eps {
             h = next_bp - t;
-        } else if !tracks_device_charges && t + 2.0 * h > next_bp {
-            // Nodal-only control balances the final two intervals. With local
-            // charge estimates, retain the proposed step until the corner clips it.
+        } else if !has_storage && t + 2.0 * h > next_bp {
+            // Balance the last two intervals on purely algebraic circuits.
             h = 0.5 * (next_bp - t);
         }
         // After a source corner one backward-Euler step gives a right-sided
         // current for every tracked charge. Trap only needs that one derivative.
-        let restart_trap = tracks_device_charges && bp_idx > 0 && opts.method == Method::Trap;
+        let restart_trap = has_storage && bp_idx > 0 && opts.method == Method::Trap;
         let order = if hist.len() >= 3 || (restart_trap && hist.len() >= 2) {
             2
         } else {
@@ -782,7 +789,7 @@ pub(crate) fn tran(
                 })
                 .reduce(f64::min);
             relaxation.map_or(0.0625, |tau| tau.max(hmin).min(h) / h)
-        } else if tracks_device_charges && accepted_steps == 0 {
+        } else if has_storage && accepted_steps == 0 {
             // No curvature estimate yet. Acquire a second sample at the initial step.
             1.0
         } else {
@@ -806,14 +813,20 @@ pub(crate) fn tran(
             let factor = 0.9 * r.max(1e-12).powf(-1.0 / (error_order as f64 + 1.0));
             if r > 1.0 {
                 let h_new = h * factor.clamp(0.125, 0.9);
-                if h_new >= hmin {
+                if h > hmin && proposed_h > hmin {
                     if let Some(t) = begin {
                         control += t.elapsed();
                     }
-                    h = h_new;
+                    h = h_new.max(hmin);
                     continue;
                 }
-                // Cannot reduce further; accept with a diagnostic-free best effort.
+                return Err(Diagnostic::error(
+                    "E-CONV-TRAN",
+                    format!(
+                        "charge truncation error exceeds tolerance at t = {:e} s (ratio {r:e}, step {h:e} s)",
+                        ctx.time
+                    ),
+                ));
             }
             grow = factor.clamp(0.5, 2.0);
         }
@@ -907,6 +920,33 @@ mod tests {
         let mut x = vec![0.0; n];
         assert!(source_stepping(&ckt, &init, &integ, &mut x, &mut ws, &opts));
         assert!(close(&x, &direct), "{x:?} vs {direct:?}");
+    }
+
+    #[test]
+    fn bdf2_charge_error_on_unequal_steps() {
+        let opts = SimOptions::default();
+        let mut history = History::default();
+        let charge = |t: f64| 1e-17 * t.powi(3);
+        for t in [0., 1., 3.] {
+            history.push(t, &[charge(t)]);
+        }
+        // In picoseconds the last step is 2 and the new step is 1.
+        for t in &mut history.t {
+            *t *= 1e-12;
+        }
+        let ratio = lte_ratio(
+            Method::Gear,
+            2,
+            1e-12,
+            4e-12,
+            &[charge(4.)],
+            &[0.],
+            &[0.],
+            &history,
+            &opts,
+        );
+        let expected = (9. / 4.) * 1e-17 / (opts.trtol * opts.reltol * opts.chgtol);
+        assert!((ratio / expected - 1.).abs() < 1e-12);
     }
 
     #[test]

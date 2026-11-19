@@ -14,7 +14,7 @@ mod tests;
 use crate::{
     DeviceGroup, EvalCtx, ModelParams, Node, SlotOffsets, Slots, StampBuilder, StateRef, Unknowns,
     dual::Dual,
-    junction::{limit_junction, vcrit},
+    junction::limit_junction,
     mos1::{Mos1Geometry, limit_step},
     volt,
 };
@@ -23,6 +23,7 @@ use junction::Junction;
 use layout::Network;
 use params::Size;
 use spx_diag::Diagnostic;
+use std::sync::Arc;
 
 type D = Dual<4>;
 const EPS0: f64 = 8.8541878128e-12;
@@ -50,11 +51,17 @@ fn smooth_min(limit: D, x: D, delta: f64) -> D {
     2. * limit * x / (limit + x + delta + (diff.sq() + 4. * delta * limit).sqrt())
 }
 
+/// Temperature-, geometry- and layout-specialized model shared by identical instances.
+#[derive(Debug)]
+pub struct PreparedModel {
+    size: Size,
+    network: Network,
+}
+
 #[derive(Debug)]
 struct Instance {
     name: String,
-    size: Size,
-    network: Network,
+    model: Arc<PreparedModel>,
     nodes: [Node; 4],
     inner: [Node; 4],
     body: [Node; 2],
@@ -73,7 +80,39 @@ struct CoreStamp {
 /// Per-workspace intrinsic BSIM4 linearizations. One cache belongs to one
 /// configured device group for the lifetime of an analysis.
 #[derive(Debug, Default)]
-pub struct CoreCache(Vec<Option<CoreStamp>>);
+pub struct CoreCache {
+    instances: Vec<Option<CoreStamp>>,
+    shared: Vec<Option<(usize, CoreStamp)>>,
+}
+impl CoreCache {
+    // A small direct-mapped cache per device chunk also catches equal biases
+    // on separate instances of the same fully specialized transistor.
+    const INDEX_BITS: u32 = 5;
+
+    fn exact(&mut self, model: &Arc<PreparedModel>, lin: [f64; 4]) -> &CoreStamp {
+        // The group owns every model for the cache lifetime. Compare identity
+        // without updating shared reference counts in the parallel inner loop.
+        let identity = Arc::as_ptr(model) as usize;
+        let bits = lin.map(f64::to_bits);
+        let hash = bits
+            .into_iter()
+            .fold(0u64, |acc, v| acc.rotate_left(13) ^ v);
+        let index = (hash.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - Self::INDEX_BITS)) as usize;
+        let entry = &mut self.shared[index];
+        if entry
+            .as_ref()
+            .is_some_and(|(m, s)| *m != identity || s.lin.map(f64::to_bits) != bits)
+        {
+            *entry = None;
+        }
+        &entry
+            .get_or_insert_with(|| {
+                let (f, q, _) = model.size.terminals(lin);
+                (identity, CoreStamp { lin, f, q })
+            })
+            .1
+    }
+}
 
 /// Chunk of built-in level-54 instances.
 #[derive(Debug, Default)]
@@ -108,6 +147,35 @@ impl Bsim4s {
         off: bool,
         b: Binding<'_>,
     ) -> Result<Vec<Diagnostic>, Diagnostic> {
+        let (model, warnings) = PreparedModel::new(name, b)?;
+        self.push_prepared(name, nodes, off, model);
+        Ok(warnings)
+    }
+
+    /// Register a device with a previously validated parameter binding.
+    pub fn push_prepared(
+        &mut self,
+        name: &str,
+        nodes: [Node; 4],
+        off: bool,
+        model: Arc<PreparedModel>,
+    ) {
+        self.instances.push(Instance {
+            name: name.into(),
+            model,
+            nodes,
+            inner: nodes,
+            body: [nodes[3]; 2],
+            middle: nodes[1],
+            off,
+            at: SlotOffsets::default(),
+        });
+    }
+}
+
+impl PreparedModel {
+    /// Evaluate and validate an instance binding, including its effective dimensions.
+    pub fn new(name: &str, b: Binding<'_>) -> Result<(Arc<Self>, Vec<Diagnostic>), Diagnostic> {
         let p = b.model;
         let error = |msg: String| Diagnostic::error("E-ELAB-MODEL", format!("{name}: {msg}"));
         for key in ["acnqsmod", "trnqsmod", "mtrlmod"] {
@@ -196,18 +264,7 @@ impl Bsim4s {
                 }
             }
         }
-        self.instances.push(Instance {
-            name: name.into(),
-            size,
-            network,
-            nodes,
-            inner: nodes,
-            body: [nodes[3]; 2],
-            middle: nodes[1],
-            off,
-            at: SlotOffsets::default(),
-        });
-        Ok(warnings)
+        Ok((Arc::new(Self { size, network }), warnings))
     }
 }
 
@@ -259,15 +316,15 @@ impl Instance {
     }
     fn overlap_nodes(&self) -> [Node; 4] {
         let mut nodes = self.inner;
-        if self.network.gate_mode == 3 {
+        if self.model.network.gate_mode == 3 {
             nodes[1] = self.middle;
         }
         nodes
     }
     fn series(&self, side: usize, v: [f64; 4]) -> [D; 4] {
         let [outer, inner, gate, bulk] = std::array::from_fn(|k| D::var(v[k], k));
-        let net = &self.network;
-        let m = &self.size;
+        let net = &self.model.network;
+        let m = &self.model.size;
         let resistance = if net.external {
             let [min, r] = net.extension[side];
             let gate_drive = floor(m.sign * (gate - outer) - net.vflat, 0.);
@@ -298,17 +355,17 @@ impl DeviceGroup for Bsim4s {
         for d in &mut self.instances {
             let mut node = |n: &str| Some(u.alloc_internal_node(&d.name, n));
             for (side, name) in ["drain", "source"].into_iter().enumerate() {
-                if d.network.external || d.network.diffusion[side] > 0. {
+                if d.model.network.external || d.model.network.diffusion[side] > 0. {
                     d.inner[2 * side] = node(name);
                 }
             }
-            if d.network.gate_mode != 0 {
+            if d.model.network.gate_mode != 0 {
                 d.inner[1] = node("gate");
             }
-            if d.network.gate_mode == 3 {
+            if d.model.network.gate_mode == 3 {
                 d.middle = node("midgate");
             }
-            if d.network.body.is_some() {
+            if d.model.network.body.is_some() {
                 d.inner[3] = node("body");
                 d.body = [node("dbody"), node("sbody")];
             }
@@ -318,14 +375,20 @@ impl DeviceGroup for Bsim4s {
         for d in &mut self.instances {
             d.at = b.counts();
             b.charge_core(&d.inner);
-            b.charge_core(&d.overlap_nodes());
+            let overlap = d.overlap_nodes();
+            for r in overlap {
+                b.tracked_q(r);
+                for c in overlap {
+                    b.c(r, c);
+                }
+            }
             for side in 0..2 {
                 b.charge_core(&[d.body[side], d.inner[2 * side]]);
                 if d.inner[2 * side] != d.nodes[2 * side] {
                     b.core(&d.series_nodes(side));
                 }
             }
-            if d.network.body.is_some() {
+            if d.model.network.body.is_some() {
                 for node in d.body {
                     b.relaxation_node(node);
                 }
@@ -333,17 +396,17 @@ impl DeviceGroup for Bsim4s {
                     b.resistor(a, z);
                 }
             }
-            if matches!(d.network.gate_mode, 1 | 3) {
+            if matches!(d.model.network.gate_mode, 1 | 3) {
                 b.resistor(
                     d.nodes[1],
-                    if d.network.gate_mode == 1 {
+                    if d.model.network.gate_mode == 1 {
                         d.inner[1]
                     } else {
                         d.middle
                     },
                 );
             }
-            if d.network.gate_mode >= 2 {
+            if d.model.network.gate_mode >= 2 {
                 let [d1, g, s, body] = d.inner;
                 b.core(&[d1, g, s, body, d.middle]);
             }
@@ -363,7 +426,10 @@ impl DeviceGroup for Bsim4s {
         cache: &mut CoreCache,
         tolerance: f64,
     ) {
-        cache.0.resize_with(self.len(), || None);
+        cache.instances.resize_with(self.len(), || None);
+        cache
+            .shared
+            .resize_with(1 << CoreCache::INDEX_BITS, || None);
         self.evaluate(ctx, x, state, out, Some(cache), tolerance);
     }
 }
@@ -384,7 +450,7 @@ impl Bsim4s {
             .zip(state.current.as_chunks_mut::<5>().0)
             .enumerate()
         {
-            let m = &dev.size;
+            let m = &dev.model.size;
             let act = dev.inner.map(|n| volt(x, n));
             let [d, g, s, b] = act;
             let mut bias = [g - s, d - s, b - s].map(|v| m.sign * v);
@@ -399,7 +465,7 @@ impl Bsim4s {
                 let (vd, ld) = limit_step(bias[1], prev[1], prev[1]);
                 let limit = |v, old, side: usize| {
                     let j = &m.junction[side];
-                    limit_junction(v, old, j.nvt, vcrit(j.isat.max(1e-30), j.nvt))
+                    limit_junction(v, old, j.nvt, j.vcrit)
                 };
                 let (vb, lb) = limit(bias[2], prev[2], 1);
                 let (vbd, lbd) = limit(vb - vd, prev[2] - prev[1], 0);
@@ -414,31 +480,32 @@ impl Bsim4s {
                 s + m.sign * bias[2],
             ];
             let mut at = dev.at;
-            let entry = cache
-                .as_mut()
-                .filter(|_| dev.network.gate_mode < 2)
-                .map(|c| &mut c.0[index]);
-            let bias = if let Some(stamp) = entry.as_deref().and_then(Option::as_ref)
-                && (stamp.lin.map(f64::to_bits) == lin.map(f64::to_bits)
-                    || (tolerance > 0.
-                        && ctx.limit
-                        && !ctx.init_junctions
-                        && stamp
-                            .lin
-                            .iter()
-                            .zip(lin)
-                            .all(|(old, v)| (old - v).abs() <= tolerance)))
+            let bias = if let Some(cache) = cache
+                .as_deref_mut()
+                .filter(|_| dev.model.network.gate_mode < 2)
             {
-                // Predict residuals at the actual voltage with the saved G and C.
-                // Limiting history and junction/overlap stamps still advance.
-                out.core(&mut at, &stamp.f, &stamp.q, &act, &stamp.lin);
+                let reusable = cache.instances[index].as_ref().filter(|stamp| {
+                    stamp.lin.map(f64::to_bits) == lin.map(f64::to_bits)
+                        || (tolerance > 0.
+                            && ctx.limit
+                            && !ctx.init_junctions
+                            && stamp
+                                .lin
+                                .iter()
+                                .zip(lin)
+                                .all(|(old, v)| (old - v).abs() <= tolerance))
+                });
+                if let Some(stamp) = reusable {
+                    out.core(&mut at, &stamp.f, &stamp.q, &act, &stamp.lin);
+                } else {
+                    let stamp = cache.exact(&dev.model, lin).clone();
+                    out.core(&mut at, &stamp.f, &stamp.q, &act, &lin);
+                    cache.instances[index] = Some(stamp);
+                }
                 None
             } else {
                 let (f, q, bias) = m.terminals(lin);
                 out.core(&mut at, &f, &q, &act, &lin);
-                if let Some(entry) = entry {
-                    *entry = Some(CoreStamp { lin, f, q });
-                }
                 Some(bias)
             };
             let ov = dev.overlap_nodes().map(|n| volt(x, n));
@@ -446,19 +513,18 @@ impl Bsim4s {
             let gd = m.overlap_charge((og - od) * m.sign, 0) * m.sign * m.mult;
             let gs = m.overlap_charge((og - os) * m.sign, 1) * m.sign * m.mult;
             let gb = (og - ob) * (m.overlap[2] * m.mult);
-            out.core(
-                &mut at,
-                &[D::cst(0.); 4],
-                &[-gd, gd + gs + gb, -gs, -gb],
-                &ov,
-                &ov,
-            );
+            for q in [-gd, gd + gs + gb, -gs, -gb] {
+                out.q[at.q] = q.v;
+                out.c[at.c..at.c + 4].copy_from_slice(&q.d);
+                at.q += 1;
+                at.c += 4;
+            }
             for side in 0..2 {
                 let j = &m.junction[side];
                 let local = [volt(x, dev.body[side]), act[2 * side]];
                 let raw = m.sign * (local[0] - local[1]);
                 let (v, limited) = if ctx.limit {
-                    limit_junction(raw, prev[3 + side], j.nvt, vcrit(j.isat.max(1e-30), j.nvt))
+                    limit_junction(raw, prev[3 + side], j.nvt, j.vcrit)
                 } else {
                     (raw, false)
                 };
@@ -481,16 +547,16 @@ impl Bsim4s {
                     out.core(&mut at, &dev.series(side, v), &[D::cst(0.); 4], &v, &v);
                 }
             }
-            if let Some(body) = dev.network.body {
+            if let Some(body) = dev.model.network.body {
                 for ((a, b), g) in dev.body_branches().into_iter().zip(body) {
                     out.resistor(&mut at, g * m.mult, volt(x, a), volt(x, b));
                 }
             }
-            let mode = dev.network.gate_mode;
+            let mode = dev.model.network.gate_mode;
             if matches!(mode, 1 | 3) {
                 out.resistor(
                     &mut at,
-                    m.mult / dev.network.gate.max(1e-6),
+                    m.mult / dev.model.network.gate.max(1e-6),
                     volt(x, dev.nodes[1]),
                     volt(x, if mode == 1 { dev.inner[1] } else { dev.middle }),
                 );
@@ -498,10 +564,10 @@ impl Bsim4s {
             if mode >= 2
                 && let Some(bias) = bias
             {
-                let conductance =
-                    dev.network.xrcrg1 * (bias.id_per_volt + dev.network.xrcrg2 * bias.beta * m.vt);
+                let conductance = dev.model.network.xrcrg1
+                    * (bias.id_per_volt + dev.model.network.xrcrg2 * bias.beta * m.vt);
                 let g = if mode == 2 {
-                    conductance / (1. + dev.network.gate * conductance)
+                    conductance / (1. + dev.model.network.gate * conductance)
                 } else {
                     conductance
                 };

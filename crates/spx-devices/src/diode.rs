@@ -119,7 +119,7 @@ impl DeviceGroup for Diodes {
             if self.model[i].rs > 0.0 {
                 b.resistor(self.a[i], self.ai[i]);
             }
-            b.core(&[self.ai[i], self.k[i]]);
+            b.charge_core(&[self.ai[i], self.k[i]]);
         }
         Ok(())
     }

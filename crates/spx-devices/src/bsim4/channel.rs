@@ -66,7 +66,7 @@ impl Size {
             + self.k1ox * ((1. + p.lpe0 / self.l).sqrt() - 1.) * sqrt_phi
             + (p.k3 + p.k3b * bulk) * width_shift
             - (p.dvt0 * short + p.dvt0w * narrow) * (self.vbi - self.phi)
-            - theta(D::cst(self.dsub * self.l / zero_scale)) * (p.eta0 + p.etab * bulk) * drain
+            - self.dibl_factor * (p.eta0 + p.etab * bulk) * drain
             + self.vth_temp
             + self.body_temp * bulk;
         if p.dvtp0 > 0. {
@@ -79,7 +79,7 @@ impl Size {
             threshold += -(p.dvtp5 + p.dvtp2 / self.l.powf(p.dvtp3)) * (1. - e) / (1. + e);
         }
         let nvt = swing * self.vt;
-        let mstar = 0.5 + p.minv.atan() / std::f64::consts::PI;
+        let mstar = self.mstar;
         let vgst = gate - threshold;
         let over = nvt * softplus(mstar * vgst / nvt)
             / (mstar
@@ -142,7 +142,7 @@ impl Size {
                     p.prwb * (surface - sqrt_phi) + 1. / floor(1. + p.prwg * over, 0.05),
                     0.,
                 ))
-            / (1e6 * self.wj).powf(p.wr);
+            / self.resistance_width;
         let drive = over + 2. * self.vt;
         let lambda = floor(p.a1 * over + p.a2, 0.01);
         let coxeff = self.centroid_cap(over);
@@ -168,7 +168,7 @@ impl Size {
                 / (load * abulk - 1. + 2. / lambda);
             conductance = conductance * (1. + (1. + cclm * excess / va).ln() / cclm);
         }
-        let rout = p.pdiblc1 * theta(D::cst(p.drout * self.l / zero_scale)) + p.pdiblc2;
+        let rout = self.rout_factor;
         if rout.v > 0. {
             let inv_va =
                 rout * (1. + p.pdiblcb * bulk) * (drive + abulk * sat) / (drive.sq() * gate_factor);

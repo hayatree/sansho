@@ -478,3 +478,106 @@ speedup ranged from 1.57× to 1.62× before any synchronization cost. These
 measurements favor reducing repivot and BSIM4 evaluation costs before L3.
 The BSIM4 assembly cost also rose from 4.27 s at one worker to 10.38 s at
 the default, offsetting most of the device evaluation savings.
+
+### M5-2 transient accuracy
+
+The gold runs use ngspice 44.2, `reltol=1e-4`, `vntol=1e-7`, `chgtol=1e-16`
+and a 2 ps maximum step. For each raw file, linearly interpolate all 32 product
+voltages at 4,000 uniformly spaced times including both endpoints. Average
+the absolute differences over all 128,000 bit/time pairs. Count transitions
+between the two sides of 0.9 V on each waveform's original time grid, taking
+equality as high. Sum the absolute count difference for each bit. This counts
+a missed pulse on one bit even if another bit has an extra pulse.
+
+```sh
+cargo build --offline --release --features jit -p spx-cli -p spx-verify
+target/release/spx run benches/large/mult16_mos1.cir -r /tmp/mos1.raw
+python3 benches/large/accuracy.py mult16_mos1 /tmp/mos1.raw
+target/release/spx run benches/large/mult16_bsim4.cir -r /tmp/bsim4.raw
+python3 benches/large/accuracy.py mult16_bsim4 /tmp/bsim4.raw
+python3 benches/large/run.py --runs 1
+python3 benches/large/run.py --check-bits
+```
+
+Generate a tighter candidate from a temporary copy of either deck. For example,
+
+```sh
+sed 's/^\.options /.options reltol=1e-4 /' benches/large/mult16_mos1.cir > /tmp/mos1-tight.cir
+target/release/spx run /tmp/mos1-tight.cir -r /tmp/mos1-tight.raw
+python3 benches/large/accuracy.py mult16_mos1 /tmp/mos1.raw /tmp/mos1-tight.raw
+```
+
+The comparison reads gold and ngspice-default data from `verify/out/large`.
+It accepts additional candidate paths or uses the cached spx raw when invoked
+with just the deck name. The `reltol=1e-4` spx runs change only that option.
+
+| Deck | Run | Points | Mean absolute error (mV) | Crossings | Crossing difference |
+|---|---|---:|---:|---:|---:|
+| MOS1 | ngspice gold | 9,301 | 0 | 502 | 0 |
+| MOS1 | ngspice default | 657 | 15.628 | 490 | 36 |
+| MOS1 | spx at `6ef1df7` | 206 | 63.113 | 278 | 224 |
+| MOS1 | spx M5-2 default | 1,560 | 4.338 | 486 | 24 |
+| MOS1 | spx M5-2 `reltol=1e-4` | 3,682 | 0.772 | 502 | 4 |
+| BSIM4 | ngspice gold | 21,414 | 0 | 556 | 0 |
+| BSIM4 | ngspice default | 934 | 36.771 | 554 | 30 |
+| BSIM4 | spx at `6ef1df7` | 222 | 95.089 | 302 | 254 |
+| BSIM4 | spx M5-2 default | 2,750 | 4.834 | 558 | 6 |
+| BSIM4 | spx M5-2 `reltol=1e-4` | 7,624 | 0.191 | 556 | 0 |
+
+At the old defaults the charge-error allowance was at least 70 fC. A full
+1.8 V transition on a 3 fF load moves only 5.4 fC. The controller now applies
+`reltol` to the charge scale including its `chgtol` floor. The corresponding
+minimum allowance is 0.07 fC. It also uses the variable-step BDF2 error
+coefficient and monitors individual capacitors and MOS1 branch charges before
+they can cancel in the nodal sum. The default step ceiling on both decks was
+already the documented value. [Transient integration](architecture.md#53-transient-analysis)
+
+### M5-2 wall time and profile
+
+One release CLI process per cell on a Ryzen AI Max+ 395 with 32 logical CPUs,
+using the built-in device models, the JIT-enabled build and the original save
+projections. The runs include profiling and ASCII raw output. Large decks ran
+one at a time for this table. Times are seconds. The maintainer measured the
+ngspice 44.2 comparison times separately.
+
+| Deck | spx one worker | spx default | Default workers | ngspice default |
+|---|---:|---:|---:|---:|
+| ring1001_mos1 | 0.098 | 0.092 | 2 | OP failed |
+| inv_chain1000_bsim4 | 0.600 | 0.349 | 3 | 0.33 |
+| rc_grid_300 | 3.589 | 3.515 | 1 | exceeded 1,200 |
+| mult16_mos1 | 14.014 | 8.307 | 5 | 82 |
+| mult16_bsim4 | 127.649 | 37.933 | 12 | 51 |
+
+With the corrected tolerance and variable-step coefficient, an initial BSIM4
+multiplier run took 196.81 s on one worker. Device evaluation accounted for
+158.86 s across 2,746 points. The final run used 95.47 s for evaluation
+across 2,750 points. Model binding now precomputes bias-independent channel
+and junction factors. The overlap stamp stores charge and capacitance.
+A device chunk can reuse intrinsic evaluations at exactly equal biases for
+instances with a shared parameter binding. The default still evaluates
+changed biases exactly.
+
+The chain's initial profile measured 196.74 ms in elaboration and 4.95 ms
+in reading, preprocessing, flattening and parsing. Its transistors name two
+static model cards directly and use fixed instance dimensions. The generic
+bin search and model-expression evaluator have no instance-specific model
+expressions to resolve on this deck. Caching the validated model and network
+by selected card and ordered parameter values reduced total setup and parse
+time to 14.00 ms on one worker and 10.12 ms at the default.
+
+Native assembly streams the per-group slot maps in source order. Conductance
+and capacitance use independent tasks, and dense zero overlap-current stamps
+have been removed. Multiplier assembly took 2.32 s on one worker and 1.20 s
+on five workers for MOS1, and 13.75 s on one worker and 7.46 s on twelve for BSIM4.
+At the BSIM4 default, device evaluation still took 13.27 s and numeric
+factorization took 12.59 s. On one worker BSIM4 remains slower than the
+maintainer's ngspice default. The spx run takes nearly three times as many
+points and resolves more of the gold waveform's glitches.
+
+The release JIT-enabled cached verifier preserved all four suites' verdicts.
+The ordinary and Verilog-A suites had 14 and 15 passes. BSIM4 had 19 passes
+and three known differences, and SKY130 had seven passes and one known
+difference. All 128 settled product checks passed on each multiplier at both
+worker settings.
+With save projections removed, every time point and internal waveform in
+the full-precision JSON matched across one and default workers on all five decks.

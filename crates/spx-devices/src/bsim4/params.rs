@@ -96,7 +96,11 @@ pub(super) struct Size {
     pub(super) vbi: f64,
     pub(super) xdep0: f64,
     pub(super) poly: f64,
-    pub(super) dsub: f64,
+    pub(super) dibl_factor: super::D,
+    pub(super) rout_factor: super::D,
+    pub(super) resistance_width: f64,
+    pub(super) mstar: f64,
+    pub(super) centroid_field: f64,
     pub(super) vt: f64,
     pub(super) vt_pocket: f64,
     pub(super) vth_temp: f64,
@@ -376,7 +380,15 @@ impl Size {
         let gate = super::gate::Gate::new(p, &bin, sign, toxe, l, w * nf, vt_pocket, flat_sd)?;
         let mut cv = super::ChargeModel::new(p, &bin, lcv, wcv, nf);
         cv.voff = (cv.voff + bin.get("voffcvl", 0.) / l) * (1. + bin.get("tvoffcv", 0.) * dt);
+        let zero_scale = (EPS_SI / coxe * xdep0).sqrt();
+        let theta0 = |exponent| super::theta(super::D::cst(exponent * l / zero_scale));
+        let density = 2. * EPS_SI * phi / (crate::CHARGE * xdep0.powi(2)) / 1e6;
         Ok(Self {
+            dibl_factor: theta0(dsub),
+            rout_factor: ch.pdiblc1 * theta0(ch.drout) + ch.pdiblc2,
+            resistance_width: (1e6 * wj).powf(ch.wr),
+            mstar: 0.5 + ch.minv.atan() / std::f64::consts::PI,
+            centroid_field: cv.acde * (density / 2e16).powf(-0.25),
             p: ch,
             sign,
             l,
@@ -400,7 +412,6 @@ impl Size {
             vbc,
             xdep0,
             poly,
-            dsub,
             vt,
             vt_pocket: if tempmod < 2. { vt } else { vtn },
             vth_temp: (bin.get("kt1", -0.11) + bin.get("kt1l", 0.) / l) * rel,

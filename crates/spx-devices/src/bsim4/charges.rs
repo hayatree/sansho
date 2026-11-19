@@ -16,7 +16,7 @@ pub(super) struct ChargeModel {
     vfbcv: f64,
     xpart: f64,
     moin: f64,
-    acde: f64,
+    pub(super) acde: f64,
     edge: [f64; 2],
     kappa: [f64; 2],
     pub(super) flat_zero: f64,
@@ -99,11 +99,10 @@ impl Size {
                 (raw, cap * (drop - sub0), D::cst(cap))
             } else {
                 let xmax = self.xdep0 * (self.vt / (2. * self.phi)).sqrt() / 3.;
-                let density = 2. * EPS_SI * self.phi / (crate::CHARGE * self.xdep0.powi(2)) / 1e6;
                 let field = (b.gate - b.bulk - flat) / (1e8 * self.toxp);
                 let depth = smooth_min(
                     D::cst(xmax),
-                    xmax * safe_exp(cv.acde * (density / 2e16).powf(-0.25) * field),
+                    xmax * safe_exp(self.centroid_field * field),
                     1e-3 * self.toxe,
                 );
                 let cap_depl = cv.area * self.coxp / (1. + self.coxp / EPS_SI * depth);

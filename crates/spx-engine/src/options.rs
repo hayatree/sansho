@@ -21,9 +21,9 @@ pub struct SimOptions {
     pub abstol: f64,
     /// Absolute voltage tolerance (V).
     pub vntol: f64,
-    /// Charge tolerance (C); used by LTE control (later milestone).
+    /// Minimum charge scale (C) in the relative LTE tolerance.
     pub chgtol: f64,
-    /// Truncation error overestimation factor; used by LTE control (later milestone).
+    /// Multiplier on the charge and current tolerances for transient LTE.
     pub trtol: f64,
     /// Minimum conductance (S).
     pub gmin: f64,

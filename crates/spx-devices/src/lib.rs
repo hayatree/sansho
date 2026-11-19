@@ -189,6 +189,14 @@ impl<'a> StampBuilder<'a> {
         self.layout.q.push(row);
     }
 
+    /// Declare a charge whose individual value participates in truncation control.
+    /// A row of `None` tracks a device state without adding it to the MNA residual.
+    pub fn tracked_q(&mut self, row: Node) {
+        self.independent_charges();
+        self.layout.lte_q.push(self.layout.q.len());
+        self.q(row);
+    }
+
     /// Declare a `b` row.
     pub fn b(&mut self, row: Node) {
         self.layout.b.push(row);
