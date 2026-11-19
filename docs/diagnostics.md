@@ -59,6 +59,9 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-SOLVE-BACKEND`](#e-solve-backend) | error | Linear solver failure |
 | [`W-MEAS-FAILED`](#w-meas-failed) | warning | Measurement failed |
 | [`W-RUN-NOANALYSIS`](#w-run-noanalysis) | warning | No analysis |
+| [`E-MC-COUNT`](#e-mc-count) | error | Invalid Monte Carlo run count |
+| [`E-MC-PARAM`](#e-mc-param) | error | Invalid statistical parameter |
+| [`E-MC-TOPOLOGY`](#e-mc-topology) | error | Statistical topology change |
 | [`E-API-INPUT`](#e-api-input) | error | Invalid request |
 | [`E-API-UNKNOWN-ID`](#e-api-unknown-id) | error | Unknown circuit or job |
 | [`E-API-UNKNOWN-SIGNAL`](#e-api-unknown-signal) | error | Unknown signal |
@@ -378,6 +381,24 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **No analysis.** The netlist contains no analysis card.
 
 - Add `.op`, `.dc`, `.ac` or `.tran`.
+
+## E-MC-COUNT
+
+**Invalid Monte Carlo run count.** A statistical batch requires a positive run count.
+
+- Choose a count within the interface limit.
+
+## E-MC-PARAM
+
+**Invalid statistical parameter.** A statistical expression is unsupported in this field or produced an invalid numeric value.
+
+- Check the parameter expression and Gaussian sigma divisor.
+
+## E-MC-TOPOLOGY
+
+**Statistical topology change.** A statistical binding requires different device connectivity, internal nodes or stamps.
+
+- Use separate decks for different topologies.
 
 ## E-API-INPUT
 

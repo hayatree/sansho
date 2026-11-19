@@ -93,6 +93,9 @@ impl Diodes {
 }
 
 impl DeviceGroup for Diodes {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "diode"
     }

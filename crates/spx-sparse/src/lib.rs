@@ -16,7 +16,7 @@ mod refactor;
 pub use refactor::NewtonLu;
 
 pub use faer::c64;
-pub use faer_backend::FaerLu;
+pub use faer_backend::{BatchOrdering, FaerLu, SerialLu};
 pub use pattern::{CscPattern, PatternBuilder};
 
 /// Scalar types supported by the solvers.

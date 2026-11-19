@@ -92,6 +92,7 @@ impl SourceLoader for FsLoader {
 /// Result of preprocessing.
 #[derive(Debug)]
 pub(crate) struct Expanded {
+    pub fields: HashMap<usize, Vec<(usize, Expr)>>,
     pub title: String,
     pub lines: Vec<Line>,
     /// Repeated model headers refer to the earlier card supplying their parameter tokens.
@@ -130,6 +131,8 @@ struct Leaf {
 #[derive(Debug)]
 struct Scope<'p> {
     parent: Option<&'p Scope<'p>>,
+    path: u64,
+    overrides: HashMap<String, Expr>,
     fixed: HashMap<String, f64>,
     defs: HashMap<String, Rc<str>>,
     expressions: Rc<RefCell<HashMap<String, Rc<Expr>>>>,
@@ -141,6 +144,8 @@ impl<'p> Scope<'p> {
     fn new(parent: Option<&'p Scope<'p>>) -> Self {
         Self {
             parent,
+            path: 0,
+            overrides: Default::default(),
             expressions: parent.map(|p| p.expressions.clone()).unwrap_or_default(),
             fixed: HashMap::new(),
             defs: HashMap::new(),
@@ -181,6 +186,36 @@ impl<'p> Scope<'p> {
         Ok(e)
     }
 
+    fn bound_param(&self, name: &str, funcs: &Funcs) -> Result<Expr, String> {
+        if let Some(e) = self.overrides.get(name) {
+            return Ok(e.clone());
+        }
+        if let Some(v) = self.fixed.get(name) {
+            return Ok(Expr::Num(*v));
+        }
+        if let Some(text) = self.defs.get(name) {
+            if !self.busy.borrow_mut().insert(name.into()) {
+                return Err(format!("recursive parameter {name}"));
+            }
+            let result = self.bound(text, funcs, crate::statistics::identity(self.path, name));
+            self.busy.borrow_mut().remove(name);
+            return result;
+        }
+        self.parent
+            .ok_or_else(|| format!("unknown parameter {name}"))?
+            .bound_param(name, funcs)
+    }
+
+    fn bound(&self, text: &str, funcs: &Funcs, site: u64) -> Result<Expr, String> {
+        crate::statistics::bind(
+            self.expression(text)?.as_ref(),
+            &|n| self.bound_param(n, funcs),
+            funcs,
+            site,
+            0,
+        )
+    }
+
     fn eval_text(&self, text: &str, funcs: &Funcs) -> Result<f64, String> {
         let e = self.expression(text)?;
         eval(&e, &|n| self.get(n, funcs), funcs)
@@ -198,6 +233,8 @@ pub(crate) struct ModelScope {
 impl Scope<'_> {
     fn snapshot(&self) -> Scope<'static> {
         let mut saved = Scope::new(None);
+        saved.path = self.path;
+        saved.overrides.clone_from(&self.overrides);
         saved.fixed.clone_from(&self.fixed);
         saved.defs.clone_from(&self.defs);
         saved.expressions = self.expressions.clone();
@@ -206,6 +243,36 @@ impl Scope<'_> {
 }
 
 impl ModelScope {
+    pub fn binder<'a>(
+        &'a self,
+        instance: &[(String, f64)],
+        overrides: HashMap<String, Expr>,
+        name: &str,
+    ) -> impl Fn(&Token) -> Result<Expr, String> + use<'a> {
+        let mut local = Scope::new(Some(&self.global));
+        local.path = self.local.path;
+        local.overrides = self.local.overrides.clone();
+        local.defs = self.local.defs.clone();
+        local.fixed = self.local.fixed.clone();
+        for (name, value) in instance {
+            local.overrides.remove(name);
+            local.fixed.insert(name.clone(), *value);
+        }
+        local.overrides.extend(overrides);
+        if !local.defs.contains_key("nf") {
+            local.fixed.entry("nf".into()).or_insert(1.);
+        }
+        if !local.defs.contains_key("mult") {
+            let m = local.fixed.get("m").copied().unwrap_or(1.);
+            local.fixed.entry("mult".into()).or_insert(m);
+            if let Some(m) = local.overrides.get("m").cloned() {
+                local.overrides.insert("mult".into(), m);
+            }
+        }
+        let path = crate::statistics::identity(0, name);
+        move |t| local.bound(&t.text, &self.funcs, token_site(path, t))
+    }
+
     pub fn evaluator(
         &self,
         instance: &[(String, f64)],
@@ -517,6 +584,7 @@ fn model_names(name: &str, out: &mut HashSet<String>) {
 
 struct Ctx<'a> {
     copies: f64,
+    copies_expr: Option<Expr>,
     prefix: String,
     ports: HashMap<String, String>,
     local_models: &'a HashSet<String>,
@@ -557,7 +625,21 @@ impl Ctx<'_> {
     }
 }
 
+fn product(a: Expr, b: Expr) -> Expr {
+    match (a, b) {
+        (Expr::Num(x), Expr::Num(y)) => Expr::Num(x * y),
+        (a, b) => Expr::Binary('*', Box::new(a), Box::new(b)),
+    }
+}
+
+fn token_site(path: u64, token: &Token) -> u64 {
+    let s = token.span;
+    crate::statistics::identity(path, &format!("{}:{}:{}", s.file, s.line, s.col))
+}
+
 struct Flat<'l> {
+    statistical: bool,
+    fields: HashMap<usize, Vec<(usize, Expr)>>,
     global_model_scope: Rc<Scope<'static>>,
     model_scopes: HashMap<usize, Rc<ModelScope>>,
     model_sources: HashMap<usize, usize>,
@@ -636,6 +718,38 @@ impl Flat<'_> {
         for (offset, line) in lines.iter().enumerate() {
             let h = head(line);
             let span = line.span();
+            let emitted = !h.starts_with('.')
+                || ctx.prefix.is_empty()
+                || matches!(h.as_str(), ".ic" | ".nodeset" | ".save");
+            if self.statistical
+                && emitted
+                && !h.starts_with('x')
+                && !matches!(h.as_str(), ".param" | ".func" | ".model" | ".global")
+            {
+                let path = crate::statistics::identity(0, &ctx.element(&h));
+                for (i, t) in line.tokens.iter().enumerate() {
+                    let expression = is_expr_token(&t.text);
+                    if expression
+                        || (i > 0 && line.tokens[i - 1].is_eq() && !is_number_literal(&t.text))
+                    {
+                        match scope.bound(&t.text, &self.defs.funcs, token_site(path, t)) {
+                            Ok(Expr::Num(_)) => {}
+                            Ok(expr) => self
+                                .fields
+                                .entry(self.out.len())
+                                .or_default()
+                                .push((i, expr)),
+                            Err(e)
+                                if expression
+                                    || scope.eval_text(&t.text, &self.defs.funcs).is_ok() =>
+                            {
+                                self.error("E-MC-PARAM", e, t.span)
+                            }
+                            Err(_) => {} // Enumerated fields such as method=gear.
+                        }
+                    }
+                }
+            }
             if h.starts_with('.') {
                 match h.as_str() {
                     ".param" | ".func" | ".global" => {}
@@ -785,7 +899,9 @@ impl Flat<'_> {
                     }
                 }
             }
-            if ctx.copies != 1. && matches!(letter, 'm' | 'r' | 'l' | 'c' | 'd' | 'q') {
+            if (ctx.copies != 1. || ctx.copies_expr.is_some())
+                && matches!(letter, 'm' | 'r' | 'l' | 'c' | 'd' | 'q')
+            {
                 let start = node_slots.last().copied().unwrap_or(0) + 1;
                 if let Some(k) = toks[start..]
                     .windows(3)
@@ -793,9 +909,31 @@ impl Flat<'_> {
                 {
                     let value = &mut toks[start + k + 2];
                     if let Some(m) = crate::number::parse_number(&value.text) {
+                        if self.statistical {
+                            let index = start + k + 2;
+                            let fields = self.fields.entry(self.out.len()).or_default();
+                            let expr = fields
+                                .iter()
+                                .position(|(i, _)| *i == index)
+                                .map(|i| fields.remove(i).1)
+                                .unwrap_or(Expr::Num(m));
+                            let expr = product(
+                                expr,
+                                ctx.copies_expr.clone().unwrap_or(Expr::Num(ctx.copies)),
+                            );
+                            if !matches!(expr, Expr::Num(_)) {
+                                fields.push((index, expr));
+                            }
+                        }
                         value.text = num_text(m * ctx.copies);
                     }
                 } else {
+                    if let Some(expr) = &ctx.copies_expr {
+                        self.fields
+                            .entry(self.out.len())
+                            .or_default()
+                            .push((toks.len() + 2, expr.clone()));
+                    }
                     toks.extend(
                         ["m".into(), "=".into(), num_text(ctx.copies)]
                             .map(|text| Token { text, span }),
@@ -929,6 +1067,17 @@ impl Flat<'_> {
     }
 
     fn condition(&mut self, line: &Line, scope: &Scope<'_>) -> bool {
+        if self.statistical
+            && let Ok(e) = scope.bound(raw_rest(line), &self.defs.funcs, 0)
+            && !matches!(e, Expr::Num(_))
+        {
+            self.error(
+                "E-MC-TOPOLOGY",
+                "statistical .if requires separate topologies",
+                line.span(),
+            );
+            return false;
+        }
         match scope.eval_text(raw_rest(line), &self.defs.funcs) {
             Ok(v) => v != 0.,
             Err(e) => {
@@ -1007,6 +1156,12 @@ impl Flat<'_> {
         let diagnostics_before_args = self.diags.len();
         // Instance parameters are evaluated in the caller's scope.
         let mut inst = Scope::new(Some(global_of(scope)));
+        let prefix = if ctx.prefix.is_empty() {
+            name
+        } else {
+            format!("{}.{name}", ctx.prefix)
+        };
+        inst.path = crate::statistics::identity(0, &prefix);
         let mut i = end;
         while i < t.len() {
             if t[i].lower() == "params:" {
@@ -1019,6 +1174,15 @@ impl Flat<'_> {
                 let key = t[i].lower();
                 match scope.eval_text(&v.text, &self.defs.funcs) {
                     Ok(x) => {
+                        if self.statistical {
+                            match scope.bound(&v.text, &self.defs.funcs, token_site(inst.path, v)) {
+                                Ok(Expr::Num(_)) => {}
+                                Ok(e) => {
+                                    inst.overrides.insert(key.clone(), e);
+                                }
+                                Err(e) => self.error("E-PARSE-EXPR", e, v.span),
+                            }
+                        }
                         inst.fixed.insert(key, x);
                     }
                     Err(e) => self.error("E-PARSE-EXPR", format!("`{key}`: {e}"), v.span),
@@ -1036,11 +1200,6 @@ impl Flat<'_> {
         for (k, e) in &def.defaults {
             inst.defs.insert(k.clone(), e.clone());
         }
-        let prefix = if ctx.prefix.is_empty() {
-            name
-        } else {
-            format!("{}.{name}", ctx.prefix)
-        };
         let ports = def
             .ports
             .iter()
@@ -1076,14 +1235,28 @@ impl Flat<'_> {
             );
             return;
         }
+        let mut copies_expr = ctx.copies_expr.clone().unwrap_or(Expr::Num(ctx.copies));
+        for k in ["m", "mult"] {
+            if let Some(&v) = inst.fixed.get(k)
+                && !declared(k)
+            {
+                copies_expr = product(
+                    copies_expr,
+                    inst.overrides.get(k).cloned().unwrap_or(Expr::Num(v)),
+                );
+            }
+        }
+        let copies_expr = (!matches!(copies_expr, Expr::Num(_))).then_some(copies_expr);
         let version = self.defs.function_version;
         if let Some(leaf) = def.leaf.borrow().as_ref()
+            && !self.statistical
             && self.diags.len() == diagnostics_before_args
             && leaf.functions == version
             && leaf.arguments == arguments
         {
             let inner = Ctx {
                 copies,
+                copies_expr: None,
                 prefix,
                 ports,
                 local_models: &leaf.local_models,
@@ -1126,13 +1299,15 @@ impl Flat<'_> {
         let body = collect(lines, &mut self.defs, &mut models, &mut self.diags);
         let inner = Ctx {
             copies,
+            copies_expr,
             prefix,
             ports,
             local_models: &models,
         };
         // Cache expensive local model cards only when preparation was side-effect free.
         // Child overrides come from their caller, but the parent of inst is the global scope.
-        if before.0 == diagnostics_before_args
+        if !self.statistical
+            && before.0 == diagnostics_before_args
             && before
                 == (
                     self.diags.len(),
@@ -1311,9 +1486,19 @@ fn collect(
 
 /// Preprocess a netlist: includes, libraries, parameters, functions and subcircuits.
 pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
+    preprocess_with(text, loader, false)
+}
+
+pub(crate) fn preprocess_with(
+    text: &str,
+    loader: &dyn SourceLoader,
+    statistical: bool,
+) -> Expanded {
     let _phase = spx_diag::Phase::start("netlist_pre");
     let lexed = lex_source(text, 0, true);
     let mut flat = Flat {
+        statistical,
+        fields: Default::default(),
         global_model_scope: Rc::new(Scope::new(None)),
         model_scopes: HashMap::new(),
         model_sources: Default::default(),
@@ -1338,6 +1523,7 @@ pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
     let empty = HashSet::new();
     let ctx = Ctx {
         copies: 1.,
+        copies_expr: None,
         prefix: String::new(),
         ports: HashMap::new(),
         local_models: &empty,
@@ -1347,6 +1533,7 @@ pub(crate) fn preprocess(text: &str, loader: &dyn SourceLoader) -> Expanded {
     flat.run(&top, &ctx, &global, 0, false, None);
     flat.diags.extend(flat.pre.diags);
     Expanded {
+        fields: flat.fields,
         hdl: flat.pre.hdl,
         title: lexed.title,
         lines: flat.out,

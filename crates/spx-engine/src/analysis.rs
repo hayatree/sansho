@@ -415,8 +415,16 @@ pub(crate) fn ac(
         }
     }
     let mut lu = FaerLu::<c64>::new();
-    lu.analyze(&ckt.pattern)
+    let mut batch_lu = ckt
+        .ordering
+        .clone()
+        .map(spx_sparse::SerialLu::<c64>::from_ordering)
+        .transpose()
         .map_err(|e| Diagnostic::error("E-SOLVE-BACKEND", format!("AC: {e}")))?;
+    if batch_lu.is_none() {
+        lu.analyze(&ckt.pattern)
+            .map_err(|e| Diagnostic::error("E-SOLVE-BACKEND", format!("AC: {e}")))?;
+    }
     let freqs = ac_frequencies(sweep, points, fstart, fstop);
     let mut cols = vec![Vec::with_capacity(freqs.len()); n];
     let mut vals = vec![c64::new(0.0, 0.0); ckt.pattern.nnz()];
@@ -426,9 +434,12 @@ pub(crate) fn ac(
             *v = c64::new(ws.asm.g[k], w * ws.asm.c[k]);
         }
         let mut sol = b.clone();
-        lu.factor(&vals)
-            .and_then(|()| lu.solve(&mut sol))
-            .map_err(|e| Diagnostic::error("E-SOLVE-SINGULAR", format!("AC at {f:e} Hz: {e}")))?;
+        if let Some(lu) = &mut batch_lu {
+            lu.factor(&vals).and_then(|_| lu.solve(&mut sol))
+        } else {
+            lu.factor(&vals).and_then(|()| lu.solve(&mut sol))
+        }
+        .map_err(|e| Diagnostic::error("E-SOLVE-SINGULAR", format!("AC at {f:e} Hz: {e}")))?;
         for (c, v) in cols.iter_mut().zip(&sol) {
             c.push((v.re, v.im));
         }

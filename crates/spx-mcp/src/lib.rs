@@ -21,7 +21,7 @@ pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26
 const INSTRUCTIONS: &str = "spx is a SPICE circuit simulator. Typical loop: validate_netlist \
 (fast parse + lint) → simulate (returns a compact summary: operating point, signal statistics, \
 .meas results, diagnostics with culprits and suggestions) → get_waveform / measure for details \
-→ alter_and_rerun or sweep to explore the design. Netlists use ngspice syntax (R, C, L, V, I, \
+→ alter_and_rerun or sweep to explore the design. Use monte_carlo with a path or netlist, count n and seed to sample a statistical deck. Netlists use ngspice syntax (R, C, L, V, I, \
 E, F, G, H, D, Q, M level 1; .op .dc .ac .tran .meas .model .options). Values are SI; note \
 that `M` means milli, `MEG` means mega. Results are deterministic: the same input gives the \
 same result_hash.";

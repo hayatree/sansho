@@ -250,3 +250,11 @@ and determinism fixtures extend the repository's existing algorithms. The
 MOS1 charge-only specialization uses this repository's existing charge and
 linearization equations. The sparse crate uses the workspace's existing
 Rayon library.
+
+### M5-5 statistical analysis
+
+The netlist sampler, lexical binding plan and CPU batch runner are original Rust implementations. Parameter scopes and the absolute, relative, normal, uniform and two-point distributions follow public ngspice user documentation on `.param` and statistical functions. The external count selects repeated statistical instances of one deck, following the public SPICE Monte Carlo analysis convention.
+
+The integer finalizer follows Steele, Lea and Flood, *Fast Splittable Pseudorandom Number Generators* (OOPSLA 2014). Stable string identities use FNV-1a arithmetic. Indexing the random function by independent run and call-site counters follows the design principle in Salmon et al., *Parallel Random Numbers: As Easy as 1, 2, 3* (SC 2011). The normal transform follows Box and Muller, *A Note on the Generation of Random Normal Deviates* (1958). Sample variance uses Welford's online recurrence. The independent sample-variance ratio uses the standard F distribution and the incomplete beta continued fraction.
+
+All three validation circuits and their reference drivers were authored for this repository. The SKY130 deck references the locally installed Volare model files. The implementation uses existing Rust dependencies and the existing faer symbolic and sequential numeric factorization interfaces.

@@ -184,6 +184,8 @@ impl Scratch {
 #[derive(Debug)]
 pub struct Bound {
     #[cfg(feature = "jit")]
+    run_kernels: Option<Arc<program::Cache>>,
+    #[cfg(feature = "jit")]
     circuit: Option<CircuitStamp>,
     sim: BindOptions,
     layout: Layout,
@@ -207,10 +209,21 @@ struct CircuitStamp {
 }
 
 impl Bound {
+    /// Keep specializations of a statistical model and its instances for this run.
+    /// The compiled module and its nominal kernel cache remain shareable.
+    pub fn use_run_cache(&mut self) {
+        #[cfg(feature = "jit")]
+        {
+            self.run_kernels = Some(Default::default());
+        }
+    }
+
     /// Start an independent instance with the same validated parameters and port count.
     /// Circuit connections and evaluation history are instance-specific.
     pub fn new_instance(&self) -> Self {
         Self {
+            #[cfg(feature = "jit")]
+            run_kernels: self.run_kernels.clone(),
             #[cfg(feature = "jit")]
             circuit: None,
             sim: self.sim,
@@ -462,6 +475,8 @@ impl CompiledModule {
             }
         }
         let mut bound = Bound {
+            #[cfg(feature = "jit")]
+            run_kernels: model.and_then(|m| m.run_kernels.clone()),
             #[cfg(feature = "jit")]
             circuit: None,
             connected_ports,

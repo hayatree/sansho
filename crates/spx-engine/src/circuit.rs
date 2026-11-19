@@ -36,32 +36,50 @@ pub(crate) struct FixedVoltage {
 /// A compiled, immutable circuit.
 #[derive(Debug)]
 pub struct Circuit {
+    /// `.ic` values as (unknown index, voltage).
+    pub(crate) ics: Vec<(usize, f64)>,
+    /// `.nodeset` values as (unknown index, voltage).
+    pub(crate) nodesets: Vec<(usize, f64)>,
+    pub(crate) topology: Arc<CircuitTopology>,
+    pub(crate) ordering: Option<Arc<spx_sparse::BatchOrdering>>,
+    pub(crate) groups: Vec<Arc<dyn DeviceGroup>>,
+    bindings: Option<Arc<BatchBindings>>,
+    pub(crate) fixed_voltage: Option<FixedVoltage>,
+    pub(crate) linear: bool,
+    /// Per group: number of state values.
+    pub(crate) state_len: Vec<usize>,
+}
+
+impl std::ops::Deref for Circuit {
+    type Target = CircuitTopology;
+    fn deref(&self) -> &CircuitTopology {
+        &self.topology
+    }
+}
+
+/// Immutable connectivity, node numbering, slot maps and sparse structure.
+#[derive(Debug)]
+pub struct CircuitTopology {
+    node_index: HashMap<String, usize>,
+    group_offsets: Vec<usize>,
+    va_ports: Option<VaPorts>,
     pub(crate) va_modules: BTreeMap<String, Arc<spx_va::CompiledModule>>,
     pub(crate) unknowns: Unknowns,
     pub(crate) aliases: Vec<(String, Node)>,
     pub(crate) num_nodes: usize,
-    pub(crate) groups: Vec<Box<dyn DeviceGroup>>,
     pub(crate) layouts: Vec<StampLayout>,
     pub(crate) pattern: CscPattern,
-    pub(crate) fixed_voltage: Option<FixedVoltage>,
     /// Per unknown: value index of the diagonal if it is a node voltage, else [`DISCARD`]
     /// (for rshunt / gmin stepping).
     pub(crate) node_diag: Vec<usize>,
-    pub(crate) linear: bool,
     /// Nodes without a DC path to ground (for diagnostics).
     pub(crate) no_dc_path: Vec<String>,
-    /// Per group: number of state values.
-    pub(crate) state_len: Vec<usize>,
     /// Gather maps from group slots to assembled values (parallelism level L2).
     pub(crate) gather: GatherMaps,
     /// Whether the circuit is large enough for parallel evaluation to pay off.
     pub(crate) parallel: bool,
     /// Per external node: names of the attached elements, nonlinear devices first.
     pub(crate) node_elements: Vec<Vec<String>>,
-    /// `.ic` values as (unknown index, voltage).
-    pub(crate) ics: Vec<(usize, f64)>,
-    /// `.nodeset` values as (unknown index, voltage).
-    pub(crate) nodesets: Vec<(usize, f64)>,
 }
 
 /// A source of one assembled value: `(group, slot)`.
@@ -297,6 +315,7 @@ impl Circuit {
     pub(crate) fn set_param(&mut self, instance: &str, param: &str, value: f64) -> bool {
         self.groups
             .iter_mut()
+            .filter_map(Arc::get_mut)
             .any(|g| g.set_param(instance, param, value))
     }
 
@@ -556,7 +575,6 @@ pub(crate) fn compile_cached(
             "the netlist has no elements",
         )]);
     }
-    let mut va: BTreeMap<String, Chunked<VaGroup>> = BTreeMap::new();
     let swept: HashSet<_> = nl
         .analyses
         .iter()
@@ -565,140 +583,20 @@ pub(crate) fn compile_cached(
             _ => None,
         })
         .collect();
-    let mut va_models: HashMap<String, Arc<spx_va::Bound>> = HashMap::new();
-    // Flattened subcircuits give identical model cards different hierarchical names.
-    let mut card_bindings = HashMap::new();
-    let mut nonlinear_count = 0usize;
-
-    let binding = spx_diag::Phase::start("bind");
-    let mut errors = Vec::new();
-    let va_instances = nl
-        .elements
-        .iter()
-        .filter(|e| matches!(e.kind, ElementKind::Va { .. }))
-        .count();
-    let va_chunk = if cfg!(feature = "jit") && opts.va_jit && va_instances >= 8 {
-        if va_instances >= 32 {
-            CHUNK_VA_LARGE
-        } else {
-            CHUNK_VA_SMALL
-        }
-    } else if va_instances >= 32 {
-        6
-    } else {
-        2
-    };
-    for e in &nl.elements {
-        if let ElementKind::Va {
-            nodes,
-            model,
-            params,
-        } = &e.kind
-        {
-            let Some(card) = nl.models.iter().find(|m| m.name == *model) else {
-                errors.push(
-                    Diagnostic::error("E-ELAB-PARAM", format!("{}: unknown model {model}", e.name))
-                        .with_span(e.span),
-                );
-                continue;
-            };
-            let module_name = va_model_type(card);
-            let Some(module) = va_modules.get(module_name).or_else(|| {
-                card.kind
-                    .strip_suffix("_va")
-                    .and_then(|base| va_modules.get(&format!("{base}va")))
-            }) else {
-                errors.push(
-                    Diagnostic::error(
-                        "E-ELAB-PARAM",
-                        format!("{}: unknown Verilog-A module {module_name}", e.name),
-                    )
-                    .with_span(card.span),
-                );
-                continue;
-            };
-            let bound = if let Some(bound) = va_models.get(model) {
-                Arc::clone(bound)
-            } else {
-                let key = (
-                    card.kind.as_str(),
-                    card.params
-                        .iter()
-                        .map(|(name, v)| (name.as_str(), v.to_bits()))
-                        .collect::<Vec<_>>(),
-                );
-                let bound = match card_bindings.entry(key) {
-                    std::collections::hash_map::Entry::Occupied(entry) => Arc::clone(entry.get()),
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        let mut values = card.params.clone();
-                        if module_name == "vbic13_5t" && matches!(card.kind.as_str(), "npn" | "pnp")
-                        {
-                            // level selects the device. The three SOA limits are ngspice checks.
-                            values.retain(|(k, _)| {
-                                !matches!(k.as_str(), "level" | "vbe_max" | "vce_max" | "vbc_max")
-                            });
-                            values.push(("type".into(), if card.kind == "pnp" { -1. } else { 1. }));
-                        }
-                        match module.bind_spice_model(
-                            &values,
-                            spx_va::BindOptions {
-                                tnom: opts.tnom,
-                                gmin: opts.gmin,
-                            },
-                        ) {
-                            Ok(bound) => {
-                                let bound = Arc::new(bound);
-                                entry.insert(Arc::clone(&bound));
-                                bound
-                            }
-                            Err(ds) => {
-                                errors.extend(ds.into_iter().map(|d| d.with_span(card.span)));
-                                continue;
-                            }
-                        }
-                    }
-                };
-                va_models.insert(model.clone(), Arc::clone(&bound));
-                bound
-            };
-            let group = va
-                .entry(card.kind.clone())
-                .or_insert_with(|| Chunked::new(va_chunk));
-            let chunk = group.cur();
-            match chunk.push(
-                Arc::clone(module),
-                &e.name,
-                nodes.iter().map(|n| node_index.get(n).copied()).collect(),
-                bound,
-                params,
-            ) {
-                Ok(()) => {
-                    nonlinear_count += 1;
-                    if swept.contains(e.name.as_str()) {
-                        chunk.prepare_sweep(&e.name);
-                    }
-                }
-                Err(ds) => errors.extend(ds.into_iter().map(|d| d.with_span(e.span))),
-            }
-        }
-    }
-    drop(binding);
-    let va_count = nonlinear_count;
-    if !errors.is_empty() {
-        return Err(errors);
-    }
+    let (mut va, va_count) = bind_va(nl, opts, va_modules, &node_index, &swept, false)?;
+    let mut nonlinear_count = va_count;
+    #[cfg(feature = "jit")]
+    let va_instances = va_count;
+    let mut va_ports = None;
     let mut aliases = Vec::new();
     if !va.is_empty() {
         let ground = node_names.len();
         let mut sets = UnionFind::new(ground + 1);
-        for group in va
-            .values()
-            .flat_map(|chunks| chunks.done.iter().chain([&chunks.cur]))
-        {
-            for (a, b) in group.terminal_shorts() {
-                grounded |= a.is_none() || b.is_none();
-                sets.union(a.unwrap_or(ground), b.unwrap_or(ground));
-            }
+        let shorts = terminal_shorts(&va);
+        let original_nodes = node_index.clone();
+        for &(a, b) in &shorts {
+            grounded |= a.is_none() || b.is_none();
+            sets.union(a.unwrap_or(ground), b.unwrap_or(ground));
         }
         let ground_root = sets.find(ground);
         let mut new_names = Vec::new();
@@ -727,70 +625,25 @@ pub(crate) fn compile_cached(
                 aliases.push((format!("v({name})"), index));
             }
         }
-        for group in va
-            .values_mut()
-            .flat_map(|chunks| chunks.done.iter_mut().chain([&mut chunks.cur]))
-        {
-            group.remap_ports(&indices).map_err(|d| vec![d])?;
-        }
+        remap_ports(&mut va, &indices)?;
+        va_ports = Some(VaPorts {
+            original_nodes,
+            indices,
+            shorts,
+        });
         node_names = new_names;
         touches = counts;
     }
     #[cfg(feature = "jit")]
-    if !va.is_empty() {
-        let _phase = spx_diag::Phase::start("jit_wall");
-        let enabled = opts.va_jit && spx_va::jit_enabled();
-        let kelvin = opts.temp + 273.15;
-        let origins: HashMap<_, _> = nl
-            .elements
-            .iter()
-            .map(|e| (e.name.as_str(), e.span))
-            .collect();
-        let mut seen = HashSet::new();
-        let mut jobs = Vec::new();
-        let mut rails = vec![None; node_names.len()];
-        let mut range = [0.0f64; 2];
-        for e in &nl.elements {
-            if let ElementKind::VoltageSource { p, n, source } = &e.kind
-                && source.tran.is_none()
-            {
-                let rail = match (node_index.get(p), node_index.get(n)) {
-                    (Some(&r), None) => Some((r, spx_devices::dc_value(source))),
-                    (None, Some(&r)) => Some((r, -spx_devices::dc_value(source))),
-                    _ => None,
-                };
-                if let Some((r, v)) = rail
-                    && v.is_finite()
-                {
-                    rails[r] = Some(v);
-                    range = [range[0].min(v), range[1].max(v)];
-                }
-            }
-        }
-        for chunk in va
-            .values_mut()
-            .flat_map(|v| v.done.iter_mut().chain([&mut v.cur]))
-        {
-            chunk.specialize_stamps(dc_only);
-            if !dc_only && va_instances >= 8 && range[0] < range[1] {
-                chunk.predict_bias(&rails, range);
-            }
-            for (module, bound, name) in chunk.jit_bindings(enabled) {
-                if enabled && seen.insert((&module.name, bound.specialization_key(kelvin, 1.))) {
-                    jobs.push((module, bound, name));
-                }
-            }
-        }
-        use rayon::prelude::*;
-        let results: Vec<_> = jobs
-            .par_iter()
-            .map(|&(m, b, name)| {
-                m.prepare_jit(b, kelvin, 1.)
-                    .map(|d| d.with_span(origins[name]))
-            })
-            .collect();
-        diags.extend(results.into_iter().flatten());
-    }
+    prepare_va_kernels(
+        nl,
+        opts,
+        &node_index,
+        node_names.len(),
+        dc_only,
+        &mut va,
+        &mut diags,
+    );
     if !grounded {
         return Err(vec![
             Diagnostic::error(
@@ -938,240 +791,9 @@ pub(crate) fn compile_cached(
         );
     }
 
-    // --- Device groups ---
-    let mut res = Chunked::<Resistors>::new(CHUNK_LINEAR);
-    let mut cap = Chunked::<Capacitors>::new(CHUNK_LINEAR);
-    let mut ind = Chunked::<Inductors>::new(CHUNK_LINEAR);
-    let mut vsrc = Chunked::<VoltageSources>::new(CHUNK_LINEAR);
-    let mut isrc = Chunked::<CurrentSources>::new(CHUNK_LINEAR);
-    let mut e_src = Chunked::<Vcvs>::new(CHUNK_LINEAR);
-    let mut g_src = Chunked::<Vccs>::new(CHUNK_LINEAR);
-    let mut f_src = Chunked::<Cccs>::new(CHUNK_LINEAR);
-    let mut h_src = Chunked::<Ccvs>::new(CHUNK_LINEAR);
-    let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
-    let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
-    let mut mos1 = Chunked::<Mos1s>::new(CHUNK_NONLINEAR);
-    let mut bsim4_models = HashMap::<_, Arc<PreparedModel>>::new();
-    let mut bsim4 = Chunked::<Bsim4s>::new(CHUNK_NONLINEAR);
-    let mut model_cache = ModelCache::new(&nl.models, opts);
-    for e in &nl.elements {
-        match &e.kind {
-            ElementKind::Va { .. } => {}
-            ElementKind::Resistor { p, n, value } => {
-                res.cur().push(&e.name, node(p), node(n), *value)
-            }
-            ElementKind::Capacitor { p, n, value } => {
-                cap.cur().push(&e.name, node(p), node(n), *value)
-            }
-            ElementKind::Inductor { p, n, value } => {
-                ind.cur().push(&e.name, node(p), node(n), *value)
-            }
-            ElementKind::VoltageSource { p, n, source } => {
-                vsrc.cur().push(&e.name, node(p), node(n), source.clone());
-            }
-            ElementKind::CurrentSource { p, n, source } => {
-                isrc.cur().push(&e.name, node(p), node(n), source.clone());
-            }
-            ElementKind::Vcvs { p, n, cp, cn, gain } => {
-                e_src
-                    .cur()
-                    .push(&e.name, [node(p), node(n), node(cp), node(cn)], *gain);
-            }
-            ElementKind::Vccs { p, n, cp, cn, gm } => {
-                g_src
-                    .cur()
-                    .push(&e.name, [node(p), node(n), node(cp), node(cn)], *gm);
-            }
-            ElementKind::Cccs {
-                p,
-                n,
-                control,
-                gain,
-            } => {
-                f_src.cur().push(&e.name, node(p), node(n), control, *gain);
-            }
-            ElementKind::Ccvs { p, n, control, r } => {
-                h_src.cur().push(&e.name, node(p), node(n), control, *r);
-            }
-            ElementKind::Diode {
-                p,
-                n,
-                model,
-                params,
-                off,
-            } => {
-                let Some(m) = model_cache.diode(model, &mut diags, &mut errors) else {
-                    continue;
-                };
-                let inst = ModelParams::new(params);
-                let area = inst.get("area", 1.0) * inst.opt(&["m", "mult"]).unwrap_or(1.);
-                if !area.is_finite() || area <= 0. {
-                    errors.push(
-                        Diagnostic::error(
-                            "E-ELAB-PARAM",
-                            format!("{}: effective area must be positive", e.name),
-                        )
-                        .with_span(e.span),
-                    );
-                    continue;
-                }
-                warn_instance(e, &inst, &mut diags);
-                nonlinear_count += 1;
-                diodes.cur().push(&e.name, node(p), node(n), m, area, *off);
-            }
-            ElementKind::Bjt {
-                c,
-                b,
-                e: em,
-                s,
-                model,
-                params,
-                off,
-            } => {
-                let Some(m) = model_cache.bjt(model, &mut diags, &mut errors) else {
-                    continue;
-                };
-                let inst = ModelParams::new(params);
-                let area = inst.get("area", 1.0) * inst.opt(&["m", "mult"]).unwrap_or(1.);
-                if !area.is_finite() || area <= 0. {
-                    errors.push(
-                        Diagnostic::error(
-                            "E-ELAB-PARAM",
-                            format!("{}: effective area must be positive", e.name),
-                        )
-                        .with_span(e.span),
-                    );
-                    continue;
-                }
-                warn_instance(e, &inst, &mut diags);
-                let sub = s.as_deref().and_then(node);
-                nonlinear_count += 1;
-                bjts.cur()
-                    .push(&e.name, [node(c), node(b), node(em), sub], m, area, *off);
-            }
-            ElementKind::Mosfet {
-                d,
-                g,
-                s,
-                b,
-                model,
-                params,
-                off,
-            } => {
-                let inst = ModelParams::new(params);
-                let dflt = Mos1Geometry::default();
-                let scaled = |name: &str, default: f64, power: i32| {
-                    inst.opt(&[name])
-                        .map_or(default, |v| v * opts.scale.powi(power))
-                };
-                let geom = Mos1Geometry {
-                    l: scaled("l", opts.defl.unwrap_or(dflt.l), 1),
-                    w: scaled("w", opts.defw.unwrap_or(dflt.w), 1),
-                    ad: scaled("ad", opts.defad.unwrap_or(0.0), 2),
-                    as_: scaled("as", opts.defas.unwrap_or(0.0), 2),
-                    pd: scaled("pd", 0.0, 1),
-                    ps: scaled("ps", 0.0, 1),
-                };
-                if let Some(card) = model_cache.card(model)
-                    && card
-                        .params
-                        .iter()
-                        .rev()
-                        .find(|(k, _)| k == "level")
-                        .is_some_and(|(_, v)| *v == 54.)
-                {
-                    // Temperature, scale and geometry defaults are fixed for this compile.
-                    // Preserve parameter order (later aliases/duplicates can override).
-                    let key = (
-                        model.as_str(),
-                        params
-                            .iter()
-                            .map(|(k, v)| (k.as_str(), v.to_bits()))
-                            .collect::<Vec<_>>(),
-                    );
-                    let nodes = [node(d), node(g), node(s), node(b)];
-                    if let Some(prepared) = bsim4_models.get(&key) {
-                        bsim4
-                            .cur()
-                            .push_prepared(&e.name, nodes, *off, Arc::clone(prepared));
-                        nonlinear_count += 1;
-                        continue;
-                    }
-                    let p = ModelParams::new(&card.params);
-                    let binding = Binding {
-                        model: &p,
-                        instance: &inst,
-                        geometry: geom,
-                        polarity: if card.kind == "pmos" { -1. } else { 1. },
-                        temp: opts.temp,
-                        tnom: opts.tnom,
-                        scale: opts.scale,
-                    };
-                    match PreparedModel::new(&e.name, binding) {
-                        Ok((prepared, warnings)) => {
-                            let before = diags.len();
-                            diags.extend(warnings.into_iter().map(|d| d.with_span(e.span)));
-                            ModelCache::warn_ignored(card, &p.unused(), &mut diags);
-                            warn_instance(e, &inst, &mut diags);
-                            // Re-evaluate exceptional bindings so each diagnostic retains
-                            // its instance name and source span.
-                            if diags.len() == before {
-                                bsim4_models.insert(key, Arc::clone(&prepared));
-                            }
-                            bsim4.cur().push_prepared(&e.name, nodes, *off, prepared);
-                            nonlinear_count += 1;
-                        }
-                        Err(d) => errors.push(d.with_span(e.span)),
-                    }
-                    continue;
-                }
-                let Some(mut m) = model_cache.mos(model, &mut diags, &mut errors) else {
-                    continue;
-                };
-                let copies = inst.opt(&["m", "mult"]).unwrap_or(1.);
-                if !copies.is_finite() || copies <= 0. {
-                    errors.push(
-                        Diagnostic::error(
-                            "E-ELAB-PARAM",
-                            format!("{}: multiplicity must be positive", e.name),
-                        )
-                        .with_span(e.span),
-                    );
-                    continue;
-                }
-                m.multiply(copies);
-                warn_instance(e, &inst, &mut diags);
-                if let Some(msg) = Mos1s::check_geometry(&m, &geom) {
-                    errors.push(
-                        Diagnostic::error("E-ELAB-PARAM", format!("`{}`: {msg}", e.name))
-                            .with_span(e.span),
-                    );
-                    continue;
-                }
-                nonlinear_count += 1;
-                mos1.cur()
-                    .push(&e.name, [node(d), node(g), node(s), node(b)], m, geom, *off);
-            }
-        }
-    }
-    if !errors.is_empty() {
-        errors.extend(diags);
-        return Err(errors);
-    }
-    let mut groups: Vec<Box<dyn DeviceGroup>> = Vec::new();
-    res.into_groups(&mut groups);
-    cap.into_groups(&mut groups);
-    ind.into_groups(&mut groups);
-    vsrc.into_groups(&mut groups);
-    isrc.into_groups(&mut groups);
-    e_src.into_groups(&mut groups);
-    g_src.into_groups(&mut groups);
-    f_src.into_groups(&mut groups);
-    h_src.into_groups(&mut groups);
-    diodes.into_groups(&mut groups);
-    bjts.into_groups(&mut groups);
-    mos1.into_groups(&mut groups);
-    bsim4.into_groups(&mut groups);
+    let (mut groups, native_count) =
+        native_groups(&nl.elements, &nl.models, opts, node, &mut diags)?;
+    nonlinear_count += native_count;
     #[cfg(feature = "jit")]
     let first_va = groups.len();
     for group in va.into_values() {
@@ -1179,26 +801,7 @@ pub(crate) fn compile_cached(
     }
 
     // --- Unknowns and stamps ---
-    let mut unknowns = Unknowns::with_nodes(node_names.iter().map(String::as_str));
-    for g in &mut groups {
-        g.alloc_unknowns(&mut unknowns);
-    }
-    let mut layouts = Vec::with_capacity(groups.len());
-    for g in &mut groups {
-        let mut sb = StampBuilder::new(&unknowns);
-        match g.setup(&mut sb) {
-            Ok(()) => layouts.push(sb.finish()),
-            Err(d) => {
-                errors.push(d);
-                layouts.push(StampLayout::default());
-            }
-        }
-    }
-    if !errors.is_empty() {
-        errors.extend(diags);
-        return Err(errors);
-    }
-
+    let (unknowns, layouts, group_offsets) = setup_groups(&mut groups, &node_names, &mut diags)?;
     let n = unknowns.len();
     let mut pb = PatternBuilder::new(n);
     let req = |l: &[(Node, Node)], pb: &mut PatternBuilder| -> Vec<usize> {
@@ -1286,7 +889,7 @@ pub(crate) fn compile_cached(
     let nnz = pattern.nnz();
     // Large native groups stream their source-ordered maps, with G and C in
     // separate tasks. The smaller VA groups use a destination-parallel gather.
-    let split_rows = va_instances > 0;
+    let split_rows = va_count > 0;
     let tile_rows = !split_rows
         && n >= 2048
         && nonlinear_count >= PARALLEL_MIN_NONLINEAR
@@ -1313,26 +916,710 @@ pub(crate) fn compile_cached(
 
     Ok((
         Circuit {
-            va_modules: va_modules.clone(),
-            unknowns,
-            aliases,
-            num_nodes: nn,
-            groups,
-            layouts,
-            pattern,
-            fixed_voltage,
-            node_diag,
-            linear,
-            no_dc_path,
-            state_len,
-            gather,
-            parallel: va_count >= PARALLEL_MIN_VA || nonlinear_count >= PARALLEL_MIN_NONLINEAR,
-            node_elements,
+            ordering: None,
             ics,
             nodesets,
+            groups: groups.into_iter().map(Arc::from).collect(),
+            bindings: None,
+            state_len,
+            linear,
+            fixed_voltage,
+            topology: Arc::new(CircuitTopology {
+                va_modules: va_modules.clone(),
+                node_index,
+                group_offsets,
+                va_ports,
+                unknowns,
+                aliases,
+                num_nodes: nn,
+                layouts,
+                pattern,
+                node_diag,
+                no_dc_path,
+                gather,
+                parallel: va_count >= PARALLEL_MIN_VA || nonlinear_count >= PARALLEL_MIN_NONLINEAR,
+                node_elements,
+            }),
         },
         diags,
     ))
+}
+
+type VaChunks = BTreeMap<String, Chunked<VaGroup>>;
+
+#[derive(Debug)]
+struct VaPorts {
+    original_nodes: HashMap<String, usize>,
+    indices: Vec<Node>,
+    shorts: Vec<(Node, Node)>,
+}
+
+fn terminal_shorts(va: &VaChunks) -> Vec<(Node, Node)> {
+    va.values()
+        .flat_map(|c| c.done.iter().chain([&c.cur]))
+        .flat_map(VaGroup::terminal_shorts)
+        .collect()
+}
+
+fn remap_ports(va: &mut VaChunks, indices: &[Node]) -> Result<(), Vec<Diagnostic>> {
+    for g in va
+        .values_mut()
+        .flat_map(|c| c.done.iter_mut().chain([&mut c.cur]))
+    {
+        g.remap_ports(indices).map_err(|d| vec![d])?
+    }
+    Ok(())
+}
+
+fn bind_va(
+    nl: &Netlist,
+    opts: &SimOptions,
+    va_modules: &BTreeMap<String, Arc<spx_va::CompiledModule>>,
+    node_index: &HashMap<String, usize>,
+    swept: &HashSet<&str>,
+    statistical: bool,
+) -> Result<(VaChunks, usize), Vec<Diagnostic>> {
+    let mut va: BTreeMap<String, Chunked<VaGroup>> = BTreeMap::new();
+    let mut va_models: HashMap<String, Arc<spx_va::Bound>> = HashMap::new();
+    // Flattened subcircuits give identical model cards different hierarchical names.
+    let mut card_bindings = HashMap::new();
+    let mut count = 0;
+
+    let binding = spx_diag::Phase::start("bind");
+    let mut errors = Vec::new();
+    let va_instances = nl
+        .elements
+        .iter()
+        .filter(|e| matches!(e.kind, ElementKind::Va { .. }))
+        .count();
+    let va_chunk = if cfg!(feature = "jit") && opts.va_jit && va_instances >= 8 {
+        if va_instances >= 32 {
+            CHUNK_VA_LARGE
+        } else {
+            CHUNK_VA_SMALL
+        }
+    } else if va_instances >= 32 {
+        6
+    } else {
+        2
+    };
+    for e in &nl.elements {
+        if let ElementKind::Va {
+            nodes,
+            model,
+            params,
+        } = &e.kind
+        {
+            let Some(card) = nl.models.iter().find(|m| m.name == *model) else {
+                errors.push(
+                    Diagnostic::error("E-ELAB-PARAM", format!("{}: unknown model {model}", e.name))
+                        .with_span(e.span),
+                );
+                continue;
+            };
+            let module_name = va_model_type(card);
+            let Some(module) = va_modules.get(module_name).or_else(|| {
+                card.kind
+                    .strip_suffix("_va")
+                    .and_then(|base| va_modules.get(&format!("{base}va")))
+            }) else {
+                errors.push(
+                    Diagnostic::error(
+                        "E-ELAB-PARAM",
+                        format!("{}: unknown Verilog-A module {module_name}", e.name),
+                    )
+                    .with_span(card.span),
+                );
+                continue;
+            };
+            let bound = if let Some(bound) = va_models.get(model) {
+                Arc::clone(bound)
+            } else {
+                let key = (
+                    card.kind.as_str(),
+                    card.params
+                        .iter()
+                        .map(|(name, v)| (name.as_str(), v.to_bits()))
+                        .collect::<Vec<_>>(),
+                );
+                let bound = match card_bindings.entry(key) {
+                    std::collections::hash_map::Entry::Occupied(entry) => Arc::clone(entry.get()),
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        let mut values = card.params.clone();
+                        if module_name == "vbic13_5t" && matches!(card.kind.as_str(), "npn" | "pnp")
+                        {
+                            // level selects the device. The three SOA limits are ngspice checks.
+                            values.retain(|(k, _)| {
+                                !matches!(k.as_str(), "level" | "vbe_max" | "vce_max" | "vbc_max")
+                            });
+                            values.push(("type".into(), if card.kind == "pnp" { -1. } else { 1. }));
+                        }
+                        match module.bind_spice_model(
+                            &values,
+                            spx_va::BindOptions {
+                                tnom: opts.tnom,
+                                gmin: opts.gmin,
+                            },
+                        ) {
+                            Ok(mut bound) => {
+                                if statistical {
+                                    bound.use_run_cache();
+                                }
+                                let bound = Arc::new(bound);
+                                entry.insert(Arc::clone(&bound));
+                                bound
+                            }
+                            Err(ds) => {
+                                errors.extend(ds.into_iter().map(|d| d.with_span(card.span)));
+                                continue;
+                            }
+                        }
+                    }
+                };
+                va_models.insert(model.clone(), Arc::clone(&bound));
+                bound
+            };
+            let group = va
+                .entry(card.kind.clone())
+                .or_insert_with(|| Chunked::new(va_chunk));
+            let chunk = group.cur();
+            match chunk.push(
+                Arc::clone(module),
+                &e.name,
+                nodes.iter().map(|n| node_index.get(n).copied()).collect(),
+                bound,
+                params,
+            ) {
+                Ok(()) => {
+                    count += 1;
+                    if swept.contains(e.name.as_str()) {
+                        chunk.prepare_sweep(&e.name);
+                    }
+                }
+                Err(ds) => errors.extend(ds.into_iter().map(|d| d.with_span(e.span))),
+            }
+        }
+    }
+    drop(binding);
+
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    Ok((va, count))
+}
+
+#[cfg(feature = "jit")]
+fn prepare_va_kernels(
+    nl: &Netlist,
+    opts: &SimOptions,
+    node_index: &HashMap<String, usize>,
+    nodes: usize,
+    dc_only: bool,
+    va: &mut VaChunks,
+    diags: &mut Vec<Diagnostic>,
+) {
+    if !va.is_empty() {
+        let _phase = spx_diag::Phase::start("jit_wall");
+        let enabled = opts.va_jit && spx_va::jit_enabled();
+        let kelvin = opts.temp + 273.15;
+        let origins: HashMap<_, _> = nl
+            .elements
+            .iter()
+            .map(|e| (e.name.as_str(), e.span))
+            .collect();
+        let mut seen = HashSet::new();
+        let mut jobs = Vec::new();
+        let mut rails = vec![None; nodes];
+        let mut range = [0.0f64; 2];
+        for e in &nl.elements {
+            if let ElementKind::VoltageSource { p, n, source } = &e.kind
+                && source.tran.is_none()
+            {
+                let rail = match (node_index.get(p), node_index.get(n)) {
+                    (Some(&r), None) => Some((r, spx_devices::dc_value(source))),
+                    (None, Some(&r)) => Some((r, -spx_devices::dc_value(source))),
+                    _ => None,
+                };
+                if let Some((r, v)) = rail
+                    && v.is_finite()
+                {
+                    rails[r] = Some(v);
+                    range = [range[0].min(v), range[1].max(v)];
+                }
+            }
+        }
+        let count = va
+            .values()
+            .flat_map(|c| c.done.iter().chain([&c.cur]))
+            .map(DeviceGroup::len)
+            .sum::<usize>();
+        for chunk in va
+            .values_mut()
+            .flat_map(|v| v.done.iter_mut().chain([&mut v.cur]))
+        {
+            chunk.specialize_stamps(dc_only);
+            if !dc_only && count >= 8 && range[0] < range[1] {
+                chunk.predict_bias(&rails, range);
+            }
+            for (module, bound, name) in chunk.jit_bindings(enabled) {
+                if enabled && seen.insert((&module.name, bound.specialization_key(kelvin, 1.))) {
+                    jobs.push((module, bound, name));
+                }
+            }
+        }
+        use rayon::prelude::*;
+        let results: Vec<_> = jobs
+            .par_iter()
+            .map(|&(m, b, name)| {
+                m.prepare_jit(b, kelvin, 1.)
+                    .map(|d| d.with_span(origins[name]))
+            })
+            .collect();
+        diags.extend(results.into_iter().flatten());
+    }
+}
+
+type Groups = Vec<Box<dyn DeviceGroup>>;
+
+fn native_groups<'a>(
+    elements: impl IntoIterator<Item = &'a Element>,
+    models: &[ModelCard],
+    opts: &SimOptions,
+    node: impl Fn(&str) -> Node,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(Groups, usize), Vec<Diagnostic>> {
+    let mut errors = vec![];
+    let mut nonlinear_count = 0;
+    // --- Device groups ---
+    let mut res = Chunked::<Resistors>::new(CHUNK_LINEAR);
+    let mut cap = Chunked::<Capacitors>::new(CHUNK_LINEAR);
+    let mut ind = Chunked::<Inductors>::new(CHUNK_LINEAR);
+    let mut vsrc = Chunked::<VoltageSources>::new(CHUNK_LINEAR);
+    let mut isrc = Chunked::<CurrentSources>::new(CHUNK_LINEAR);
+    let mut e_src = Chunked::<Vcvs>::new(CHUNK_LINEAR);
+    let mut g_src = Chunked::<Vccs>::new(CHUNK_LINEAR);
+    let mut f_src = Chunked::<Cccs>::new(CHUNK_LINEAR);
+    let mut h_src = Chunked::<Ccvs>::new(CHUNK_LINEAR);
+    let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
+    let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
+    let mut mos1 = Chunked::<Mos1s>::new(CHUNK_NONLINEAR);
+    let mut bsim4_models = HashMap::<_, Arc<PreparedModel>>::new();
+    let mut bsim4 = Chunked::<Bsim4s>::new(CHUNK_NONLINEAR);
+    let mut model_cache = ModelCache::new(models, opts);
+    for e in elements {
+        match &e.kind {
+            ElementKind::Va { .. } => {}
+            ElementKind::Resistor { p, n, value } => {
+                res.cur().push(&e.name, node(p), node(n), *value)
+            }
+            ElementKind::Capacitor { p, n, value } => {
+                cap.cur().push(&e.name, node(p), node(n), *value)
+            }
+            ElementKind::Inductor { p, n, value } => {
+                ind.cur().push(&e.name, node(p), node(n), *value)
+            }
+            ElementKind::VoltageSource { p, n, source } => {
+                vsrc.cur().push(&e.name, node(p), node(n), source.clone());
+            }
+            ElementKind::CurrentSource { p, n, source } => {
+                isrc.cur().push(&e.name, node(p), node(n), source.clone());
+            }
+            ElementKind::Vcvs { p, n, cp, cn, gain } => {
+                e_src
+                    .cur()
+                    .push(&e.name, [node(p), node(n), node(cp), node(cn)], *gain);
+            }
+            ElementKind::Vccs { p, n, cp, cn, gm } => {
+                g_src
+                    .cur()
+                    .push(&e.name, [node(p), node(n), node(cp), node(cn)], *gm);
+            }
+            ElementKind::Cccs {
+                p,
+                n,
+                control,
+                gain,
+            } => {
+                f_src.cur().push(&e.name, node(p), node(n), control, *gain);
+            }
+            ElementKind::Ccvs { p, n, control, r } => {
+                h_src.cur().push(&e.name, node(p), node(n), control, *r);
+            }
+            ElementKind::Diode {
+                p,
+                n,
+                model,
+                params,
+                off,
+            } => {
+                let Some(m) = model_cache.diode(model, diags, &mut errors) else {
+                    continue;
+                };
+                let inst = ModelParams::new(params);
+                let area = inst.get("area", 1.0) * inst.opt(&["m", "mult"]).unwrap_or(1.);
+                if !area.is_finite() || area <= 0. {
+                    errors.push(
+                        Diagnostic::error(
+                            "E-ELAB-PARAM",
+                            format!("{}: effective area must be positive", e.name),
+                        )
+                        .with_span(e.span),
+                    );
+                    continue;
+                }
+                warn_instance(e, &inst, diags);
+                nonlinear_count += 1;
+                diodes.cur().push(&e.name, node(p), node(n), m, area, *off);
+            }
+            ElementKind::Bjt {
+                c,
+                b,
+                e: em,
+                s,
+                model,
+                params,
+                off,
+            } => {
+                let Some(m) = model_cache.bjt(model, diags, &mut errors) else {
+                    continue;
+                };
+                let inst = ModelParams::new(params);
+                let area = inst.get("area", 1.0) * inst.opt(&["m", "mult"]).unwrap_or(1.);
+                if !area.is_finite() || area <= 0. {
+                    errors.push(
+                        Diagnostic::error(
+                            "E-ELAB-PARAM",
+                            format!("{}: effective area must be positive", e.name),
+                        )
+                        .with_span(e.span),
+                    );
+                    continue;
+                }
+                warn_instance(e, &inst, diags);
+                let sub = s.as_deref().and_then(&node);
+                nonlinear_count += 1;
+                bjts.cur()
+                    .push(&e.name, [node(c), node(b), node(em), sub], m, area, *off);
+            }
+            ElementKind::Mosfet {
+                d,
+                g,
+                s,
+                b,
+                model,
+                params,
+                off,
+            } => {
+                let inst = ModelParams::new(params);
+                let dflt = Mos1Geometry::default();
+                let scaled = |name: &str, default: f64, power: i32| {
+                    inst.opt(&[name])
+                        .map_or(default, |v| v * opts.scale.powi(power))
+                };
+                let geom = Mos1Geometry {
+                    l: scaled("l", opts.defl.unwrap_or(dflt.l), 1),
+                    w: scaled("w", opts.defw.unwrap_or(dflt.w), 1),
+                    ad: scaled("ad", opts.defad.unwrap_or(0.0), 2),
+                    as_: scaled("as", opts.defas.unwrap_or(0.0), 2),
+                    pd: scaled("pd", 0.0, 1),
+                    ps: scaled("ps", 0.0, 1),
+                };
+                if let Some(card) = model_cache.card(model)
+                    && card
+                        .params
+                        .iter()
+                        .rev()
+                        .find(|(k, _)| k == "level")
+                        .is_some_and(|(_, v)| *v == 54.)
+                {
+                    // Temperature, scale and geometry defaults are fixed for this compile.
+                    // Preserve parameter order (later aliases/duplicates can override).
+                    let key = (
+                        model.as_str(),
+                        params
+                            .iter()
+                            .map(|(k, v)| (k.as_str(), v.to_bits()))
+                            .collect::<Vec<_>>(),
+                    );
+                    let nodes = [node(d), node(g), node(s), node(b)];
+                    if let Some(prepared) = bsim4_models.get(&key) {
+                        bsim4
+                            .cur()
+                            .push_prepared(&e.name, nodes, *off, Arc::clone(prepared));
+                        nonlinear_count += 1;
+                        continue;
+                    }
+                    let p = ModelParams::new(&card.params);
+                    let binding = Binding {
+                        model: &p,
+                        instance: &inst,
+                        geometry: geom,
+                        polarity: if card.kind == "pmos" { -1. } else { 1. },
+                        temp: opts.temp,
+                        tnom: opts.tnom,
+                        scale: opts.scale,
+                    };
+                    match PreparedModel::new(&e.name, binding) {
+                        Ok((prepared, warnings)) => {
+                            let before = diags.len();
+                            diags.extend(warnings.into_iter().map(|d| d.with_span(e.span)));
+                            ModelCache::warn_ignored(card, &p.unused(), diags);
+                            warn_instance(e, &inst, diags);
+                            // Re-evaluate exceptional bindings so each diagnostic retains
+                            // its instance name and source span.
+                            if diags.len() == before {
+                                bsim4_models.insert(key, Arc::clone(&prepared));
+                            }
+                            bsim4.cur().push_prepared(&e.name, nodes, *off, prepared);
+                            nonlinear_count += 1;
+                        }
+                        Err(d) => errors.push(d.with_span(e.span)),
+                    }
+                    continue;
+                }
+                let Some(mut m) = model_cache.mos(model, diags, &mut errors) else {
+                    continue;
+                };
+                let copies = inst.opt(&["m", "mult"]).unwrap_or(1.);
+                if !copies.is_finite() || copies <= 0. {
+                    errors.push(
+                        Diagnostic::error(
+                            "E-ELAB-PARAM",
+                            format!("{}: multiplicity must be positive", e.name),
+                        )
+                        .with_span(e.span),
+                    );
+                    continue;
+                }
+                m.multiply(copies);
+                warn_instance(e, &inst, diags);
+                if let Some(msg) = Mos1s::check_geometry(&m, &geom) {
+                    errors.push(
+                        Diagnostic::error("E-ELAB-PARAM", format!("`{}`: {msg}", e.name))
+                            .with_span(e.span),
+                    );
+                    continue;
+                }
+                nonlinear_count += 1;
+                mos1.cur()
+                    .push(&e.name, [node(d), node(g), node(s), node(b)], m, geom, *off);
+            }
+        }
+    }
+    if !errors.is_empty() {
+        errors.append(diags);
+        return Err(errors);
+    }
+    let mut groups: Vec<Box<dyn DeviceGroup>> = Vec::new();
+    res.into_groups(&mut groups);
+    cap.into_groups(&mut groups);
+    ind.into_groups(&mut groups);
+    vsrc.into_groups(&mut groups);
+    isrc.into_groups(&mut groups);
+    e_src.into_groups(&mut groups);
+    g_src.into_groups(&mut groups);
+    f_src.into_groups(&mut groups);
+    h_src.into_groups(&mut groups);
+    diodes.into_groups(&mut groups);
+    bjts.into_groups(&mut groups);
+    mos1.into_groups(&mut groups);
+    bsim4.into_groups(&mut groups);
+    Ok((groups, nonlinear_count))
+}
+
+fn setup_groups(
+    groups: &mut Groups,
+    node_names: &[String],
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(Unknowns, Vec<StampLayout>, Vec<usize>), Vec<Diagnostic>> {
+    let mut errors = vec![];
+    let mut unknowns = Unknowns::with_nodes(node_names.iter().map(String::as_str));
+    let mut offsets = vec![unknowns.len()];
+    for g in groups.iter_mut() {
+        g.alloc_unknowns(&mut unknowns);
+        offsets.push(unknowns.len());
+    }
+    let mut layouts = Vec::with_capacity(groups.len());
+    for g in groups.iter_mut() {
+        let mut sb = StampBuilder::new(&unknowns);
+        match g.setup(&mut sb) {
+            Ok(()) => layouts.push(sb.finish()),
+            Err(d) => {
+                errors.push(d);
+                layouts.push(StampLayout::default());
+            }
+        }
+    }
+    if !errors.is_empty() {
+        errors.append(diags);
+        return Err(errors);
+    }
+
+    Ok((unknowns, layouts, offsets))
+}
+
+/// Indices of numeric device chunks to replace in each statistical instance.
+#[derive(Debug)]
+struct BatchBindings {
+    elements: Vec<usize>,
+    groups: Vec<usize>,
+}
+
+impl Circuit {
+    pub(crate) fn prepare_batch(
+        &mut self,
+        params: &spx_netlist::ParameterPlan,
+    ) -> Result<(), Vec<Diagnostic>> {
+        self.ordering = Some(
+            spx_sparse::BatchOrdering::new(&self.pattern)
+                .map_err(|e| vec![Diagnostic::error("E-SOLVE-BACKEND", e.to_string())])?,
+        );
+        let nl = params.nominal();
+        let mut changed = params.varying_instances();
+        for a in &nl.analyses {
+            if let spx_netlist::AnalysisCard::Dc { source, .. } = a {
+                changed.insert(source);
+            }
+        }
+        let indices: HashMap<_, _> = nl
+            .elements
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.name.as_str(), i))
+            .collect();
+        let mut bindings = BatchBindings {
+            elements: vec![],
+            groups: vec![],
+        };
+        for (i, g) in self.groups.iter().enumerate() {
+            if g.type_name() == "verilog-a" {
+                bindings.groups.push(i);
+                continue;
+            }
+            if (0..g.len())
+                .filter_map(|k| g.instance_name(k))
+                .any(|name| changed.contains(name))
+            {
+                bindings.groups.push(i);
+                bindings
+                    .elements
+                    .extend((0..g.len()).filter_map(|k| indices.get(g.instance_name(k)?).copied()));
+            }
+        }
+        self.bindings = Some(Arc::new(bindings));
+        Ok(())
+    }
+
+    pub(crate) fn bind_run(
+        &self,
+        nl: &Netlist,
+        opts: &SimOptions,
+    ) -> Result<(Circuit, Vec<Diagnostic>), Vec<Diagnostic>> {
+        let Some(bindings) = &self.bindings else {
+            return Err(vec![Diagnostic::error(
+                "E-ELAB-INTERNAL",
+                "missing batch parameter bindings",
+            )]);
+        };
+        let mut diagnostics = vec![];
+        let (mut changed, _) = native_groups(
+            bindings.elements.iter().map(|&i| &nl.elements[i]),
+            &nl.models,
+            opts,
+            |n| self.node_index.get(n).copied(),
+            &mut diagnostics,
+        )?;
+        if let Some(ports) = &self.va_ports {
+            let swept = nl
+                .analyses
+                .iter()
+                .filter_map(|a| match a {
+                    spx_netlist::AnalysisCard::Dc { source, .. } => Some(source.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let (mut va, _) = bind_va(
+                nl,
+                opts,
+                &self.va_modules,
+                &ports.original_nodes,
+                &swept,
+                true,
+            )?;
+            if terminal_shorts(&va) != ports.shorts {
+                return Err(topology_error());
+            }
+            remap_ports(&mut va, &ports.indices)?;
+            #[cfg(feature = "jit")]
+            {
+                let dc_only = nl.analyses.iter().all(|a| {
+                    matches!(
+                        a,
+                        spx_netlist::AnalysisCard::Op { .. } | spx_netlist::AnalysisCard::Dc { .. }
+                    )
+                });
+                prepare_va_kernels(
+                    nl,
+                    opts,
+                    &self.node_index,
+                    self.num_nodes,
+                    dc_only,
+                    &mut va,
+                    &mut diagnostics,
+                );
+            }
+            for chunk in va.into_values() {
+                chunk.into_groups(&mut changed);
+            }
+        }
+        let mut groups = self.groups.clone();
+        if changed.len() != bindings.groups.len() {
+            return Err(topology_error());
+        }
+        for (&i, mut group) in bindings.groups.iter().zip(changed) {
+            let range = self.group_offsets[i]..self.group_offsets[i + 1];
+            let mut local = Unknowns::at_offset(range.start);
+            group.alloc_unknowns(&mut local);
+            if group.type_name() != groups[i].type_name()
+                || local.names() != &self.unknowns.names()[range]
+            {
+                return Err(topology_error());
+            }
+            let mut stamp = StampBuilder::new(&self.unknowns);
+            group.setup(&mut stamp).map_err(|e| vec![e])?;
+            if stamp.finish() != self.layouts[i] {
+                return Err(topology_error());
+            }
+            groups[i] = Arc::from(group);
+        }
+        Ok((self.with_run_groups(groups, nl), diagnostics))
+    }
+
+    fn with_run_groups(&self, groups: Vec<Arc<dyn DeviceGroup>>, nl: &Netlist) -> Self {
+        let node_values = |list: &[spx_netlist::NodeValue]| {
+            list.iter()
+                .filter_map(|v| Some((*self.node_index.get(&v.node)?, v.value)))
+                .collect()
+        };
+        Self {
+            ordering: self.ordering.clone(),
+            ics: node_values(&nl.initial_conditions),
+            nodesets: node_values(&nl.nodesets),
+            bindings: self.bindings.clone(),
+            topology: self.topology.clone(),
+            fixed_voltage: None,
+            linear: groups.iter().all(|g| g.is_linear()),
+            state_len: groups.iter().map(|g| g.state_len()).collect(),
+            groups,
+        }
+    }
+}
+
+fn topology_error() -> Vec<Diagnostic> {
+    vec![Diagnostic::error(
+        "E-MC-TOPOLOGY",
+        "sample changed internal unknowns or device stamp positions",
+    )]
 }
 
 /// Resolves `.model` cards into typed models once per model name, emitting warnings once.

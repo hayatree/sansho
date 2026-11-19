@@ -1,0 +1,13 @@
+SKY130 TT matched-pair current mirror
+* Provenance: original two-transistor bias circuit. Only the TT 1.8 V NMOS is needed.
+.param mc_mm_switch=1 mc_pr_switch=0
+.option scale=1u
+.include "../../va-models/volare-sky130/sky130A/libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__tt.pm3.spice"
+.include "../../va-models/volare-sky130/sky130A/libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8__mismatch.corner.spice"
+Ibias 0 gate 20u
+Vsense out 0 1
+Xref gate gate 0 0 sky130_fd_pr__nfet_01v8 w=2 l=1
+Xcopy out gate 0 0 sky130_fd_pr__nfet_01v8 w=2 l=1
+.dc Vsense 0.99 1.01 0.01
+.meas dc mirror find i(vsense) at=1
+.end

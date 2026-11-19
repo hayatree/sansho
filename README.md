@@ -15,6 +15,8 @@ cargo run -p spx-cli -- run examples/rc_lowpass.cir -r out.raw  # ngspice-compat
 cargo run -p spx-cli -- run examples/rc_lowpass.cir --json      # machine-readable output
 cargo run -p spx-cli -- check examples/rc_lowpass.cir           # parse + elaborate + lint
 cargo run -p spx-cli -- batch a.cir b.cir -j 8                   # parallel runs, JSON lines
+cargo run -p spx-cli -- mc -n 200 --seed 1 verify/mc-decks/rc_delay.cir --json
+cargo run -p spx-cli -- run --mc-seed 1 --mc-run 37 verify/mc-decks/rc_delay.cir
 cargo run -p spx-verify                                          # compare with ngspice (Docker)
 ```
 
@@ -26,8 +28,8 @@ claude mcp add spx -- "$PWD/target/release/spx-mcp"   # or any MCP client, stdio
 ```
 
 Tools: `validate_netlist`, `load_netlist`, `estimate_cost`, `simulate`, `get_waveform`, `measure`,
-`alter_and_rerun`, `sweep`, `explain_failure`, `export_deck`. Results are summary-first, carry
-units, and include input/result hashes for reproducibility.
+`alter_and_rerun`, `sweep`, `monte_carlo`, `explain_failure`, `export_deck`. Results are summary-first, carry
+units, and include input/result hashes for simulation jobs. Statistical batches carry the seed and run index. See [Monte Carlo analysis](docs/monte-carlo.md).
 
 ## Goals
 

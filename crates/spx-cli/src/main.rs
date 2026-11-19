@@ -33,6 +33,12 @@ struct Cli {
 enum Command {
     /// Parse and simulate a netlist.
     Run {
+        /// Master seed for single-run Monte Carlo replay.
+        #[arg(long, requires = "mc_run")]
+        mc_seed: Option<u64>,
+        /// Zero-based statistical run index.
+        #[arg(long, requires = "mc_seed")]
+        mc_run: Option<u64>,
         /// Netlist file.
         netlist: PathBuf,
         /// Write an ASCII raw file.
@@ -44,6 +50,21 @@ enum Command {
         /// Maximum number of threads (default: all cores).
         #[arg(short, long)]
         jobs: Option<usize>,
+    },
+    /// Run a fixed-topology Monte Carlo batch.
+    Mc {
+        netlist: PathBuf,
+        #[arg(short = 'n', long)]
+        runs: usize,
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        #[arg(short, long)]
+        jobs: Option<usize>,
+        #[arg(long)]
+        json: bool,
+        /// Include the deck's saved waveforms in JSON.
+        #[arg(long, requires = "json")]
+        save_waves: bool,
     },
     /// Simulate several independent netlists in parallel and print one JSON line per netlist.
     Batch {
@@ -79,7 +100,7 @@ enum JsonOut<'a> {
     },
 }
 
-fn print_json(out: &JsonOut<'_>) -> ExitCode {
+fn print_json(out: &impl Serialize) -> ExitCode {
     let mut stdout = std::io::stdout().lock();
     let ok = serde_json::to_writer(&mut stdout, out).is_ok() && writeln!(stdout).is_ok();
     if ok {
@@ -217,35 +238,125 @@ fn batch(netlists: &[PathBuf], jobs: Option<usize>) -> Result<ExitCode, ExitCode
     })
 }
 
+fn mc(
+    netlist: &PathBuf,
+    n: usize,
+    seed: u64,
+    jobs: Option<usize>,
+    json: bool,
+    save_waves: bool,
+) -> Result<ExitCode, ExitCode> {
+    let text = read(netlist)?;
+    let report = spx_engine::monte_carlo::MonteCarlo::prepare(&text, &loader(netlist))
+        .and_then(|p| p.batch(seed, n, save_waves, &config(jobs)));
+    match report {
+        Ok(report) => {
+            let failed = report.runs.iter().filter(|r| !r.success).count();
+            let code = if json {
+                print_json(&report)
+            } else {
+                println!(
+                    "{} runs, {} failed, seed {}",
+                    report.runs.len(),
+                    failed,
+                    seed
+                );
+                for r in &report.runs {
+                    if !r.success {
+                        eprintln!("Run {}", r.index);
+                        print_diags(&r.diagnostics);
+                    }
+                    for m in &r.measures {
+                        if let Some(v) = m.value {
+                            println!("{} {} {v:e} {}", r.index, m.name, m.unit)
+                        } else {
+                            eprintln!(
+                                "run {} {} failed: {}",
+                                r.index,
+                                m.name,
+                                m.error.as_deref().unwrap_or("no value")
+                            );
+                        }
+                    }
+                }
+                let display =
+                    |v: Option<f64>| v.map_or_else(|| "n/a".into(), |x| format!("{x:.7e}"));
+                for s in &report.statistics {
+                    println!(
+                        "{} (n={}): mean {}, std {}, range {}..{}, p05/p50/p95 {}/{}/{}",
+                        s.name,
+                        s.count,
+                        display(s.mean),
+                        display(s.std),
+                        display(s.min),
+                        display(s.max),
+                        display(s.p05),
+                        display(s.p50),
+                        display(s.p95)
+                    );
+                }
+                ExitCode::SUCCESS
+            };
+            Ok(if failed > 0 { code.max_with(1) } else { code })
+        }
+        Err(d) => Ok(input_error(&d, json)),
+    }
+}
+
+fn input_error(d: &[Diagnostic], json: bool) -> ExitCode {
+    if json {
+        print_json(&JsonOut::Error {
+            diagnostics: d,
+            partial: None,
+        })
+        .max_with(1)
+    } else {
+        print_diags(d);
+        ExitCode::from(1)
+    }
+}
+
 fn run(
     netlist: &PathBuf,
     raw: Option<&PathBuf>,
     json: bool,
     jobs: Option<usize>,
+    replay: Option<(u64, u64)>,
 ) -> Result<ExitCode, ExitCode> {
     let text = read(netlist)?;
-    let nl = match spx_netlist::parse_with(&text, &loader(netlist)) {
-        Ok(nl) => nl,
-        Err(diags) => {
-            if json {
-                return Ok(print_json(&JsonOut::Error {
-                    diagnostics: &diags,
-                    partial: None,
-                })
-                .max_with(1));
-            }
-            print_diags(&diags);
-            return Ok(ExitCode::from(1));
+    let cfg = config(jobs);
+    let result = if let Some((seed, index)) = replay {
+        match spx_engine::monte_carlo::MonteCarlo::prepare(&text, &loader(netlist)) {
+            Ok(plan) => plan.run_with(seed, index, &cfg),
+            Err(d) => return Ok(input_error(&d, json)),
+        }
+    } else {
+        match spx_netlist::parse_with(&text, &loader(netlist)) {
+            Ok(nl) => spx_engine::run_with(&nl, &cfg),
+            Err(d) => return Ok(input_error(&d, json)),
         }
     };
-    match spx_engine::run_with(&nl, &config(jobs)) {
+    let print_result = |out: JsonOut<'_>| {
+        #[derive(Serialize)]
+        struct Replay<'a> {
+            seed: u64,
+            index: u64,
+            #[serde(flatten)]
+            out: JsonOut<'a>,
+        }
+        match replay {
+            Some((seed, index)) => print_json(&Replay { seed, index, out }),
+            None => print_json(&out),
+        }
+    };
+    match result {
         Ok(out) => {
             let _phase = spx_diag::Phase::start("output");
             if let Some(p) = raw {
                 write_raw(p, &out.results)?;
             }
             if json {
-                return Ok(print_json(&JsonOut::Ok {
+                return Ok(print_result(JsonOut::Ok {
                     diagnostics: &out.warnings,
                     results: Some(&out.results),
                 }));
@@ -276,7 +387,7 @@ fn run(
                 write_raw(p, partial)?;
             }
             if json {
-                return Ok(print_json(&JsonOut::Error {
+                return Ok(print_result(JsonOut::Error {
                     diagnostics: &err.diagnostics,
                     partial: err.partial.as_ref(),
                 })
@@ -343,7 +454,17 @@ fn main() -> ExitCode {
             raw,
             json,
             jobs,
-        } => run(netlist, raw.as_ref(), *json, *jobs),
+            mc_seed,
+            mc_run,
+        } => run(netlist, raw.as_ref(), *json, *jobs, mc_seed.zip(*mc_run)),
+        Command::Mc {
+            netlist,
+            runs,
+            seed,
+            jobs,
+            json,
+            save_waves,
+        } => mc(netlist, *runs, *seed, *jobs, *json, *save_waves),
         Command::Batch { netlists, jobs } => batch(netlists, *jobs),
         Command::Check { netlist, json } => check(netlist, *json),
     };

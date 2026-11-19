@@ -33,6 +33,7 @@ use spx_netlist::Netlist;
 use spx_output::{Measurement, SimResults};
 
 pub use alter::{Applied, Change};
+pub use spx_engine::monte_carlo::{MonteCarlo, Report as MonteCarloReport};
 pub use summary::{
     AnalysisSummary, CircuitStats, CostEstimate, DeviceCount, JobSummary, OpValue, SignalStats,
     Status, Value,
@@ -222,6 +223,28 @@ fn parse_cards(lines: &[String], dot: &str) -> Result<Netlist, ApiError> {
 }
 
 impl Session {
+    /// Run a statistical deck from text or a file with relative includes.
+    pub fn monte_carlo(
+        &self,
+        text: &str,
+        base: Option<&std::path::Path>,
+        seed: u64,
+        n: usize,
+        save_waves: bool,
+    ) -> Result<MonteCarloReport, ApiError> {
+        let plan = match base {
+            Some(base) => MonteCarlo::prepare(
+                text,
+                &spx_netlist::FsLoader {
+                    base: base.to_owned(),
+                },
+            ),
+            None => MonteCarlo::prepare(text, &spx_netlist::NoFiles),
+        }
+        .map_err(|diagnostics| ApiError { diagnostics })?;
+        self.install(|| plan.batch_in_current_pool(seed, n, save_waves))
+            .map_err(|diagnostics| ApiError { diagnostics })
+    }
     /// Create a session.
     pub fn new(opts: SessionOptions) -> Self {
         let pool = rayon::ThreadPoolBuilder::new()

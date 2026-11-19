@@ -1,0 +1,17 @@
+Statistical reference driver for rc_delay
+* Provenance: original black-box control loop. Start in verify/mc-decks.
+.control
+setseed 7381
+set numdgt=16
+echo delay > ../out/rc_delay.mc.txt
+repeat 200
+  source rc_delay.cir
+  run
+  meas tran delay when v(out)=0.5 rise=1
+  echo $&delay >> ../out/rc_delay.mc.txt
+  destroy $curplot
+  remcirc
+end
+quit
+.endc
+.end

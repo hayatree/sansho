@@ -235,7 +235,10 @@ pub(crate) fn make_ctx(opts: &SimOptions, mode: Mode, tran: TranParams) -> EvalC
 
 /// One device group with its slots and state, as zipped for evaluation.
 type EvalItem<'a> = (
-    (&'a Box<dyn spx_devices::DeviceGroup>, &'a mut Slots),
+    (
+        &'a std::sync::Arc<dyn spx_devices::DeviceGroup>,
+        &'a mut Slots,
+    ),
     (
         (&'a mut Vec<f64>, &'a Vec<f64>),
         &'a mut spx_devices::bsim4::CoreCache,
@@ -519,7 +522,13 @@ pub(crate) fn newton(
     ws.newton_calls += 1;
     if ws.lu.is_none() {
         let start = ws.timed.then(Instant::now);
-        ws.lu = Some(NewtonLu::new(&ckt.pattern).map_err(NewtonError::Solver)?);
+        ws.lu = Some(
+            match &ckt.ordering {
+                Some(o) => NewtonLu::from_ordering(o.clone()),
+                None => NewtonLu::new(&ckt.pattern),
+            }
+            .map_err(NewtonError::Solver)?,
+        );
         if let Some(t) = start {
             ws.symbolic_time += t.elapsed();
         }

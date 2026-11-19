@@ -432,6 +432,7 @@ alterations is planned with the own sparse solver (M5).
 | `get_waveform` | Fetch a signal over a range with a point budget (LTTB) |
 | `measure` | Evaluate `.meas`-style measurements after the fact |
 | `alter_and_rerun` | Rerun with parameter deltas |
+| `monte_carlo` | Statistical instances of a deck from text or path, returning per-run measurements and distribution summaries |
 | `sweep` | Parameter sweep run in parallel (L0), table of measurements |
 | `explain_failure` | Diagnostic details and remedies, by job or by code |
 | `export_deck` | Export the canonical ngspice deck (for cross-checking) |
@@ -441,7 +442,7 @@ revisions 2024-11-05 through 2025-11-25) directly on `serde_json`, without an SD
 surface needed is small, and this keeps startup fast and the dependency tree permissive. Tool
 results carry both `structuredContent` and the same JSON as text. Request errors (unknown ids, bad
 arguments) are tool results with `isError: true` and structured diagnostics; only protocol errors
-use JSON-RPC errors. `monte_carlo` and an HTTP transport are planned.
+use JSON-RPC errors. An HTTP transport is planned.
 
 Guarantees fast startup (single static binary) and determinism (same input → same hash → same
 result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/stdio.rs`.
@@ -498,6 +499,16 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 - Measured (M3, 1001-stage MOS1 ring oscillator, 1595 Newton iterations): assembly 466 ms on 1
   thread, 219 ms on 4, 194 ms on 8; LU (serial until M5) ≈ 145 ms. Results are bit-identical.
 
+### 8.1 Fixed-topology statistical batches (L0 and G1)
+
+`ParameterPlan` expands the include tree and hierarchy once. It retains a flat nominal netlist, expressions for sampled fields, and model bindings for live primitives. A binding holds the destination model and primitive indices, numeric field offsets and, for varying geometry, possible bins and their bounds. `ParameterPlan::sample(Sample { seed, index })` materializes one run's numeric inputs. Top-level process draws and local mismatch draws have separate lexical identities.
+
+`MonteCarlo` owns this plan and the compiled nominal circuit. Each run's circuit references the same `Arc<CircuitTopology>` for external node numbers, internal unknown ranges, layouts, CSC pattern and gather maps. `BatchBindings` identifies native chunks whose parameters vary or whose sources a DC analysis mutates. `Circuit::bind_run` shares the other native device groups, prepares run-local model coefficients for those chunks and verifies their internal unknowns and layouts against the compiled stamp slots. VA modules and terminal maps are shared. VA instances have private buffers and run-scoped JIT specializations. The real and complex numeric solvers reuse a shared faer symbolic ordering. Each factorization can pivot on that sample's assembled values.
+
+This is the CPU boundary for G1. The stable indices identify a model field or device lane independently of the run. A future device evaluator can transpose a window of sampled numeric fields into arrays indexed by field, instance and run, evaluate a group for that window and return the existing ordered stamp slots for each run. Newton histories, numeric pivots and timestep acceptance belong to each run. The current backend evaluates CPU groups. It holds at most one window of active workspaces, limited to two concurrent runs for a parallel circuit or one with at least 256 unknowns. Retained results contain measurements and diagnostics unless waveforms were requested.
+
+See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and replay.
+
 ---
 
 ## 9. Accuracy assurance and verification (`spx-verify`)
@@ -546,9 +557,7 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
     expression sees global parameters or the current subcircuit instance's overrides and
     defaults. Only the selected body loads includes and elaborates definitions and devices.
     Conditions also work inside `.lib` sections. Paths resolve from the containing file.
-  - `temper` in a parameter expression is the circuit temperature in °C. Typical-corner
-    `agauss(nominal, variation, sigma)` returns nominal when variation or sigma is zero.
-    Active random variation reports a diagnostic. Unknown simulator options produce warnings.
+  - `temper` in a parameter expression is the circuit temperature in °C. Statistical functions use the nominal value in ordinary runs and draw during Monte Carlo analysis. Unknown simulator options produce warnings.
   - `.hdl` loads VA modules independently of model-card order. An `N` instance matches the
     module type case-insensitively and accepts numeric and quoted parameter expressions.
     The simulator scales parallel copies at the terminals when it supplies an implicit

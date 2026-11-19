@@ -101,24 +101,34 @@ impl<T: Scalar + ComplexField> LinearSolver<T> for FaerLu<T> {
 /// General real backend for irreducible systems. The ordering,
 /// numerical storage and scratch live for the lifetime of the Newton solve.
 /// Use the same sequential frontal kernels in every host thread pool.
-pub(crate) struct SerialLu {
+#[derive(Debug)]
+pub struct BatchOrdering {
     matrix: SymbolicSparseColMat<usize>,
     order: faer::sparse::linalg::lu::SymbolicLu<usize>,
-    numeric: faer::sparse::linalg::lu::NumericLu<usize, f64>,
+}
+
+/// Run-local numeric LU and scratch using sequential kernels.
+pub struct SerialLu<T = f64> {
+    ready: bool,
+    shared: std::sync::Arc<BatchOrdering>,
+    numeric: faer::sparse::linalg::lu::NumericLu<usize, T>,
     scratch: faer::dyn_stack::MemBuffer,
 }
 
-impl std::fmt::Debug for SerialLu {
+impl<T> std::fmt::Debug for SerialLu<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SerialLu")
-            .field("dimension", &self.order.nrows())
+            .field("dimension", &self.shared.order.nrows())
             .finish_non_exhaustive()
     }
 }
 
-impl SerialLu {
-    pub(crate) fn new(pattern: &CscPattern) -> Result<Self, SolverError> {
-        use faer::sparse::linalg::lu::{NumericLu, factorize_symbolic_lu};
+impl BatchOrdering {
+    pub fn dimension(&self) -> usize {
+        self.order.nrows()
+    }
+    pub fn new(pattern: &CscPattern) -> Result<std::sync::Arc<Self>, SolverError> {
+        use faer::sparse::linalg::lu::factorize_symbolic_lu;
         let n = pattern.dim();
         let matrix = SymbolicSparseColMat::new_checked(
             n,
@@ -129,34 +139,46 @@ impl SerialLu {
         );
         let order = factorize_symbolic_lu(matrix.as_ref(), Default::default())
             .map_err(|e| SolverError::Backend(format!("{e:?}")))?;
+        Ok(std::sync::Arc::new(Self { matrix, order }))
+    }
+}
+
+impl<T: Scalar + ComplexField> SerialLu<T> {
+    pub(crate) fn new(pattern: &CscPattern) -> Result<Self, SolverError> {
+        Self::from_ordering(BatchOrdering::new(pattern)?)
+    }
+    pub fn from_ordering(shared: std::sync::Arc<BatchOrdering>) -> Result<Self, SolverError> {
+        let order = &shared.order;
         let req = order
-            .factorize_numeric_lu_scratch::<f64>(faer::Par::Seq, Default::default())
-            .or(order.solve_in_place_scratch::<f64>(1, faer::Par::Seq));
+            .factorize_numeric_lu_scratch::<T>(faer::Par::Seq, Default::default())
+            .or(order.solve_in_place_scratch::<T>(1, faer::Par::Seq));
         let scratch = faer::dyn_stack::MemBuffer::try_new(req)
             .map_err(|e| SolverError::Backend(format!("{e:?}")))?;
         Ok(Self {
-            matrix,
-            order,
-            numeric: NumericLu::new(),
+            ready: false,
+            shared,
+            numeric: faer::sparse::linalg::lu::NumericLu::new(),
             scratch,
         })
     }
 
-    pub(crate) fn factor(&mut self, values: &[f64]) -> Result<bool, SolverError> {
-        let expected = self.matrix.row_idx().len();
+    pub fn factor(&mut self, values: &[T]) -> Result<bool, SolverError> {
+        self.ready = false;
+        let expected = self.shared.matrix.row_idx().len();
         if values.len() != expected {
             return Err(SolverError::DimensionMismatch {
                 expected,
                 actual: values.len(),
             });
         }
-        if values.iter().any(|v| !v.is_finite()) {
+        if values.iter().any(|v| !v.is_finite_value()) {
             return Err(SolverError::Backend("non-finite matrix entry".into()));
         }
-        self.order
+        self.shared
+            .order
             .factorize_numeric_lu(
                 &mut self.numeric,
-                SparseColMatRef::new(self.matrix.as_ref(), values),
+                SparseColMatRef::new(self.shared.matrix.as_ref(), values),
                 faer::Par::Seq,
                 faer::dyn_stack::MemStack::new(&mut self.scratch),
                 Default::default(),
@@ -167,19 +189,30 @@ impl SerialLu {
                 },
                 LuError::Generic(e) => SolverError::Backend(format!("{e:?}")),
             })?;
+        self.ready = true;
         Ok(false)
     }
 
-    pub(crate) fn solve(&mut self, rhs: &mut [f64]) -> Result<(), SolverError> {
+    pub fn solve(&mut self, rhs: &mut [T]) -> Result<(), SolverError> {
         use faer::sparse::linalg::lu::LuRef;
-        // NewtonLu only calls solve after successful factorization with this exact ordering.
-        LuRef::new_unchecked(&self.order, &self.numeric).solve_in_place_with_conj(
+        if !self.ready {
+            return Err(SolverError::NotReady);
+        }
+        let expected = self.shared.order.nrows();
+        if rhs.len() != expected {
+            return Err(SolverError::DimensionMismatch {
+                expected,
+                actual: rhs.len(),
+            });
+        }
+
+        LuRef::new_unchecked(&self.shared.order, &self.numeric).solve_in_place_with_conj(
             faer::Conj::No,
             faer::MatMut::from_column_major_slice_mut(rhs, rhs.len(), 1),
             faer::Par::Seq,
             faer::dyn_stack::MemStack::new(&mut self.scratch),
         );
-        if rhs.iter().all(|x| x.is_finite()) {
+        if rhs.iter().all(|x| x.is_finite_value()) {
             Ok(())
         } else {
             Err(SolverError::Singular { column: None })

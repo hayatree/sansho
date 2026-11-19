@@ -300,6 +300,9 @@ fn meyer(vgst: f64, vds: f64, phi: f64, cox: f64) -> (f64, f64, f64) {
 }
 
 impl DeviceGroup for Mos1s {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "mos1"
     }

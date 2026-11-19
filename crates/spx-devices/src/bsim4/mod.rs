@@ -398,6 +398,9 @@ impl Instance {
     }
 }
 impl DeviceGroup for Bsim4s {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.instances.get(index).map(|d| d.name.as_str())
+    }
     fn type_name(&self) -> &'static str {
         "bsim4"
     }

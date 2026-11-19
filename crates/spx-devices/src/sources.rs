@@ -97,6 +97,9 @@ impl VoltageSources {
 }
 
 impl DeviceGroup for VoltageSources {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.set.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "vsource"
     }
@@ -168,6 +171,9 @@ impl CurrentSources {
 }
 
 impl DeviceGroup for CurrentSources {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.set.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "isource"
     }

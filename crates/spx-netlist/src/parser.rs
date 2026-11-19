@@ -23,7 +23,23 @@ pub fn parse(text: &str) -> Result<Netlist, Vec<Diagnostic>> {
 
 /// Parse netlist text, loading `.include` / `.lib` files through `loader`.
 pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<Diagnostic>> {
-    let pre = preprocess(text, loader);
+    parse_expanded(preprocess(text, loader), false).map(|p| p.nominal)
+}
+
+/// Compile the lexical parameter environments for a statistical batch.
+pub fn prepare_parameters(
+    text: &str,
+    loader: &dyn SourceLoader,
+) -> Result<crate::ParameterPlan, Vec<Diagnostic>> {
+    parse_expanded(crate::preproc::preprocess_with(text, loader, true), true)
+}
+
+fn parse_expanded(
+    mut pre: crate::preproc::Expanded,
+    statistical: bool,
+) -> Result<crate::ParameterPlan, Vec<Diagnostic>> {
+    let mut elements = Vec::new();
+    let mut directives = Vec::new();
     let _phase = spx_diag::Phase::start("netlist_parse");
     let mut p = Parser {
         has_hdl: !pre.hdl.is_empty(),
@@ -55,35 +71,140 @@ pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<
                 parsed_models.insert(index, before);
             }
         } else if head.starts_with('.') {
+            if let Some(fields) = pre.fields.remove(&index)
+                && !fields.is_empty()
+            {
+                let offset = match head.as_str() {
+                    ".meas" | ".measure" => Some(p.measures.len()),
+                    ".dc" | ".ac" | ".tran" => Some(p.analyses.len()),
+                    ".ic" => Some(p.ics.len()),
+                    ".nodeset" => Some(p.nodesets.len()),
+                    _ => None,
+                };
+                if let Some(index) = offset {
+                    directives.push(crate::parameters::BoundLine {
+                        index,
+                        line: line.clone(),
+                        fields,
+                    })
+                } else {
+                    p.err(
+                        "E-MC-PARAM",
+                        format!("statistical fields on {head} are unsupported"),
+                        line.span(),
+                    );
+                }
+            }
             p.dot_card(&head, line);
         } else {
+            if let Some(fields) = pre.fields.remove(&index)
+                && !fields.is_empty()
+            {
+                elements.push(crate::parameters::BoundLine {
+                    index: p.elements.len(),
+                    line: line.clone(),
+                    fields,
+                });
+            }
             p.element(&head, line);
         }
     }
     p.resolve_bjt_substrates();
+    let families = if statistical {
+        p.bin_candidates()
+    } else {
+        Default::default()
+    };
     p.resolve_bins(&dynamic);
-    p.bind_model_expressions(&dynamic);
-    p.check_models();
+    let mut model_bindings = Vec::new();
+    if statistical {
+        p.check_models();
+        if !p.diags.iter().any(Diagnostic::is_error) {
+            model_bindings = crate::parameters::bind_models(
+                &mut p.elements,
+                &mut p.models,
+                &dynamic,
+                &elements,
+                &families,
+                p.options
+                    .iter()
+                    .rev()
+                    .find(|o| o.name == "scale")
+                    .and_then(|o| o.value)
+                    .unwrap_or(1.),
+            )?;
+        }
+    } else {
+        p.bind_model_expressions(&dynamic);
+        p.check_models();
+    }
     if p.diags.iter().any(Diagnostic::is_error) {
         return Err(p.diags);
     }
-    Ok(Netlist {
-        hdl: pre.hdl,
-        title: pre.title,
-        sources: pre.sources,
-        initial_conditions: p.ics,
-        nodesets: p.nodesets,
-        elements: p.elements,
-        analyses: p.analyses,
-        options: p.options,
-        models: p.models,
-        saves: p.saves,
-        measures: p.measures,
-        warnings: p.diags,
+    Ok(crate::ParameterPlan {
+        elements,
+        directives,
+        models: model_bindings,
+        nominal: Netlist {
+            hdl: pre.hdl,
+            title: pre.title,
+            sources: pre.sources,
+            initial_conditions: p.ics,
+            nodesets: p.nodesets,
+            elements: p.elements,
+            analyses: p.analyses,
+            options: p.options,
+            models: p.models,
+            saves: p.saves,
+            measures: p.measures,
+            warnings: p.diags,
+        },
     })
 }
 
-type DynamicCards<'a> =
+pub(crate) fn sample_directive(
+    line: &Line,
+    index: usize,
+    nl: &mut Netlist,
+) -> Result<(), Vec<Diagnostic>> {
+    let mut p = Parser::default();
+    p.dot_card(&line.tokens[0].lower(), line);
+    if p.diags.iter().any(Diagnostic::is_error) {
+        return Err(p.diags);
+    }
+    // The expressions replace numeric tokens. The card kind and number of entries stay fixed.
+    for (to, from) in nl.analyses.iter_mut().skip(index).zip(p.analyses) {
+        *to = from
+    }
+    for (to, from) in nl.measures.iter_mut().skip(index).zip(p.measures) {
+        *to = from
+    }
+    for (to, from) in nl.initial_conditions.iter_mut().skip(index).zip(p.ics) {
+        *to = from
+    }
+    for (to, from) in nl.nodesets.iter_mut().skip(index).zip(p.nodesets) {
+        *to = from
+    }
+    nl.warnings.extend(p.diags);
+    Ok(())
+}
+
+pub(crate) fn sample_element(line: &Line, nl: &Netlist) -> Result<Element, Vec<Diagnostic>> {
+    let head = line.tokens[0].lower();
+    let mut p = Parser::default();
+    p.element(&head, line);
+    if head.starts_with('q') {
+        p.models = nl.models.clone();
+        p.has_hdl = !nl.hdl.is_empty();
+        p.resolve_bjt_substrates();
+    }
+    if p.diags.iter().any(Diagnostic::is_error) {
+        return Err(p.diags);
+    }
+    p.elements.pop().ok_or(p.diags)
+}
+
+pub(crate) type DynamicCards<'a> =
     std::collections::HashMap<usize, (usize, &'a crate::preproc::ModelScope, &'a Line)>;
 
 #[derive(Default)]
@@ -117,7 +238,7 @@ fn node_name(t: &Token) -> String {
     if s == "gnd" { crate::GROUND.into() } else { s }
 }
 
-fn dotted_version(s: &str) -> bool {
+pub(crate) fn dotted_version(s: &str) -> bool {
     s.split('.').count() > 2
         && s.split('.')
             .all(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
@@ -719,6 +840,32 @@ impl Parser {
         }
     }
 
+    fn bin_candidates(&self) -> std::collections::HashMap<usize, Vec<usize>> {
+        let families = self.bin_families();
+        self.elements
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                let model = e.kind.model()?;
+                if self.model_names.contains_key(model) {
+                    return None;
+                }
+                Some((i, families.get(model)?.clone()))
+            })
+            .collect()
+    }
+    fn bin_families(&self) -> std::collections::HashMap<String, Vec<usize>> {
+        let mut families = std::collections::HashMap::<_, Vec<_>>::new();
+        for (index, card) in self.models.iter().enumerate() {
+            if let Some((base, bin)) = card.name.rsplit_once('.')
+                && !bin.is_empty()
+                && bin.bytes().all(|c| c.is_ascii_digit())
+            {
+                families.entry(base.to_owned()).or_default().push(index);
+            }
+        }
+        families
+    }
     /// Report instances that reference undefined models or models of the wrong type.
     /// Resolve references to binned models (`nch` → `nch.1`, `nch.2`, ...) by the instance
     /// geometry: the bin with `lmin <= l < lmax` and `wmin <= w < wmax` is chosen.
@@ -731,15 +878,7 @@ impl Parser {
             .and_then(|o| o.value)
             .unwrap_or(1.);
         let mut errs = Vec::new();
-        let mut families = std::collections::HashMap::<_, Vec<_>>::new();
-        for (index, card) in self.models.iter().enumerate() {
-            if let Some((base, bin)) = card.name.rsplit_once('.')
-                && !bin.is_empty()
-                && bin.bytes().all(|c| c.is_ascii_digit())
-            {
-                families.entry(base).or_default().push(index);
-            }
-        }
+        let families = self.bin_families();
         for e in &mut self.elements {
             let ElementKind::Mosfet { model, params, .. } = &mut e.kind else {
                 continue;
@@ -797,18 +936,7 @@ impl Parser {
                         }
                     }
                 }
-                let [level, lmin, lmax, wmin, wmax] = bounds;
-                let width = w * scale
-                    / if level == 54. {
-                        get("nf").unwrap_or(1.)
-                    } else {
-                        1.
-                    };
-                let tol = 1. - 1e-9;
-                if l * scale >= lmin * tol
-                    && l * scale < lmax * tol
-                    && width >= wmin * tol
-                    && width < wmax * tol
+                if crate::parameters::in_bin(bounds, l * scale, w * scale, get("nf").unwrap_or(1.))
                 {
                     selected = Some(card);
                     break;
@@ -1370,7 +1498,7 @@ mod tests {
         let src = "nominal\n.param mc_mm_switch=0 mc_pr_switch=0\n.subckt cell a\nR1 a 0 {agauss(80,2,3)+gauss(10,1,3)+unif(5,1)+aunif(5,1)}\n.ends\n.subckt nest a\nX1 a cell mult=2\n.ends\nX2 d nest m=5\n.end";
         let nl = parse(src).unwrap();
         assert!(matches!(nl.elements[0].kind,ElementKind::Resistor {value,..} if value==10.));
-        assert!(parse(&src.replace("mc_mm_switch=0", "mc_mm_switch=1")).is_err());
+        assert!(parse(&src.replace("mc_mm_switch=0", "mc_mm_switch=1")).is_ok());
     }
 
     #[test]

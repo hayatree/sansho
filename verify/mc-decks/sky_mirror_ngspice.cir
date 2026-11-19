@@ -1,0 +1,17 @@
+Statistical reference driver for sky_mirror
+* Provenance: original black-box control loop. Start in verify/mc-decks.
+.control
+setseed 7381
+set numdgt=16
+echo mirror > ../out/sky_mirror.mc.txt
+repeat 200
+  source sky_mirror.cir
+  run
+  meas dc mirror find i(vsense) at=1
+  echo $&mirror >> ../out/sky_mirror.mc.txt
+  destroy $curplot
+  remcirc
+end
+quit
+.endc
+.end

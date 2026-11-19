@@ -15,6 +15,8 @@ use crate::number::parse_number;
 /// A parsed expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
+    /// A statistical call with a bound lexical identity.
+    Draw(u64, String, Vec<Expr>),
     /// Number.
     Num(f64),
     /// Parameter reference (lower-cased).
@@ -305,25 +307,13 @@ fn builtin(name: &str, a: &[f64]) -> Option<Result<f64, String>> {
         "atan2" => two(f64::atan2),
         "min" => two(f64::min),
         "max" => two(f64::max),
-        "gauss" | "agauss" => arity(3).and_then(|()| {
-            if a[1] == 0. || a[2] == 0. {
-                Ok(a[0])
-            } else {
-                Err(format!(
-                    "{name} with active statistical variation is unsupported"
-                ))
+        _ if crate::statistics::statistical(name, a.len()) => Ok(a[0]),
+        "limit" => arity(3).and_then(|()| {
+            if a[1].is_nan() || a[2].is_nan() {
+                return Err("non-finite clamp bound".into());
             }
+            Ok(a[0].clamp(a[1].min(a[2]), a[1].max(a[2])))
         }),
-        "aunif" | "unif" => arity(2).and_then(|()| {
-            if a[1] == 0. {
-                Ok(a[0])
-            } else {
-                Err(format!(
-                    "{name} with active statistical variation is unsupported"
-                ))
-            }
-        }),
-        "limit" => arity(3).map(|()| a[0].clamp(a[1].min(a[2]), a[1].max(a[2]))),
         _ => return None,
     })
 }
@@ -337,7 +327,17 @@ pub fn eval(
     var: &dyn Fn(&str) -> Result<f64, String>,
     funcs: &Funcs,
 ) -> Result<f64, String> {
-    eval_depth(e, var, funcs, 0)
+    eval_depth(e, var, funcs, 0, None)
+}
+
+pub(crate) fn sample(e: &Expr, run: Option<&crate::statistics::Draws>) -> Result<f64, String> {
+    eval_depth(
+        e,
+        &|n| Err(format!("unbound parameter {n}")),
+        &Funcs::new(),
+        0,
+        run,
+    )
 }
 
 fn eval_depth(
@@ -345,10 +345,15 @@ fn eval_depth(
     var: &dyn Fn(&str) -> Result<f64, String>,
     funcs: &Funcs,
     depth: usize,
+    run: Option<&crate::statistics::Draws>,
 ) -> Result<f64, String> {
-    let ev = |x: &Expr| eval_depth(x, var, funcs, depth);
+    let ev = |x: &Expr| eval_depth(x, var, funcs, depth, run);
     let b = |x: bool| if x { 1.0 } else { 0.0 };
     Ok(match e {
+        Expr::Draw(site, name, args) => {
+            let values = args.iter().map(ev).collect::<Result<Vec<_>, _>>()?;
+            crate::statistics::draw(name, &values, *site, run)?
+        }
         Expr::Num(v) => *v,
         Expr::Var(n) => match var(n) {
             Ok(v) => v,
@@ -406,21 +411,7 @@ fn eval_depth(
                     Some(i) => Ok(vals[i]),
                     None => var(n),
                 };
-                return eval_depth(&f.body, &local, funcs, depth + 1);
-            }
-            if matches!(
-                (name.as_str(), vals.len()),
-                ("agauss" | "gauss", 3) | ("aunif" | "unif", 2)
-            ) {
-                let switches = [var("mc_mm_switch"), var("mc_pr_switch")];
-                if switches.iter().any(|v| matches!(v, Ok(0.0)))
-                    && switches.iter().all(|v| match v {
-                        Ok(x) => *x == 0.,
-                        Err(e) => e.starts_with("unknown parameter"),
-                    })
-                {
-                    return Ok(vals[0]);
-                }
+                return eval_depth(&f.body, &local, funcs, depth + 1, run);
             }
             match builtin(name, &vals) {
                 Some(r) => r?,

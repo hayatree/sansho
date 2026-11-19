@@ -415,6 +415,24 @@ pub const CODES: &[CodeInfo] = &[
         "The netlist contains no analysis card.",
         &["Add `.op`, `.dc`, `.ac` or `.tran`."],
     ),
+    e(
+        "E-MC-COUNT",
+        "Invalid Monte Carlo run count",
+        "A statistical batch requires a positive run count.",
+        &["Choose a count within the interface limit."],
+    ),
+    e(
+        "E-MC-PARAM",
+        "Invalid statistical parameter",
+        "A statistical expression is unsupported in this field or produced an invalid numeric value.",
+        &["Check the parameter expression and Gaussian sigma divisor."],
+    ),
+    e(
+        "E-MC-TOPOLOGY",
+        "Statistical topology change",
+        "A statistical binding requires different device connectivity, internal nodes or stamps.",
+        &["Use separate decks for different topologies."],
+    ),
     // --- API / MCP ---
     e(
         "E-API-INPUT",

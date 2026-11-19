@@ -233,3 +233,30 @@ fn protocol_errors() {
     let r = c.request("ping", json!({}));
     assert!(r["result"].is_object());
 }
+
+#[test]
+fn statistical_batch_is_bounded_and_ordered() {
+    let mut client = Client::start();
+    let deck = "MC test\n.param r=unif(1000,0.1)\nR1 a 0 {r}\nV1 a 0 1\n.dc v1 0 1 1\n.meas dc current find i(v1) at=1\n.end";
+    let (report, err) = client.tool("monte_carlo", json!({"netlist":deck,"seed":9,"n":3}));
+    assert!(!err, "{report}");
+    assert_eq!(report["statistics"][0]["count"], 3);
+    assert_eq!(report["runs"][2]["index"], 2);
+    assert_ne!(report["runs"][1]["measures"], report["runs"][2]["measures"]);
+    assert!(report["runs"][2].get("waves").is_none());
+    for n in [0, 257] {
+        let (error, bad) = client.tool("monte_carlo", json!({"netlist":deck,"n":n}));
+        assert!(bad && error["diagnostics"][0]["code"] == "E-API-INPUT");
+    }
+    let many = deck.replace(
+        ".end",
+        &(".meas dc current2 find i(v1) at=1\n".repeat(32) + ".end"),
+    );
+    let (error, bad) = client.tool("monte_carlo", json!({"netlist":many,"n":256}));
+    assert!(
+        bad && error["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("256 KiB")
+    );
+}

@@ -47,8 +47,9 @@ pub enum UnknownKind {
 }
 
 /// Registry of unknowns (node voltages first, then branch currents).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Unknowns {
+    offset: usize,
     names: Vec<String>,
     kinds: Vec<UnknownKind>,
     branches: HashMap<String, usize>,
@@ -56,6 +57,14 @@ pub struct Unknowns {
 }
 
 impl Unknowns {
+    /// Record a group's internal unknowns at its existing absolute offset.
+    pub fn at_offset(offset: usize) -> Self {
+        Self {
+            offset,
+            ..Self::default()
+        }
+    }
+
     /// Create a registry pre-populated with node voltages `v(name)`.
     pub fn with_nodes<'a>(nodes: impl IntoIterator<Item = &'a str>) -> Self {
         let mut u = Self::default();
@@ -68,7 +77,7 @@ impl Unknowns {
 
     /// Allocate a branch-current unknown `i(name)` for the device `name`.
     pub fn alloc_branch(&mut self, name: &str) -> usize {
-        let idx = self.names.len();
+        let idx = self.offset.saturating_add(self.names.len());
         self.names.push(format!("i({name})"));
         self.kinds.push(UnknownKind::Current);
         self.branches.insert(name.to_string(), idx);
@@ -77,7 +86,7 @@ impl Unknowns {
 
     /// Allocate an internal node voltage `v(device#suffix)` (e.g. behind a series resistance).
     pub fn alloc_internal_node(&mut self, device: &str, suffix: &str) -> usize {
-        let idx = self.names.len();
+        let idx = self.offset.saturating_add(self.names.len());
         self.names.push(format!("v({device}#{suffix})"));
         self.kinds.push(UnknownKind::Voltage);
         idx
@@ -124,7 +133,7 @@ impl Unknowns {
 
 /// Declared contributions of one group, in slot order. `None` positions touch ground and are
 /// discarded during assembly.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StampLayout {
     /// Entries of `G = ∂f/∂x`.
     pub g: Vec<(Node, Node)>,
@@ -500,6 +509,11 @@ pub fn thermal_voltage(temp: f64) -> f64 {
 pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
     /// Device type name, e.g. `resistor`.
     fn type_name(&self) -> &'static str;
+
+    /// Flattened name at this group's instance index, for parameter rebinding.
+    fn instance_name(&self, _index: usize) -> Option<&str> {
+        None
+    }
 
     /// Number of instances.
     fn len(&self) -> usize;

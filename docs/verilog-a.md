@@ -367,9 +367,7 @@ iterations per point on average, including the initial bias solve. Each point
 converged on its first solve. The CLI prints the counts, also available as
 `RunOutput::dc_stats`. These runs use the VA-4a limiter and gmin handling.
 
-The typical-corner
-netlist evaluator supports disabled statistical variation in `agauss`.
-Active random mismatch and Monte Carlo corners remain unsupported.
+The typical-corner results above use nominal netlist parameters. Statistical batches can also bind model and instance parameters for Verilog-A devices. See [Monte Carlo analysis](monte-carlo.md).
 
 ### 11.x Reference comparison results (2026-11-18)
 

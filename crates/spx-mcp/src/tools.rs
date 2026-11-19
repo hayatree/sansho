@@ -12,6 +12,8 @@ const DEFAULT_POINTS: usize = 200;
 const MAX_POINTS: usize = 10_000;
 /// Maximum number of values of one `sweep`.
 const MAX_SWEEP: usize = 1000;
+const MAX_MC: usize = 256;
+const MAX_MC_BYTES: usize = 256 * 1024;
 
 struct Tool {
     name: &'static str,
@@ -26,6 +28,13 @@ const PATH: &str = "path of a netlist file on the server's machine (use instead 
                     when the deck uses .include / .lib / .hdl)";
 
 const TOOLS: &[Tool] = &[
+    Tool {
+        name: "monte_carlo",
+        title: "Monte Carlo analysis",
+        description: "Run a statistical netlist. Returns index-ordered measurements, diagnostics and distribution summaries. Limit 256 runs and 256 KiB of result JSON.",
+        read_only: true,
+        schema: || json!({"type":"object","properties":{"netlist":{"type":"string","description":NETLIST},"path":{"type":"string","description":PATH},"n":{"type":"integer","minimum":1,"maximum":MAX_MC},"seed":{"type":"integer","minimum":0,"default":1}},"required":["n"],"oneOf":[{"required":["path"]},{"required":["netlist"]}],"additionalProperties":false}),
+    },
     Tool {
         name: "validate_netlist",
         title: "Validate netlist",
@@ -270,6 +279,42 @@ fn load(s: &mut Session, a: &Value) -> Result<spx_api::LoadReport, ApiError> {
 
 pub(crate) fn call(s: &mut Session, name: &str, a: &Value) -> Result<Value, ApiError> {
     match name {
+        "monte_carlo" => {
+            let n = a
+                .get("n")
+                .and_then(Value::as_u64)
+                .filter(|n| (1..=MAX_MC as u64).contains(n))
+                .ok_or_else(|| bad("n must be between 1 and 256"))?;
+            let seed = a.get("seed").map_or(Ok(1), |v| {
+                v.as_u64()
+                    .ok_or_else(|| bad("seed must be an unsigned integer"))
+            })?;
+            let report = match (a.get("path"), a.get("netlist")) {
+                (Some(p), None) => {
+                    let path = std::path::Path::new(
+                        p.as_str().ok_or_else(|| bad("path must be a string"))?,
+                    );
+                    let text = std::fs::read_to_string(path)
+                        .map_err(|e| bad(format!("{}: {e}", path.display())))?;
+                    s.monte_carlo(&text, path.parent(), seed, n as usize, false)
+                }
+                (None, Some(v)) => s.monte_carlo(
+                    v.as_str().ok_or_else(|| bad("netlist must be a string"))?,
+                    None,
+                    seed,
+                    n as usize,
+                    false,
+                ),
+                _ => return Err(bad("give exactly one of path or netlist")),
+            };
+            match report {
+                Ok(r) => bounded_mc_result(&r),
+                Err(e) => {
+                    bounded_mc_result(&e)?;
+                    Err(e)
+                }
+            }
+        }
         "validate_netlist" => match a.get("path").and_then(Value::as_str) {
             Some(p) => to_json(&s.validate_file(std::path::Path::new(p))),
             None => to_json(&s.validate(str_arg(a, "netlist")?)),
@@ -356,6 +401,16 @@ pub(crate) fn call(s: &mut Session, name: &str, a: &Value) -> Result<Value, ApiE
         }
         _ => Err(bad(format!("unknown tool `{name}`"))),
     }
+}
+
+fn bounded_mc_result(value: &impl Serialize) -> Result<Value, ApiError> {
+    let mut buf = vec![0; MAX_MC_BYTES];
+    let mut cursor = std::io::Cursor::new(buf.as_mut_slice());
+    serde_json::to_writer(&mut cursor, value).map_err(|_| {
+        bad("Monte Carlo result exceeds 256 KiB; reduce n or the number of measurements")
+    })?;
+    let size = cursor.position() as usize;
+    serde_json::from_slice(&buf[..size]).map_err(|e| bad(e.to_string()))
 }
 
 fn sweep_values(a: &Value) -> Result<Vec<f64>, ApiError> {

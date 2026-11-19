@@ -149,6 +149,9 @@ impl Bjts {
 const SUFFIX: [&str; 3] = ["c", "b", "e"];
 
 impl DeviceGroup for Bjts {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "bjt"
     }

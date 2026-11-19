@@ -103,18 +103,23 @@ impl CompiledModule {
         report: impl FnOnce(Diagnostic),
     ) -> Option<Arc<Kernel>> {
         let key = b.native_key(input.temperature, input.mfactor);
-        let mut cache = self.kernels.0.lock().unwrap_or_else(|e| e.into_inner());
+        let cache = b.run_kernels.as_ref().unwrap_or(&self.kernels);
+        let mut cache = cache.0.lock().unwrap_or_else(|e| e.into_inner());
         let cell = cache.entry(key);
         if let std::collections::hash_map::Entry::Occupied(ref occupied) = cell
             && let Some(result) = occupied.get().get()
         {
             return result.clone();
         }
-        let disk = self.artifact.as_ref().and_then(|artifact| {
-            serde_json::to_vec(cell.key())
-                .ok()
-                .map(|bytes| artifact.child(&[&bytes]))
-        });
+        let disk = self
+            .artifact
+            .as_ref()
+            .filter(|_| b.run_kernels.is_none())
+            .and_then(|artifact| {
+                serde_json::to_vec(cell.key())
+                    .ok()
+                    .map(|bytes| artifact.child(&[&bytes]))
+            });
         let cell = cell.or_default().clone();
         drop(cache);
         cell.get_or_init(|| {

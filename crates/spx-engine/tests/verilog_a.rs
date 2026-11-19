@@ -679,3 +679,22 @@ fn compare_va_vectors(root: &std::path::Path, cmg: bool) {
         }
     }
 }
+
+#[test]
+fn monte_carlo_va_binding_with_concurrent_analysis_cards() {
+    let src = "private VA run data\n.hdl resistor.va\n.model m vares r={aunif(1000,100)}\nN1 a 0 m\nV1 a 0 dc 1 ac 1\n.op\n.dc v1 0 1 1\n.ac lin 2 1 10\n.meas dc dc_i find i(v1) at=1\n.meas ac ac_i find im(v1) at=1\n.end";
+    let plan = spx_engine::monte_carlo::MonteCarlo::prepare(src, &Models).unwrap();
+    let serial = plan.batch(193, 5, true, &RunConfig { threads: 1 }).unwrap();
+    assert!(
+        serial
+            .runs
+            .iter()
+            .all(|r| r.success && r.measures.iter().all(|m| m.value.is_some())),
+        "{serial:?}"
+    );
+    assert_ne!(serial.runs[0].measures, serial.runs[1].measures);
+    assert_eq!(
+        plan.batch(193, 5, true, &RunConfig { threads: 3 }).unwrap(),
+        serial
+    );
+}

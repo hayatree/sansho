@@ -35,6 +35,9 @@ impl Resistors {
 }
 
 impl DeviceGroup for Resistors {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "resistor"
     }
@@ -96,6 +99,9 @@ impl Capacitors {
 }
 
 impl DeviceGroup for Capacitors {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "capacitor"
     }
@@ -149,6 +155,9 @@ impl Inductors {
 }
 
 impl DeviceGroup for Inductors {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "inductor"
     }
@@ -210,6 +219,9 @@ impl Vcvs {
 }
 
 impl DeviceGroup for Vcvs {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "vcvs"
     }
@@ -269,6 +281,9 @@ impl Vccs {
 }
 
 impl DeviceGroup for Vccs {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "vccs"
     }
@@ -348,6 +363,9 @@ fn resolve_controls(
 }
 
 impl DeviceGroup for Cccs {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "cccs"
     }
@@ -404,6 +422,9 @@ impl Ccvs {
 }
 
 impl DeviceGroup for Ccvs {
+    fn instance_name(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str)
+    }
     fn type_name(&self) -> &'static str {
         "ccvs"
     }

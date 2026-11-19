@@ -24,6 +24,15 @@ enum Backend {
 }
 
 impl NewtonLu {
+    /// Start a fresh numeric solve using the batch's immutable column ordering.
+    pub fn from_ordering(order: std::sync::Arc<crate::BatchOrdering>) -> Result<Self, SolverError> {
+        let dim = order.dimension();
+        Ok(Self {
+            backend: Backend::Serial(Box::new(crate::SerialLu::from_ordering(order)?)),
+            dim,
+            ready: false,
+        })
+    }
     /// Prepare the column ordering and allocate pivoting workspace.
     pub fn new(pattern: &CscPattern) -> Result<Self, SolverError> {
         let n = pattern.dim();
