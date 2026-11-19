@@ -169,7 +169,9 @@ pub const CODES: &[CodeInfo] = &[
         "E-PARSE-ARITY",
         "Wrong number of fields",
         "An element or control card has too few or too many positional fields.",
-        &["Compare the line with the usage shown in the note."],
+        &[
+            "Compare the line with the usage shown in the diagnostic. DC requires one or two complete source/start/stop/step groups. OP takes no arguments.",
+        ],
     ),
     e(
         "E-PARSE-DUPLICATE",
@@ -205,7 +207,9 @@ pub const CODES: &[CodeInfo] = &[
         "E-PARSE-MEAS",
         "Invalid `.meas` card",
         "A `.meas` card could not be parsed.",
-        &["See `docs/architecture.md` for the supported `.meas` forms."],
+        &[
+            "Check event qualifiers, derivative location and PARAM expression syntax. See docs/analyses.md.",
+        ],
     ),
     e(
         "E-PARSE-MODEL",
@@ -434,7 +438,9 @@ pub const CODES: &[CodeInfo] = &[
         "E-DC-SOURCE",
         "Invalid DC sweep source",
         "The sweep target must be an independent voltage or current source or TEMP.",
-        &["Sweep a `V` or `I` element or use `.dc temp start stop step`."],
+        &[
+            "Check both target names on a nested DC card. Each must identify a distinct independent source or TEMP.",
+        ],
     ),
     e(
         "E-SOLVE-SINGULAR",
@@ -457,7 +463,9 @@ pub const CODES: &[CodeInfo] = &[
         "W-MEAS-FAILED",
         "Measurement failed",
         "A `.meas` could not be evaluated (e.g. the trigger condition never occurred).",
-        &["Check the condition level and the analysis range."],
+        &[
+            "Check the condition, event count and analysis range. DERIV requires two distinct samples. PARAM names must have a successful value at the point of evaluation.",
+        ],
     ),
     w(
         "W-RUN-NOANALYSIS",

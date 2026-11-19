@@ -664,7 +664,7 @@ impl Flat<'_> {
         match scope.eval_text(&t.text, &self.defs.funcs) {
             Ok(v) => Token {
                 text: num_text(v),
-                span: t.span,
+                ..t.clone()
             },
             Err(e) => {
                 self.error("E-PARSE-EXPR", format!("in `{}`: {e}", t.text), t.span);
@@ -684,7 +684,7 @@ impl Flat<'_> {
         match scope.eval_text(&t.text, &self.defs.funcs) {
             Ok(v) => Token {
                 text: num_text(v),
-                span: t.span,
+                ..t.clone()
             },
             // Not a parameter expression (e.g. `method=gear`, `rise=last`): keep as written.
             Err(_) => t.clone(),
@@ -723,6 +723,14 @@ impl Flat<'_> {
                 || matches!(h.as_str(), ".ic" | ".nodeset" | ".save");
             let behavioral = h.starts_with('b')
                 || (h.starts_with(['e', 'g']) && line.tokens.get(4).is_some_and(Token::is_eq));
+            // PARAM measurements resolve earlier measurement names after simulation.
+            if ctx.prefix.is_empty()
+                && matches!(h.as_str(), ".meas" | ".measure")
+                && line.tokens.get(3).is_some_and(|t| t.lower() == "param")
+            {
+                self.push(line.tokens.clone(), line);
+                continue;
+            }
             if self.statistical
                 && !behavioral
                 && emitted
@@ -1012,8 +1020,11 @@ impl Flat<'_> {
                             .push((toks.len() + 2, expr.clone()));
                     }
                     toks.extend(
-                        ["m".into(), "=".into(), num_text(ctx.copies)]
-                            .map(|text| Token { text, span }),
+                        ["m".into(), "=".into(), num_text(ctx.copies)].map(|text| Token {
+                            text,
+                            span,
+                            ends_group: false,
+                        }),
                     );
                 }
             }

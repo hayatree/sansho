@@ -241,8 +241,105 @@ described above.
 | `mos2_inverter.cir`, `mos3_inverter.cir` | Complementary devices switching a capacitive load on both edges. Compare output transitions and supply current. |
 | `poly_sources.cir` | POLY(2) differential voltage multiplier and POLY(1) current-controlled cubic. DC checks signs and AC checks the local slopes. |
 
-The nine decks run locally through spx. Each needs its own maintainer-generated
-`.ref.raw` for the first comparison with ngspice 44. Cached verification reports
-a missing reference as a failure. Analytic tests independently cover port common
+The nine decks run locally through spx and have cached ngspice 44 waveforms. Analytic tests independently cover port common
 mode, reflection amplitudes, phase and delay sensitivity, JFET polarity, noise and
 capacitance, MOS channel integrals and derivatives, and all four POLY source types.
+
+## R4 sweeps, devices and output
+
+Across the standard, BSIM4, SKY130 and Verilog-A suites, the local R4 run
+produced 86 passes and seven previously recorded known differences. The maintainer subsequently supplied ngspice 44.2
+references for the original six R4 decks.
+
+The four supplied `mos2_short_channel{,_hi}` and `mos3_short_channel{,_hi}` decks
+each contain 61 drain biases at one gate voltage. At the standard DC tolerances all
+four pass against the cached ngspice 44.2 raws. At gate biases of 1.5 and 2.5 V,
+the largest absolute drain-current errors are 0.207 and 0.362 pA for MOS2 and
+69.7 and 105 pA for MOS3. The MOS2 change includes narrow-width charge in the
+channel integral and velocity-saturation boundary and uses the NFS-shifted turn-on
+voltage in the mobility field. MOS3 uses its level-specific DELTA coefficient.
+These four decks omit NSUB. Both MOS2 cards set LAMBDA explicitly to zero.
+
+| New deck | Quantity exercised |
+|---|---|
+| `dc_nested.cir` | An inner ambient-temperature sweep repeated at two values of a voltage source with implicit DC value. |
+| `mos_depletion.cir` | Nested drain and bulk sweeps with NSUB, XJ, VMAX, omitted MOS2 LAMBDA, NEFF and MOS3 KAPPA. |
+| `bjt_transport.cir` | A common-emitter stage with spreading resistance, split collector charge, bias-dependent TF and excess phase, in DC, AC and transient. |
+| `diode_extended.cir` | Forward and breakdown currents, perimeter leakage, and small-signal junction capacitance. |
+| `am_source.cir`, `sffm_source.cir` | Delayed AM current and SFFM voltage, each with its own resistive load. |
+| `meas_events.cir` | Repeated crossings of a reference voltage, delayed event selection, slopes, aggregates and a scalar derived from earlier results. |
+
+The cached `bjt_transport`, `dc_nested` and `mos_depletion` comparisons pass.
+The split AM and SFFM decks need their own raw references. The combined raw is
+from the original source cards. Replaying those cards gives an AM output
+score of 0.001 (24 µV maximum interpolation error over 1008 samples).
+The SFFM voltage differs by up to 1.347 V in manual order. Evaluating the
+frequency-swapped equation, with its corresponding 0.125 MDI limit,
+reproduces that cached vector within 3 × 10⁻¹⁵ V. All seven current decks
+produced byte-identical binary raw files with one and two workers. [Source conventions](../docs/compatibility.md#modulated-independent-sources)
+
+The transient stimulus in `meas_events` is unchanged. The 44.2 raw contains
+1 V at the new window edges (1 and 3 ms) and 0 V at 2 ms. Bracketing samples give
++1000 V/s at 0.5 ms and −1000 V/s at the last falling 0.25 V crossing. The
+cached scalar log predates the window change and the derivative-vector reference
+commands. It needs regeneration for a scalar comparison.
+
+The existing `diode_iv.cir` also checks the default breakdown slope. At −6 V
+the cached source current is 0.369711 A. With RS = 2 Ω the junction voltage
+is −5.26058 V. Dividing the excess reverse voltage above BV by
+Vt × ln(I/IBV) gives 1.05, the card's N. Inheriting N when NBV is omitted
+keeps the normalized current score at 0.006 across all 691 points.
+
+### Extended diode comparison with ngspice 44.2
+
+The 50 Ω series resistor makes source bias and junction voltage different.
+To isolate the effects, small DC decks drove the diode directly at junction
+voltages taken from the cached curve. Each used IS=10 fA, N=1, AREA=2 and
+PJ=10 µm at 27 °C. The entries are signed anode currents including GMIN.
+Only the last row comes from ngspice.
+
+| Enabled beyond the base junction | At −1.550000 V (pA) | At +0.627408 V (µA) |
+|---|---:|---:|
+| None | −1.570 | 685.10 |
+| JSW=100 pA | −1.571 | 719.36 |
+| ISR=5 pA, NR=1.8 | −17.542 | 689.49 |
+| IKF=1 mA | −1.570 | 432.17 |
+| Full R4 model | −17.543 | 451.90 |
+| Cached full model | −1.571 | 451.84 |
+
+Doubling AREA from 1 to 2 doubled the bottom current. Changing PJ from zero
+to 10 µm added 34.26 µA at +0.627408 V for either area. Doubling PJ doubled
+that increment. The ISR branch uses the R4 depletion-width factor
+`((1 − Vd/VJ)² + 0.005)^(M/2)` on the NR exponential. Massobrio and
+Antognetti discuss the width dependence and generation current in chapter 1,
+§§1.1 and 1.9.1. At −1.55 V the reference is consistent with just the
+bottom and sidewall leakage plus GMIN. The manual gives no reverse-bias
+switch for ISR that explains this difference.
+
+For positive total junction current I, equation 7.3 gives
+`I / (1 + sqrt(I / (AREA × IKF)))`. Applying it before adding GMIN gives
+451.874 µA at a source bias of +0.65 V, compared with 451.837 µA in the
+cache and 537.6 µA before the correction. At the +0.6 V AC bias, both AC
+output vectors pass across 1 MHz to 1 GHz. [ngspice user manual, §7.2.2](https://ngspice.sourceforge.io/docs/ngspice-manual.pdf#page=139)
+
+With only BV, IBV and NBV enabled, a direct −3 V bias draws 2.000 mA in
+reverse. The manual scales IBV by AREA. Algorithm 7.1 moves the avalanche
+knee toward zero by `NBV × Vt × ln(IBVeff / Ileak)` when the target exceeds
+the leakage at −BV. NBV defaults to N. When the target lies below the leakage,
+the knee stays at −BV and the leakage sets the minimum current.
+
+| Source bias | spx reverse current | Cached reverse current | Cached junction voltage |
+|---|---:|---:|---:|
+| −3.10 V | 2.0000 mA | 1.70066 mA | −3.014967 V |
+| −2.85 V | 15.535 µA | 8.25196 µA | −2.849587 V |
+
+Using the two cached junction voltages and log current ratio gives an
+exponential slope of 1.2000 thermal voltages, in agreement with NBV.
+Extrapolation to −3 V gives 1.0500 mA. Section 7.2.2 gives 2 mA for this
+card. The combined cache cannot establish an alternative geometry rule.
+The deck retains its DC failure and its original tolerances.
+
+`diode_extended.cir` stops the sweep at −2.5 V and passes. The breakdown region moved to
+`diode_breakdown.cir`, a known difference: spx follows the manual's area scaling of IBV,
+while ngspice 44.2 produces about half that current at −BV for this card. The textbook
+treatment of BV adjustment (Massobrio & Antognetti) is a follow-up item.

@@ -20,7 +20,7 @@ mod statistics;
 mod writer;
 pub use statistics::Sample;
 
-pub use expr::{Expr, eval_const, parse_behavior, parse_expr};
+pub use expr::{Expr, eval as eval_expr, eval_const, parse_behavior, parse_expr};
 pub use lexer::{Lexed, Line, Token, lex, lex_source};
 pub use number::parse_number;
 pub use parser::{parse, parse_with, prepare_parameters};
@@ -443,6 +443,10 @@ pub enum TranFn {
     Pulse(Vec<f64>),
     /// `SIN(vo va [freq [td [theta [phase]]]])`
     Sin(Vec<f64>),
+    /// `SFFM(vo va [fc mdi fm td phasem phasec])`
+    Sffm(Vec<f64>),
+    /// `AM(vo vmo [vma fm fc td phasem phasec])`
+    Am(Vec<f64>),
     /// `EXP(v1 v2 [td1 [tau1 [td2 [tau2]]]])`
     Exp(Vec<f64>),
     /// `PWL(t1 v1 t2 v2 ...)`
@@ -483,6 +487,30 @@ impl std::fmt::Display for Probe {
             Self::Voltage(p, n) => write!(f, "v({p},{n})"),
             Self::Current(v) => write!(f, "i({v})"),
         }
+    }
+}
+
+/// One axis of a DC sweep, traversed in netlist order.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DcSweep {
+    pub source: String,
+    pub start: f64,
+    pub stop: f64,
+    pub step: f64,
+}
+
+impl DcSweep {
+    pub fn count(&self) -> Option<usize> {
+        let span = (self.stop - self.start) / self.step;
+        if !self.step.is_finite() || self.step == 0. || span < 0. {
+            return None;
+        }
+        let intervals = (span + 1e-9).floor();
+        (intervals >= 0. && intervals < (isize::MAX as usize / 8) as f64)
+            .then(|| intervals as usize + 1)
+    }
+    pub fn value(&self, index: usize) -> f64 {
+        self.start + index as f64 * self.step
     }
 }
 
@@ -531,14 +559,10 @@ pub enum AnalysisCard {
     Dc {
         /// Card location.
         span: Span,
-        /// Swept independent source (lower-cased).
-        source: String,
-        /// Start value.
-        start: f64,
-        /// Stop value.
-        stop: f64,
-        /// Increment (non-zero).
-        step: f64,
+        #[serde(flatten)]
+        inner: DcSweep,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        outer: Option<DcSweep>,
     },
     /// `.ac dec|oct|lin n fstart fstop`
     Ac {
@@ -647,12 +671,14 @@ pub enum MeasEvent {
         signal: Signal,
         /// Threshold.
         value: f64,
+        /// Optional signal used as a varying threshold.
+        reference: Option<Signal>,
         /// Direction.
         dir: CrossDir,
         /// 1-based crossing number, `None` for `LAST`.
         n: Option<u32>,
         /// Delay before crossings are counted.
-        td: f64,
+        td: Option<f64>,
     },
     /// A fixed sweep value (`AT=`).
     At {
@@ -665,6 +691,8 @@ pub enum MeasEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MeasStat {
+    MaxAt,
+    MinAt,
     /// Maximum.
     Max,
     /// Minimum.
@@ -683,6 +711,13 @@ pub enum MeasStat {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MeasKind {
+    Param {
+        expression: String,
+    },
+    Deriv {
+        signal: Signal,
+        event: MeasEvent,
+    },
     /// `TRIG ... TARG ...`: sweep distance between two events.
     TrigTarg {
         /// Trigger event.
@@ -716,10 +751,12 @@ pub enum MeasKind {
 }
 
 impl MeasEvent {
-    fn signal(&self) -> Option<&Signal> {
+    fn signals(&self) -> Vec<&Signal> {
         match self {
-            Self::Cross { signal, .. } => Some(signal),
-            Self::At { .. } => None,
+            Self::Cross {
+                signal, reference, ..
+            } => std::iter::once(signal).chain(reference).collect(),
+            Self::At { .. } => Vec::new(),
         }
     }
 }
@@ -728,11 +765,14 @@ impl MeasKind {
     /// Every signal the measurement reads.
     pub fn signals(&self) -> Vec<&Signal> {
         match self {
+            Self::Param { .. } => Vec::new(),
             Self::TrigTarg { trig, targ } => {
-                trig.signal().into_iter().chain(targ.signal()).collect()
+                trig.signals().into_iter().chain(targ.signals()).collect()
             }
-            Self::When { event } => event.signal().into_iter().collect(),
-            Self::Find { signal, event } => std::iter::once(signal).chain(event.signal()).collect(),
+            Self::When { event } => event.signals(),
+            Self::Deriv { signal, event } | Self::Find { signal, event } => {
+                std::iter::once(signal).chain(event.signals()).collect()
+            }
             Self::Stat { signal, .. } => vec![signal],
         }
     }

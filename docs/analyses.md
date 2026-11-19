@@ -3,12 +3,12 @@
 A netlist can contain several analysis cards. CLI JSON includes each plot, its scale,
 the variable names and units, and the real or complex data columns. The session API and
 MCP `simulate` accept the same cards as overrides. Use the plot index and vector name
-with `get_waveform`. The CLI writes all plots to one ASCII raw file with `spx run -r`.
+with `get_waveform`. The CLI writes all plots to one raw file with `spx run deck.cir -r out.raw`. ASCII is the default. Add `--raw-format binary` for a text header followed by `Binary:` and native-endian f64 samples in point order. A complex plot stores a real/imaginary pair for every variable, including its frequency scale.
 
 | Card | Result |
 |---|---|
 | `.op` | One DC operating point, with node voltages and branch currents. |
-| `.dc source start stop step` | DC solutions versus independent source value or ambient temperature (`temp`). |
+| `.dc src1 start stop step [src2 start stop step]` | DC solutions versus independent source value or ambient temperature (`temp`) on either axis. The outer loop advances src2. Each complete inner sweep follows the previous one in the same plot, with the inner value as scale. |
 | `.ac dec\|oct\|lin n start stop` | Complex node voltages and branch currents versus frequency in Hz. Sources use their AC magnitude and phase. |
 | `.tran step stop [start [maxstep]] [uic]` | Node voltages and branch currents versus time in seconds. The integrator adapts its internal step. |
 | `.noise v(out[,ref]) source dec\|oct\|lin n start stop [interval]` | A noise spectrum and a separate plot of integrated RMS noise. |
@@ -21,6 +21,51 @@ An output probe can be a node voltage, a differential voltage, or a voltage-sour
 branch current (`i(vsense)`). Noise uses a voltage output. All small-signal analyses
 first solve the nonlinear DC bias. The frequency grid uses points per decade or octave,
 or a total count for a linear sweep.
+
+An outer TEMP axis rebinds temperature-dependent devices once per inner curve. An inner TEMP axis rebinds at every point and reapplies the outer source bias. Netlist parameter expressions retain their preprocessing-time values.
+
+## Measurements
+
+`FIND` interpolates the selected signal at a fixed sweep value or crossing.
+`DERIV` returns the slope of the bracketing linear segment. At a sampled point it uses
+the preceding segment in traversal order, with a forward difference at the first point.
+`WHEN v(a)=v(b)` locates zeros of the sample-by-sample difference. RISE, FALL and CROSS
+accept a positive count or LAST. TD discards earlier events. TRIG and TARG can each use
+a fixed AT value. MIN, MAX, MIN_AT, MAX_AT, PP, AVG, RMS and INTEG clip to FROM and TO
+with interpolated endpoints. MIN_AT and MAX_AT choose the first extremum in sweep order.
+For extrema the ngspice manual specifies the FROM/TO interval and leaves endpoint
+interpolation unspecified. On the R4 linear ramp, ngspice 44.2 took the largest
+interior sample (0.7928 V), while spx included the interpolated upper edge
+(0.8 V). A window bounded by PWL breakpoints gives both simulators the same
+endpoint samples. Measurements on a repeated DC scale report an ambiguous curve.
+
+Section 11.4.11 documents both `DERIV` and `DERIVATIVE` with `AT=value` or
+`WHEN signal=value` / `WHEN signal=signal`. The 44.2 reference control command
+reported failure for both R4 derivatives. For TRAN the verification harness
+computes a derivative vector in ngspice and uses FIND on that vector at the
+specified point or crossing. [ngspice user manual, §11.4](https://ngspice.sourceforge.io/docs/ngspice-manual.pdf#page=348)
+
+```spice
+.meas tran t1 WHEN v(out)=v(ref) RISE=1 TD=1n
+.meas tran slope DERIV v(out) AT=2n
+.meas tran high MAX v(out) FROM=1n TO=5n
+.meas tran low MIN v(out) FROM=1n TO=5n
+.meas tran swing PARAM='high-low'
+```
+
+PARAM evaluates scalar arithmetic and built-in math functions in card order.
+An unknown or failed measurement used by a later expression produces W-MEAS-FAILED.
+Measurements operate on TRAN, AC or DC results.
+
+## BJT transport delay
+
+With positive TF and PTF the forward transport delay is TF × PTF × π/180 seconds.
+In AC and noise the forward transport gain acquires the factor exp(−jωτ). In transient
+analysis spx advances the second-order Weil–McNamee approximation using accepted
+timesteps. PZ diagnoses the exponential delay. XCJC divides the collector depletion
+charge between the internal and external base. Reverse diffusion charge stays on the
+internal junction. The base spreading resistance uses the operating base current and
+normalized base charge. Its bias conductance also sets the base resistor thermal noise.
 
 ## Noise
 

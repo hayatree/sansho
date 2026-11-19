@@ -1,0 +1,9 @@
+MOS level 3 short-channel stress
+* Provenance: original circuit for release-prep verification.
+Vd d 0 0
+Vg g 0 1.5
+Vb b 0 -1
+M1 d g 0 b nch w=5u l=1u
+.model nch nmos(level=3 vto=0.6 kp=60u phi=0.7 gamma=0.5 tox=20n ld=0.1u theta=0.08 eta=0.05 kappa=0.4 vmax=1.5e5 delta=0.5 nfs=1e11 xj=0.3u)
+.dc Vd 0 3 0.05
+.end

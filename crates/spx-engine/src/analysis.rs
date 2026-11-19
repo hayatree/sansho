@@ -274,40 +274,58 @@ pub(crate) fn dc_sweep(
     ckt: &mut Circuit,
     opts: &SimOptions,
     nl: &spx_netlist::Netlist,
-    source: &str,
-    start: f64,
-    stop: f64,
-    step: f64,
+    inner: &spx_netlist::DcSweep,
+    outer: Option<&spx_netlist::DcSweep>,
 ) -> Result<(AnalysisResult, crate::DcStats), Diagnostic> {
     let _phase = spx_diag::Phase::start("analysis");
+    let source = &inner.source;
     let temperature = source == "temp";
     let mut previous_iterations = 0;
     let mut previous_calls = 0;
-    let Some(original) = (if temperature {
-        Some(opts.temp)
-    } else {
-        ckt.param(source, "dc")
-    }) else {
-        return Err(Diagnostic::error(
-            "E-DC-SOURCE",
-            format!("DC sweep source `{source}` is not an independent voltage or current source"),
-        ));
-    };
+    let invalid = || Diagnostic::error("E-PARSE-VALUE", "DC sweep is too large");
+    let row = inner.count().ok_or_else(invalid)?;
+    let rows = outer
+        .map_or(Some(1), |axis| axis.count())
+        .ok_or_else(invalid)?;
+    let count = row
+        .checked_mul(rows)
+        .filter(|&n| n <= isize::MAX as usize / 8)
+        .ok_or_else(invalid)?;
+    for axis in std::iter::once(inner).chain(outer) {
+        if axis.source != "temp" && ckt.param(&axis.source, "dc").is_none() {
+            return Err(Diagnostic::error(
+                "E-DC-SOURCE",
+                format!(
+                    "DC sweep target `{}` is not an independent source",
+                    axis.source
+                ),
+            ));
+        }
+    }
     let is_current = source.starts_with('i');
-    let count = ((stop - start) / step + 1e-9).floor() as usize + 1;
     let mut ws = Workspace::new(ckt);
     let n = ckt.dim();
     let mut x = vec![0.0; n];
-    let mut scale = Vec::with_capacity(count);
-    let mut cols = vec![Vec::with_capacity(count); n];
-    let mut result = Ok(());
+    let mut scale = Vec::new();
+    let mut cols = vec![Vec::new(); n];
+    for column in std::iter::once(&mut scale).chain(&mut cols) {
+        column.try_reserve_exact(count).map_err(|_| invalid())?;
+    }
     let mut ctx = make_ctx(opts, Mode::Dc, NO_TRAN);
     let integ = Integration::dc(n);
+    let mut point = None;
     for k in 0..count {
-        let v = start + k as f64 * step;
+        let v = inner.value(k % row);
+        let outer_value = outer.map(|axis| axis.value(k / row));
         ctx.final_step = k + 1 == count;
-        let point;
-        let ckt = if temperature {
+        let temp = if temperature {
+            Some(v)
+        } else {
+            outer
+                .filter(|axis| axis.source == "temp" && k % row == 0)
+                .and(outer_value)
+        };
+        if let Some(v) = temp {
             if v <= -273.15 {
                 return Err(Diagnostic::error(
                     "E-PARSE-VALUE",
@@ -316,14 +334,14 @@ pub(crate) fn dc_sweep(
             }
             let mut options = opts.clone();
             options.temp = v;
-            point = crate::circuit::compile_cached(nl, &options, &ckt.va_modules, true)
+            let fresh_circuit = crate::circuit::compile_cached(nl, &options, &ckt.va_modules, true)
                 .map_err(|ds| {
                     ds.into_iter().next().unwrap_or_else(|| {
                         Diagnostic::error("E-ELAB-PARAM", "temperature elaboration failed")
                     })
                 })?
                 .0;
-            if point.unknowns.names() != ckt.unknowns.names() {
+            if fresh_circuit.unknowns.names() != ckt.unknowns.names() {
                 return Err(Diagnostic::error(
                     "E-ELAB-PARAM",
                     "temperature sweep changed the circuit unknowns",
@@ -331,7 +349,7 @@ pub(crate) fn dc_sweep(
             }
             previous_iterations += ws.newton_iterations;
             previous_calls += ws.newton_calls;
-            let mut fresh = Workspace::new(&point);
+            let mut fresh = Workspace::new(&fresh_circuit);
             if fresh
                 .accepted
                 .iter()
@@ -342,36 +360,33 @@ pub(crate) fn dc_sweep(
             }
             ws = fresh;
             ctx.temp = v + 273.15;
-            &point
-        } else if !ckt.set_param(source, "dc", v) {
-            result = Err(Diagnostic::error(
-                "E-DC-SOURCE",
-                format!("cannot apply dc={v} to {source} in the current circuit layout"),
-            ));
-            break;
-        } else {
-            &*ckt
-        };
+            point = Some(fresh_circuit);
+        }
+        let ckt = point.as_mut().unwrap_or(ckt);
+        for (axis, value) in std::iter::once((inner, v)).chain(outer.zip(outer_value)) {
+            if axis.source != "temp" && !ckt.set_param(&axis.source, "dc", value) {
+                return Err(Diagnostic::error(
+                    "E-DC-SOURCE",
+                    format!("cannot set DC value of {}", axis.source),
+                ));
+            }
+        }
         // Continue from the previous point; fall back to a full operating-point solve.
-        let continued = k > 0
+        let continued = k % row > 0
             && newton(ckt, &ctx, &integ, &mut x, &mut ws, opts, opts.itl1, 0.0)
                 .map(|_| ws.commit())
                 .is_ok();
         if !continued
             && let Err(d) = solve_op(ckt, &ctx, &mut x, &mut ws, opts, "E-CONV-DC", "DC sweep")
         {
-            result = Err(d.with_note(format!("at {source} = {v:e}")));
-            break;
+            return Err(d.with_note(format!("at {source} = {v:e}, outer value {outer_value:?}")));
         }
         scale.push(v);
         for (c, &xv) in cols.iter_mut().zip(&x) {
             c.push(xv);
         }
     }
-    if !temperature {
-        ckt.set_param(source, "dc", original);
-    }
-    result?;
+
     let stats = crate::DcStats {
         source: source.to_owned(),
         points: count,
@@ -498,8 +513,9 @@ pub(crate) struct DelayedStamp {
     entries: Vec<(usize, f64)>,
 }
 impl DelayedStamp {
-    pub(crate) fn collect(c: &Circuit) -> Vec<Self> {
-        c.groups
+    pub(crate) fn collect(c: &Circuit, ws: &Workspace) -> Vec<Self> {
+        let mut stamps: Vec<Self> = c
+            .groups
             .iter()
             .filter_map(|g| g.line())
             .map(|line| Self {
@@ -509,7 +525,20 @@ impl DelayedStamp {
                     .filter_map(|(r, col, v)| Some((c.pattern.find(r?, col?)?, v)))
                     .collect(),
             })
-            .collect()
+            .collect();
+        for (group, state) in c.groups.iter().zip(&ws.state) {
+            group.transport_delays(state, &mut |delay, row, col, g| {
+                if let (Some(r), Some(c0)) = (row, col)
+                    && let Some(slot) = c.pattern.find(r, c0)
+                {
+                    stamps.push(Self {
+                        delay,
+                        entries: vec![(slot, g)],
+                    });
+                }
+            });
+        }
+        stamps
     }
     pub(crate) fn apply(&self, omega: f64, sign: f64, values: &mut [c64]) {
         let phase = omega * self.delay;
@@ -563,7 +592,7 @@ pub(crate) fn ac(
     let freqs = ac_frequencies(sweep, points, fstart, fstop)?;
     let mut cols = vec![Vec::with_capacity(freqs.len()); n];
     let mut vals = vec![c64::new(0.0, 0.0); ckt.pattern.nnz()];
-    let delayed = DelayedStamp::collect(ckt);
+    let delayed = DelayedStamp::collect(ckt, &ws);
     for &f in &freqs {
         let w = 2.0 * std::f64::consts::PI * f;
         ac_matrix(&ws.asm.g, &ws.asm.c, &delayed, w, &mut vals);
@@ -939,18 +968,23 @@ pub(crate) fn tran(
             })
         })
         .collect();
-    let hmax = lines.iter().fold(hmax, |h, l| h.min(l.line.delay));
-    let hmin = 1e-9 * hmax.min(tstep).min(tstop - tstart);
-    let eps = hmin;
+    let mut hmax = lines.iter().fold(hmax, |h, l| h.min(l.line.delay));
+    let mut step_limits = Vec::new();
 
     let mut bps: Vec<f64> = Vec::new();
     for g in &ckt.groups {
         g.breakpoints(&tp, &mut bps);
+        g.step_limits(&tp, &mut step_limits);
     }
     for history in &mut lines {
         history.accept(0., &x);
         bps.push(history.line.delay);
     }
+    step_limits.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let smallest_cap = step_limits.iter().fold(hmax, |h, &(_, cap)| h.min(cap));
+    let hmin = 1e-9 * smallest_cap.min(tstep).min(tstop - tstart);
+    let eps = hmin;
+    let mut step_limits = step_limits.into_iter().peekable();
     bps.push(tstop);
     bps.retain(|&t| t > eps && t <= tstop);
     bps.sort_by(f64::total_cmp);
@@ -1023,6 +1057,9 @@ pub(crate) fn tran(
         let begin = profile.then(std::time::Instant::now);
         attempted_steps += 1;
         let next_bp = bps.get(bp_idx).copied().unwrap_or(tstop);
+        while let Some((_, cap)) = step_limits.next_if(|&(start, _)| start <= t + eps) {
+            hmax = hmax.min(cap);
+        }
         h = h.min(hmax);
         // Corner snapping can stretch a minimum-size proposal by eps. Keep
         // its original size so an LTE failure there cannot retry it forever.
@@ -1044,7 +1081,7 @@ pub(crate) fn tran(
         let (a0, term) = HistoryTerm::step(opts.method, order, h, &hist.t);
         integ.a0 = a0;
         term.write(&mut integ.hist, 0, &hist, &qdot);
-        ctx.time = t + h;
+        ctx.time = if h == next_bp - t { next_bp } else { t + h };
         if ctx.time <= t {
             return Err(Diagnostic::error(
                 "E-CONV-TRAN",

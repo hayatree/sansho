@@ -199,7 +199,7 @@ pub(super) fn noise(
     let mut totals = vec![[0.; 2]; generators.len()];
     let mut previous = totals.clone();
     let mut lu = SerialLu::new(&c.pattern).map_err(solver)?;
-    let delayed = DelayedStamp::collect(c);
+    let delayed = DelayedStamp::collect(c, &ws);
     let mut matrix = vec![c64::default(); c.nnz()];
     for (k, &f) in freq.iter().enumerate() {
         let omega = TAU * f;
@@ -569,6 +569,11 @@ pub(super) fn pz(
         return Err(error("coincident pole-zero port terminals"));
     }
     let (_, ws, _) = linearize(c, opts, Mode::Ac)?;
+    if !DelayedStamp::collect(c, &ws).is_empty() {
+        return Err(error(
+            "pole-zero analysis does not support exponential transport delay",
+        ));
+    }
     let mut variables = vec![];
     let mut columns = vec![];
     // Open-circuit current drive uses the natural pencil. Voltage drive adds a
@@ -632,7 +637,7 @@ pub(super) fn ac_sens(
     let freq = crate::analysis::ac_frequencies(grid.sweep, grid.points, grid.fstart, grid.fstop)?;
     let mut states = Vec::with_capacity(freq.len());
     let mut lu = SerialLu::new(&c.pattern).map_err(solver)?;
-    let delayed = DelayedStamp::collect(c);
+    let delayed = DelayedStamp::collect(c, &ws);
     let mut matrix = vec![c64::default(); c.nnz()];
     for &f in &freq {
         let omega = TAU * f;
@@ -656,12 +661,7 @@ pub(super) fn ac_sens(
             param.set(&mut deck, v);
             let other = bind(&deck, c, opts)?;
             let (_, mut ws, _) = linearize(&other, opts, Mode::Ac)?;
-            let delayed = if matches!(param, Parameter::LineImpedance(_) | Parameter::LineDelay(_))
-            {
-                DelayedStamp::collect(&other)
-            } else {
-                Vec::new()
-            };
+            let delayed = DelayedStamp::collect(&other, &ws);
             Ok::<_, Diagnostic>((
                 std::mem::take(&mut ws.asm.g),
                 std::mem::take(&mut ws.asm.c),

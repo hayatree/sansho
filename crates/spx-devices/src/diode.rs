@@ -1,12 +1,11 @@
 //! Junction diode (SPICE level-1 diode model).
 //!
-//! Current: `Id = IS·(exp(Vd/(N·Vt)) − 1) − IBV·exp(−(Vd + BV)/(N·Vt))` plus `gmin·Vd`.
-//! Charge: transit-time charge `TT·Id` plus the depletion charge of [`crate::junction`].
-//! A series resistance `RS` adds an internal anode node.
+//! Forward current, including sidewall and recombination, rolls off at IKF. Recombination
+//! depends on depletion width. At breakdown the reverse branch reaches IBV at BV
+//! with exponential slope set by NBV. RS adds an internal anode.
 //!
-//! Provenance: original implementation of the textbook diode model as described in
-//! Antognetti & Massobrio, *Semiconductor Device Modeling with SPICE* (1993), ch. 1, and
-//! Nagel (1975). Breakdown is modelled with a single exponential, a deliberate simplification.
+//! Provenance: Massobrio & Antognetti, *Semiconductor Device Modeling with SPICE*,
+//! chapter 1, and the ngspice user manual, section 7.2.2, equations 7.1–7.3.
 //! See `docs/PROVENANCE.md`.
 
 use spx_diag::Diagnostic;
@@ -50,6 +49,17 @@ pub struct DiodeModel {
     pub bv: f64,
     /// Current at breakdown voltage (A).
     pub ibv: f64,
+    pub nbv: f64,
+    pub isr: f64,
+    pub nr: f64,
+    pub ikf: f64,
+    pub jsw: f64,
+    pub ns: f64,
+    pub cjp: f64,
+    pub php: f64,
+    pub mjsw: f64,
+    pub fcs: f64,
+    pub perimeter: f64,
 }
 
 impl DiodeModel {
@@ -59,6 +69,10 @@ impl DiodeModel {
             return;
         }
         self.is *= (t.saturation(self.eg, self.xti) / self.n).exp();
+        self.isr *= (t.saturation(self.eg, self.xti) / self.nr).exp();
+        self.jsw *= (t.saturation(self.eg, self.xti) / self.ns).exp();
+        self.cjp *= t.capacitance(self.php, self.mjsw);
+        self.php = t.potential(self.php);
         self.cjo *= t.capacitance(self.vj, self.m);
         self.vj = t.potential(self.vj);
     }
@@ -82,9 +96,31 @@ impl DiodeModel {
             tt: p.get("tt", 0.0),
             bv: p.get("bv", f64::INFINITY),
             ibv: p.get("ibv", 1e-3),
+            nbv: p.get("nbv", p.get("n", 1.)),
+            isr: p.get("isr", 0.),
+            nr: p.get("nr", 2.),
+            ikf: p.opt(&["ikf", "ik"]).unwrap_or(0.),
+            jsw: p.opt(&["jsw", "isw"]).unwrap_or(0.),
+            ns: p.get("ns", 1.),
+            cjp: p.opt(&["cjp", "cjsw"]).unwrap_or(0.),
+            php: p.opt(&["php", "vjsw"]).unwrap_or(1.),
+            mjsw: p.get("mjsw", 0.33),
+            fcs: p.get("fcs", 0.5),
+            perimeter: 0.,
         };
         p.accept(&["level", "kf", "af"]);
         (m, p.unused())
+    }
+}
+
+/// Eq. 7.1 continues the Shockley branch below -3 nVt with a cubic
+/// in reciprocal voltage. Both current and slope agree at the join.
+fn diffusion_current(v: Dual<2>, saturation: f64, nvt: f64) -> Dual<2> {
+    if v.v >= -3. * nvt {
+        ideal_current(v, saturation, nvt)
+    } else {
+        let ratio = (3. * nvt / std::f64::consts::E) / v;
+        -saturation * (1. + ratio.sq() * ratio)
     }
 }
 
@@ -198,11 +234,16 @@ impl DeviceGroup for Diodes {
             } else if ctx.limit {
                 let old = st.current[i];
                 let (mut v, mut lim) = limit_junction(vd_act, old, nvt, vc);
-                if m.bv.is_finite() && v < (-m.bv + 10.0 * nvt).min(0.0) {
-                    // Limit the breakdown branch as a mirrored junction.
-                    let (vr, l2) = limit_junction(-(v + m.bv), -(old + m.bv), nvt, vc);
+                let breakdown_vt = m.nbv * vt;
+                if m.bv.is_finite() && v < (-m.bv + 10. * breakdown_vt).min(0.) {
+                    let (vr, limited) = limit_junction(
+                        -(v + m.bv),
+                        -(old + m.bv),
+                        breakdown_vt,
+                        vcrit(m.ibv * area, breakdown_vt),
+                    );
                     v = -(vr + m.bv);
-                    lim |= l2;
+                    lim |= limited;
                 }
                 if lim {
                     out.noncon = true;
@@ -213,12 +254,43 @@ impl DeviceGroup for Diodes {
             };
             st.current[i] = vd;
             let v = Dual::<2>::var(vd, 0);
-            let mut id = ideal_current(v, is, nvt);
+            let diffusion = diffusion_current(v, is, nvt)
+                + diffusion_current(v, m.jsw * m.perimeter, m.ns * vt);
+            let generation = if m.isr > 0. {
+                let width = ((1. - v / m.vj).sq() + 0.005).powf(m.m * 0.5);
+                ideal_current(v, m.isr * area, m.nr * vt) * width
+            } else {
+                Dual::cst(0.)
+            };
+            let mut id = diffusion + generation;
             if m.bv.is_finite() {
-                id = id - (crate::junction::safe_exp(-(v + m.bv) / nvt)) * (m.ibv * area);
+                // Algorithm 7.1: match the reverse exponential to the leakage
+                // at nominal BV. NBV sets the avalanche voltage scale.
+                let leakage = -is * (-m.bv / nvt).exp_m1()
+                    - m.jsw * m.perimeter * (-m.bv / (m.ns * vt)).exp_m1();
+                let target = (area * m.ibv).max(leakage);
+                let breakdown_vt = m.nbv * vt;
+                let knee = if leakage > 0. {
+                    -m.bv + breakdown_vt * (target.ln() - leakage.ln())
+                } else {
+                    0.
+                };
+                if vd < 0. && vd <= knee {
+                    let avalanche = -target * crate::junction::safe_exp(-(v + m.bv) / breakdown_vt);
+                    // Generation can exceed the diffusion floor at the knee.
+                    // Switch where avalanche overtakes the full reverse current.
+                    if avalanche.v < id.v {
+                        id = avalanche;
+                    }
+                }
             }
-            let q = ideal_current(v, is, nvt) * m.tt
-                + depletion_charge(v, m.cjo * area, m.vj, m.m, m.fc);
+            if m.ikf > 0. && id.v > 0. {
+                // Equation 7.3 acts on the total forward junction current.
+                id = id / (1. + (id / (m.ikf * area)).sqrt());
+            }
+            let q = id * m.tt
+                + depletion_charge(v, m.cjo * area, m.vj, m.m, m.fc)
+                + depletion_charge(v, m.cjp * m.perimeter, m.php, m.mjsw, m.fcs);
             let id = id + v * ctx.gmin;
             // The core variables are terminal voltages (a', k); vd = va' - vk.
             let lift = |d: Dual<2>| Dual::<2> {
@@ -273,6 +345,12 @@ mod tests {
         let expect = 1e-14 * ((0.6 / vt).exp() - 1.0);
         assert!((s.f[0] - expect).abs() < 1e-12 * expect);
         assert!((s.g[0] - 1e-14 * (0.6 / vt).exp() / vt).abs() < 1e-9);
+    }
+
+    #[test]
+    fn breakdown_inherits_emission_coefficient_without_override() {
+        let m = DiodeModel::from_params(&ModelParams::new(&[("n".into(), 1.05)])).0;
+        assert_eq!(m.nbv, m.n);
     }
 
     #[test]

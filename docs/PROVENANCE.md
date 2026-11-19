@@ -33,7 +33,7 @@ that introduces the code.
 | Sparse LU | `spx-sparse/src/faer_backend.rs` | `faer` crate (MIT), used as a library dependency |
 | Forward-mode automatic differentiation | `spx-devices/src/dual.rs` | Griewank & Walther, *Evaluating Derivatives* (SIAM, 2008) |
 | pn-junction current, depletion charge with `fc` linearization, junction limiting, `vcrit` | `spx-devices/src/junction.rs` | Nagel (1975); Antognetti & Massobrio (1993), ch. 1 |
-| Diode (level 1) | `spx-devices/src/diode.rs` | Antognetti & Massobrio (1993), ch. 1; breakdown as a single exponential (own simplification) |
+| Diode (level 1) | `spx-devices/src/diode.rs` | Massobrio & Antognetti (1993), ch. 1, and ngspice user manual §7.2.2 (reverse bias, adjusted avalanche knee and forward high injection) |
 | BJT Gummel–Poon | `spx-devices/src/bjt.rs` | Gummel & Poon (1970); Getreu (1976); Antognetti & Massobrio (1993), ch. 2 |
 | Silicon MOSFET level 54, parameter catalog and device tests | `spx-devices/src/bsim4/` | Original Rust from UC Berkeley, *BSIM4 4.8.2 Technical Manual*, ch. 1–15 and Appendix A, and published update notes (CMC/ECL-2.0 documentation). The local notes contain an embedded implementation excerpt encountered during document inspection. Implementation files and excerpts were not used to derive the Rust equations. |
 | SKY130 nominal library binding | `spx-netlist/src/{preproc,parser,expr}.rs` | Original implementation. Local Apache-2.0 SKY130 model cards informed syntax and the maintainer's ngspice 44.2 waveforms supplied black-box comparisons. |
@@ -328,3 +328,28 @@ The J, T and POLY cards use the published ngspice element and model syntax.
 Graded polynomial enumeration, directional differentiation, numeric tests
 and the R3 decks were written for this project. No third-party device
 implementation or reference deck was imported.
+
+### R4 device and analysis changes
+
+The source and analysis card syntax, measurement operators, parameter names and
+raw plot conventions follow the public ngspice user documentation. Sweep execution,
+column serialization, measurement expression binding, interpolation, device stamps
+and the small verification decks are original implementations. Cached 44.2 outputs
+provide the comparisons recorded in the verification notes.
+
+The MOS2 and MOS3 channel reference is Vladimirescu and Liu, UCB/ERL M80/7
+(1980), with the classical MOS treatment in Massobrio and Antognetti. The
+level-two velocity boundary equates integrated channel current and drain-end
+inversion charge times saturation velocity. Beyond saturation the positive root
+of the depletion voltage drop gives the channel extension. The level-three model
+uses the lateral junction depletion estimate, charge sharing and a finite drain
+field at the saturation knee.
+
+The bipolar charge-control model follows Gummel and Poon (1970), Getreu,
+*Modeling the Bipolar Transistor*, and Massobrio and Antognetti. The transient
+forward excess phase follows the second-order transport delay approximation of
+Weil and McNamee (1978). The frequency-domain stamp uses the phase of the delay
+directly. Diode recombination, high injection, breakdown and perimeter charge use
+Massobrio and Antognetti, chapter 1 (especially §§1.1, 1.8.1 and 1.9.1), and
+the ngspice manual, §7.2.2 (area/perimeter scaling, Algorithm 7.1 and equations
+7.1–7.3). The modulation waveforms follow §§4.1.5–4.1.6 of the same manual. The stamp derivatives use the repository's dual numbers.

@@ -13,6 +13,11 @@ use spx_output::{AnalysisKind, AnalysisResult, Data, Measurement, SimResults};
 
 /// Evaluate all measurements against the results.
 pub(crate) fn evaluate(cards: &[MeasureCard], results: &SimResults) -> Vec<Measurement> {
+    let mut prior = results
+        .measures
+        .iter()
+        .filter_map(|m| Some((m.name.clone(), m.value?)))
+        .collect();
     cards
         .iter()
         .map(|c| {
@@ -26,7 +31,18 @@ pub(crate) fn evaluate(cards: &[MeasureCard], results: &SimResults) -> Vec<Measu
                 .iter()
                 .find(|a| a.kind == kind)
                 .ok_or_else(|| format!("no {label} analysis was run"))
-                .and_then(|a| measure(&c.kind, a));
+                .and_then(|a| measure(&c.kind, a, &prior))
+                .and_then(|v| {
+                    if v.is_finite() {
+                        Ok(v)
+                    } else {
+                        Err("non-finite measurement result".into())
+                    }
+                });
+            prior.remove(&c.name);
+            if let Ok(v) = &r {
+                prior.insert(c.name.clone(), *v);
+            }
             let sweep_unit = match c.analysis {
                 MeasAnalysis::Tran => "s",
                 MeasAnalysis::Ac => "Hz",
@@ -61,6 +77,12 @@ fn unit(kind: &MeasKind, sweep: &str) -> String {
     match kind {
         MeasKind::TrigTarg { .. } | MeasKind::When { .. } => sweep.into(),
         MeasKind::Find { signal, .. } => sig(signal).into(),
+        MeasKind::Deriv { signal, .. } => format!("{}/{sweep}", sig(signal)),
+        MeasKind::Param { .. } => String::new(),
+        MeasKind::Stat {
+            stat: MeasStat::MinAt | MeasStat::MaxAt,
+            ..
+        } => sweep.into(),
         MeasKind::Stat {
             stat: MeasStat::Integ,
             signal,
@@ -126,26 +148,31 @@ fn samples(s: &Signal, a: &AnalysisResult) -> Result<Vec<f64>, String> {
     })
 }
 
-/// Linear interpolation of `ys` over ascending `xs` at `x`.
-fn at(xs: &[f64], ys: &[f64], x: f64) -> Result<f64, String> {
+/// Index of the sampled segment ending at or containing x, in traversal order.
+fn segment(xs: &[f64], x: f64) -> Result<usize, String> {
     let (Some(&first), Some(&last)) = (xs.first(), xs.last()) else {
         return Err("no data points".into());
     };
-    if x < first || x > last {
+    if x < first.min(last) || x > first.max(last) {
         return Err(format!(
             "{x:e} is outside the simulated range [{first:e}, {last:e}]"
         ));
     }
-    let j = xs.partition_point(|&v| v < x);
+    if xs.len() == 1 {
+        return Ok(0);
+    }
+    Ok(xs
+        .partition_point(|&v| if first <= last { v < x } else { v > x })
+        .clamp(1, xs.len() - 1))
+}
+
+fn at(xs: &[f64], ys: &[f64], x: f64) -> Result<f64, String> {
+    let j = segment(xs, x)?;
     if j == 0 {
         return Ok(ys[0]);
     }
-    let (x0, x1) = (xs[j - 1], xs[j]);
-    Ok(if x1 == x0 {
-        ys[j]
-    } else {
-        ys[j - 1] + (x - x0) / (x1 - x0) * (ys[j] - ys[j - 1])
-    })
+    let weight = (x - xs[j - 1]) / (xs[j] - xs[j - 1]);
+    Ok(ys[j - 1] + weight * (ys[j] - ys[j - 1]))
 }
 
 fn event_x(e: &MeasEvent, a: &AnalysisResult) -> Result<f64, String> {
@@ -154,11 +181,17 @@ fn event_x(e: &MeasEvent, a: &AnalysisResult) -> Result<f64, String> {
         MeasEvent::Cross {
             signal,
             value,
+            reference,
             dir,
             n,
             td,
         } => {
-            let ys = samples(signal, a)?;
+            let mut ys = samples(signal, a)?;
+            if let Some(reference) = reference {
+                for (y, r) in ys.iter_mut().zip(samples(reference, a)?) {
+                    *y -= r;
+                }
+            }
             let xs = &a.scale_values;
             let mut hits = Vec::new();
             for k in 1..ys.len().min(xs.len()) {
@@ -178,11 +211,12 @@ fn event_x(e: &MeasEvent, a: &AnalysisResult) -> Result<f64, String> {
                 } else {
                     xs[k - 1] + (xs[k] - xs[k - 1]) * (-y0) / (y1 - y0)
                 };
-                if x >= *td {
+                if td.is_none_or(|td| x >= td) {
                     hits.push(x);
                 }
             }
             let pick = match n {
+                Some(0) => None,
                 Some(n) => hits.get(*n as usize - 1).copied(),
                 None => hits.last().copied(),
             };
@@ -203,9 +237,39 @@ fn event_x(e: &MeasEvent, a: &AnalysisResult) -> Result<f64, String> {
     }
 }
 
-fn measure(kind: &MeasKind, a: &AnalysisResult) -> Result<f64, String> {
+fn measure(
+    kind: &MeasKind,
+    a: &AnalysisResult,
+    prior: &std::collections::HashMap<String, f64>,
+) -> Result<f64, String> {
     let xs = &a.scale_values;
+    if a.kind == AnalysisKind::Dc
+        && !matches!(kind, MeasKind::Param { .. })
+        && !xs.windows(2).all(|w| w[1] > w[0])
+        && !xs.windows(2).all(|w| w[1] < w[0])
+    {
+        return Err("measurement requires a single DC sweep curve".into());
+    }
     match kind {
+        MeasKind::Param { expression } => spx_netlist::eval_expr(
+            &spx_netlist::parse_expr(expression)?,
+            &|n| {
+                prior
+                    .get(n)
+                    .copied()
+                    .ok_or_else(|| format!("no preceding successful measurement named {n}"))
+            },
+            &Default::default(),
+        ),
+        MeasKind::Deriv { signal, event } => {
+            let x = event_x(event, a)?;
+            let ys = samples(signal, a)?;
+            let k = segment(xs, x)?;
+            if k == 0 {
+                return Err("DERIV needs two distinct sweep points".into());
+            }
+            Ok((ys[k] - ys[k - 1]) / (xs[k] - xs[k - 1]))
+        }
         MeasKind::TrigTarg { trig, targ } => Ok(event_x(targ, a)? - event_x(trig, a)?),
         MeasKind::When { event } => event_x(event, a),
         MeasKind::Find { signal, event } => {
@@ -222,14 +286,14 @@ fn measure(kind: &MeasKind, a: &AnalysisResult) -> Result<f64, String> {
             let (Some(&first), Some(&last)) = (xs.first(), xs.last()) else {
                 return Err("no data points".into());
             };
-            let lo = from.unwrap_or(first).max(first);
-            let hi = to.unwrap_or(last).min(last);
+            let lo = from.unwrap_or(first.min(last)).max(first.min(last));
+            let hi = to.unwrap_or(first.max(last)).min(first.max(last));
             if hi < lo {
                 return Err(format!("empty interval [{lo:e}, {hi:e}]"));
             }
-            // Samples inside the interval, with interpolated end points.
-            let mut px = vec![lo];
-            let mut py = vec![at(xs, &ys, lo)?];
+            let (start, stop) = if first <= last { (lo, hi) } else { (hi, lo) };
+            let mut px = vec![start];
+            let mut py = vec![at(xs, &ys, start)?];
             for (&x, &y) in xs.iter().zip(&ys) {
                 if x > lo && x < hi {
                     px.push(x);
@@ -237,8 +301,8 @@ fn measure(kind: &MeasKind, a: &AnalysisResult) -> Result<f64, String> {
                 }
             }
             if hi > lo {
-                px.push(hi);
-                py.push(at(xs, &ys, hi)?);
+                px.push(stop);
+                py.push(at(xs, &ys, stop)?);
             }
             let integ = |f: &dyn Fn(f64) -> f64| -> f64 {
                 px.windows(2)
@@ -248,13 +312,20 @@ fn measure(kind: &MeasKind, a: &AnalysisResult) -> Result<f64, String> {
             };
             let max = py.iter().copied().fold(f64::NEG_INFINITY, f64::max);
             let min = py.iter().copied().fold(f64::INFINITY, f64::min);
-            let span = hi - lo;
+            let span = stop - start;
             Ok(match stat {
+                MeasStat::MaxAt | MeasStat::MinAt => {
+                    let extreme = if *stat == MeasStat::MaxAt { max } else { min };
+                    px[py
+                        .iter()
+                        .position(|&v| v == extreme)
+                        .ok_or("no finite extremum")?]
+                }
                 MeasStat::Max => max,
                 MeasStat::Min => min,
                 MeasStat::Pp => max - min,
                 MeasStat::Integ => integ(&|y| y),
-                MeasStat::Avg | MeasStat::Rms if span <= 0.0 => {
+                MeasStat::Avg | MeasStat::Rms if span == 0.0 => {
                     return Err("AVG/RMS need an interval of non-zero length".into());
                 }
                 MeasStat::Avg => integ(&|y| y) / span,

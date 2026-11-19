@@ -11,6 +11,8 @@ pub(crate) enum Channel {
     SquareLaw,
     ChargeSheet {
         narrow: f64,
+        auto_length: bool,
+        neff: f64,
         critical: f64,
         exponent: f64,
         depth: f64,
@@ -20,7 +22,10 @@ pub(crate) enum Channel {
     SemiEmpirical {
         narrow: f64,
         theta: f64,
-        shortening: f64,
+        depth: f64,
+        diffusion: f64,
+        depletion: f64,
+        kappa: f64,
         eta: f64,
         velocity: f64,
     },
@@ -37,6 +42,8 @@ impl Channel {
             // Critical normal field (V/cm) converted to gate overdrive.
             Self::ChargeSheet {
                 narrow,
+                auto_length: p.opt(&["lambda"]).is_none(),
+                neff: p.get("neff", 1.),
                 critical: p.get("ucrit", 1e4) * 100. * EPS_SI / cox,
                 exponent: p.get("uexp", 0.),
                 depth: p.get("xj", 0.),
@@ -45,9 +52,12 @@ impl Channel {
             }
         } else {
             Self::SemiEmpirical {
-                narrow,
+                narrow: 2. * narrow,
                 theta: p.get("theta", 0.),
-                shortening: depletion * p.get("kappa", 0.2).sqrt(),
+                depth: p.get("xj", 0.),
+                diffusion: p.get("ld", 0.),
+                depletion,
+                kappa: p.get("kappa", 0.2),
                 eta: p.get("eta", 0.) * 8.15e-22 / cox,
                 velocity: p.get("vmax", 0.),
             }
@@ -59,13 +69,17 @@ impl Channel {
             Self::SquareLaw => true,
             Self::ChargeSheet {
                 critical,
+                neff,
+                auto_length: _,
                 exponent,
                 narrow,
                 depth,
                 depletion,
                 velocity,
             } => {
-                critical > 0.
+                neff.is_finite()
+                    && neff > 0.
+                    && critical > 0.
                     && [critical, exponent, narrow, depth, depletion, velocity]
                         .into_iter()
                         .all(valid)
@@ -75,8 +89,16 @@ impl Channel {
                 theta,
                 eta,
                 velocity,
-                shortening,
-            } => eta.is_finite() && [narrow, theta, velocity, shortening].into_iter().all(valid),
+                depth,
+                diffusion,
+                depletion,
+                kappa,
+            } => {
+                eta.is_finite()
+                    && [narrow, theta, velocity, depth, diffusion, depletion, kappa]
+                        .into_iter()
+                        .all(valid)
+            }
         }
     }
     pub(crate) fn name(&self) -> &'static str {
@@ -121,6 +143,20 @@ impl Channel {
                 let shared = encroach(root) + encroach((root.sq() + vd).sqrt());
                 if shared.v < 1. { shared } else { Dual::cst(1.) }
             }
+            Self::SemiEmpirical {
+                depth,
+                diffusion,
+                depletion,
+                ..
+            } if depth > 0. && depletion > 0. => {
+                // Project the curved depletion boundary on the channel. The
+                // MOS3 fit gives lateral depletion width in units of XJ.
+                let wp = root * (depletion / depth);
+                let wc = 0.0631353 + wp * (0.8013292 - 0.01110777 * wp);
+                let sine = wp / (1. + wp);
+                let lateral = (wc * depth + diffusion) * (1. - sine.sq()).sqrt() - diffusion;
+                lateral / length
+            }
             _ => Dual::cst(0.),
         };
         let u = overdrive + root * sharing * gamma - root.sq() * narrow + vd * dibl;
@@ -160,12 +196,16 @@ impl Channel {
                 critical,
                 exponent,
                 velocity,
+                auto_length,
+                neff,
+                depletion,
                 ..
             } => {
                 // Local inversion charge vanishes when u = V + gamma*(sqrt(P+V)-sqrt(P)).
                 let gamma = (1. - sharing) * gamma;
-                let a = root * 2. + gamma;
-                let dr = u * 2. / ((a.sq() + u * 4.).sqrt() + a);
+                let eta = 1. + narrow;
+                let a = root * (2. * eta) + gamma;
+                let dr = u * 2. / ((a.sq() + u * (4. * eta)).sqrt() + a);
                 let sat = dr * (root * 2. + dr);
                 let integral = |v: Dual<N>| {
                     let end = (root.sq() + v).sqrt();
@@ -176,10 +216,11 @@ impl Channel {
                     } else {
                         (end * 2. + root) / (sum.sq() * 3.) * gamma
                     };
-                    v * (u - v * (body + 0.5))
+                    v * (u - v * (body + 0.5 * eta))
                 };
-                let mobility_factor = if exponent != 0. && u.v > critical {
-                    (u / critical).powf(-exponent)
+                let field = u - swing;
+                let mobility_factor = if exponent != 0. && field.v > critical {
+                    (field / critical).powf(-exponent)
                 } else {
                     Dual::cst(1.)
                 };
@@ -193,9 +234,9 @@ impl Channel {
                     sat = hi * 0.5;
                     for _ in 0..64 {
                         let end = (root.sq() + sat).sqrt();
-                        let charge = u - sat - gamma * (end - root);
+                        let charge = u - sat * eta - gamma * (end - root);
                         let residual = integral(sat) - vc * charge;
-                        let slope = charge + vc * (1. + gamma / (end * 2.));
+                        let slope = charge + vc * (eta + gamma / (end * 2.));
                         let next = sat - residual / slope;
                         if (next.v - sat.v).abs() <= 1e-13 * (1. + sat.v.abs()) {
                             sat = next;
@@ -213,18 +254,27 @@ impl Channel {
                         };
                     }
                 }
-                let id =
-                    integral(clip(sat)) * beta * mobility_factor / remaining_length(vd * lambda);
+                let loss = if auto_length && depletion > 0. && vd.v > sat.v {
+                    // The voltage in the pinched-off region is E_sat*dL
+                    // + q*N_eff*dL²/(2*epsilon). Use its positive root.
+                    let alpha = depletion.powi(2) / neff;
+                    let field = velocity / (mobility * mobility_factor);
+                    drain_extension(vd - sat, alpha, field) / length
+                } else {
+                    vd * lambda
+                };
+                let id = integral(clip(sat)) * beta * mobility_factor / remaining_length(loss);
                 (id * weak, gate_overdrive, sat.v)
             }
             Self::SemiEmpirical {
                 theta,
                 velocity,
-                shortening,
+                depletion,
+                kappa,
                 ..
             } => {
                 let slope = if root.v > 0. {
-                    Dual::cst(gamma) / (root * 4.)
+                    (1. - sharing) * gamma / (root * 4.)
                 } else {
                     Dual::cst(0.)
                 };
@@ -247,8 +297,17 @@ impl Channel {
                 };
                 // Drain depletion widens beyond pinch-off. Continue the length
                 // smoothly beyond half the channel to keep Leff positive.
-                let loss = if shortening > 0. && vd.v > sat.v {
-                    (vd - sat).sqrt() * (shortening / length)
+                let loss = if kappa > 0. && depletion > 0. && vd.v > sat.v {
+                    let field = if velocity > 0. {
+                        // End field from current continuity at saturation,
+                        // E = kappa * I_sat / (L * dI/dV at the knee).
+                        // Substituting the saturation condition avoids subtraction
+                        // of nearly equal terms in the left-hand derivative.
+                        field_voltage * (1. + field_voltage / sat) * (kappa / length)
+                    } else {
+                        Dual::cst(0.)
+                    };
+                    drain_extension((vd - sat) * kappa, depletion.powi(2), field) / length
                 } else {
                     Dual::cst(0.)
                 };
@@ -258,6 +317,13 @@ impl Channel {
             }
         }
     }
+}
+
+/// Positive root of dV = E*dL + dL²/alpha, rationalized near the knee.
+fn drain_extension<const N: usize>(voltage: Dual<N>, alpha: f64, field: Dual<N>) -> Dual<N> {
+    let half = field * (alpha * 0.5);
+    let potential = voltage * alpha;
+    potential / ((half.sq() + potential).sqrt() + half)
 }
 
 /// Fraction of the effective channel left after drain-end shortening.
@@ -326,6 +392,30 @@ mod tests {
         let expected = 2e-4 * 0.5 * u * u / (slope * (1. + 0.25 * u));
         assert!((evaluate(&model, u, 2.).v - expected).abs() < 1e-17);
     }
+    #[test]
+    fn depletion_length_and_explicit_zero_lambda() {
+        let voltage = Dual::<1>::var(0.5, 0);
+        let field = 2e6;
+        let alpha = 3e-14;
+        let loss = drain_extension(voltage, alpha, Dual::cst(field));
+        assert!((field * loss.v + loss.v.powi(2) / alpha - voltage.v).abs() < 1e-14);
+        assert!((loss.d[0] * (field + 2. * loss.v / alpha) - 1.).abs() < 1e-14);
+        let bind = |extra: &[(&str, f64)]| {
+            let p = ModelParams::new(
+                &extra
+                    .iter()
+                    .map(|&(k, v)| (k.to_string(), v))
+                    .collect::<Vec<_>>(),
+            );
+            Channel::bind(2., &p, 1e-3, Some(1e17))
+        };
+        let off = evaluate(&bind(&[("lambda", 0.)]), 0.8, 2.);
+        let default = evaluate(&bind(&[]), 0.8, 2.);
+        let higher_charge = evaluate(&bind(&[("neff", 3.)]), 0.8, 2.);
+        assert!(default.v > higher_charge.v && higher_charge.v > off.v);
+        assert!(default.d[1] > 0. && off.d[1] == 0.);
+    }
+
     #[test]
     fn incremental_conductances_follow_each_channel_current() {
         for m in [

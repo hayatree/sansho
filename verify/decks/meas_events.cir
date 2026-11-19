@@ -1,0 +1,20 @@
+Measure slopes, crossings, windows and a derived scalar on two linear ramps
+* Provenance: original R4 verification circuit.
+V1 a 0 PWL(0 0 1m 1 2m 0 3m 1 4m 0)
+V2 b 0 0.25
+R1 a 0 1k
+R2 b 0 1k
+.tran 10u 4m 0 10u
+.meas tran slope DERIV v(a) AT=0.5m
+.meas tran down DERIV v(a) WHEN v(a)=v(b) FALL=LAST
+.meas tran after WHEN v(a)=v(b) CROSS=1 TD=2m
+.meas tran sample FIND v(a) AT=2.5m
+.meas tran level FIND v(b) WHEN v(a)=0.5 RISE=LAST
+.meas tran peak MAX v(a) FROM=1m TO=3m
+.meas tran bottom MIN v(a) FROM=1m TO=3m
+.meas tran spread PP v(a) FROM=1m TO=3m
+.meas tran mean AVG v(a) FROM=1m TO=3m
+.meas tran effective RMS v(a) FROM=1m TO=3m
+.meas tran area INTEG v(a) FROM=1m TO=3m
+.meas tran derived PARAM='(peak-bottom)*slope'
+.end

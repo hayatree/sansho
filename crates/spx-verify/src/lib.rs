@@ -524,10 +524,39 @@ pub fn measure_deck(text: &str) -> Option<String> {
         if matches!(card.as_str(), ".meas" | ".measure") && !in_control {
             if let Some(kind) = fields.next() {
                 cmds.push(format!("setplot {}1", kind.to_ascii_lowercase()));
-                cmds.push(format!(
-                    "meas {kind} {}",
-                    fields.collect::<Vec<_>>().join(" ")
-                ));
+                let words: Vec<_> = fields.collect();
+                let definition = words.join(" ");
+                // PARAM is a netlist form. In the control interpreter previous
+                // meas commands create vectors, so use native scalar algebra.
+                if let Some((header, expr)) = definition.split_once('=')
+                    && let [name, op] = header.split_whitespace().collect::<Vec<_>>().as_slice()
+                    && op.eq_ignore_ascii_case("param")
+                {
+                    let expr = expr.trim();
+                    let inner = [("'", "'"), ("{", "}"), ("\"", "\"")]
+                        .into_iter()
+                        .find_map(|(l, r)| expr.strip_prefix(l)?.strip_suffix(r))
+                        .unwrap_or(expr);
+                    cmds.push(format!("let {name} = {inner}"));
+                    cmds.push(format!("print {name}"));
+                } else if let [name, op, rest @ ..] = words.as_slice()
+                    && kind.eq_ignore_ascii_case("tran")
+                    && (op.eq_ignore_ascii_case("deriv") || op.eq_ignore_ascii_case("derivative"))
+                    && let Some(at) = rest.iter().position(|token| {
+                        let keyword = token.split('=').next().unwrap_or("");
+                        keyword.eq_ignore_ascii_case("at") || keyword.eq_ignore_ascii_case("when")
+                    })
+                {
+                    // The 44.2 control command lacks DERIV. Differentiate the
+                    // reference trajectory in Nutmeg, then locate the requested event.
+                    let signal = rest[..at].join(" ");
+                    let condition = rest[at..].join(" ");
+                    let vector = format!("spx_verify_deriv_{i}");
+                    cmds.push(format!("let {vector} = deriv({signal})"));
+                    cmds.push(format!("meas {kind} {name} FIND {vector} {condition}"));
+                } else {
+                    cmds.push(format!("meas {kind} {definition}"));
+                }
             }
             continue;
         }
@@ -661,6 +690,22 @@ mod tests {
         assert!(
             d.contains(".control\nrun\nsetplot tran1\nmeas tran p MAX v(a)\nquit\n.endc\n.end\n")
         );
+    }
+
+    #[test]
+    fn reference_command_uses_native_scalar_algebra_for_param() {
+        let deck = measure_deck("t\n.meas tran x max v(out)\n.meas tran y PARAM = '(x+1)*2'\n.end")
+            .unwrap();
+        assert!(deck.contains("let y = (x+1)*2\nprint y"));
+    }
+
+    #[test]
+    fn reference_derivatives_use_the_oracle_waveform() {
+        let deck = measure_deck("t\n.meas tran s DERIV v(a) AT=1m\n.meas tran d derivative v(a) WHEN v(a)=v(b) FALL=LAST\n.end").unwrap();
+        assert!(deck.contains(
+            "let spx_verify_deriv_1 = deriv(v(a))\nmeas tran s FIND spx_verify_deriv_1 AT=1m"
+        ));
+        assert!(deck.contains("let spx_verify_deriv_2 = deriv(v(a))\nmeas tran d FIND spx_verify_deriv_2 WHEN v(a)=v(b) FALL=LAST"));
     }
 
     #[test]

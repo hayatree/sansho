@@ -175,3 +175,188 @@ fn rshunt_fixes_floating_node() {
     let r = simulate("floating\nV1 a 0 1\nC1 a b 1n\nC2 b 0 1n\n.options rshunt=1e12\n.op\n");
     assert!(r.analyses[0].real("v(b)").unwrap()[0].abs() < 1e-9);
 }
+
+#[test]
+fn nested_source_and_temperature_axes() {
+    let deck = include_str!("../../../verify/decks/dc_nested.cir");
+    let result = simulate(&deck.replace(".dc temp 20 40 10 Vdrive 1 2 1", ".dc Vdrive 2 0 -1 Iload 0 2m 1m\n.dc temp 20 40 10 Vdrive 1 2 1\n.dc Iload 0 2m 1m temp 10 30 10"));
+    for (index, (row, rows)) in [(3, 3), (3, 2), (3, 3)].into_iter().enumerate() {
+        let plot = &result.analyses[index];
+        assert_eq!(plot.len(), row * rows);
+        for (k, &v) in plot.real("v(out)").unwrap().iter().enumerate() {
+            let i = (k % row) as f64;
+            let j = (k / row) as f64;
+            let (drive, load, temp, scale) = match index {
+                0 => (2. - i, j * 0.001, 27., 2. - i),
+                1 => (1. + j, 0., 20. + 10. * i, 20. + 10. * i),
+                _ => (0., i * 0.001, 10. + 10. * j, i * 0.001),
+            };
+            let r = 1000. * (1. + 0.002 * (temp - 27.));
+            assert_eq!(plot.scale_values[k], scale);
+            assert!(close(
+                v,
+                (drive / 1000. + load) / (1. / 1000. + 1. / r),
+                1e-11,
+                1e-14
+            ));
+        }
+    }
+}
+
+#[test]
+fn modulated_source_limits_the_step_after_its_delay() {
+    for (source, frequency) in [
+        ("V1 a 0 SFFM(1 1 10k 2 1k 80m 30 90)", 12e3),
+        ("I1 0 a AM(1 2 3 1k 10k 80m 30 90)", 11e3),
+    ] {
+        let r = simulate(&format!(
+            "carrier sampling\n{source}\nR1 a 0 1\n.tran 10m 81m 0 10m\n"
+        ));
+        let plot = &r.analyses[0];
+        let onset = plot.scale_values.iter().position(|&t| t == 0.08).unwrap();
+        assert!(onset < 30);
+        assert_eq!(plot.real("v(a)").unwrap()[onset], 0.);
+        for pair in plot.scale_values[onset..].windows(2) {
+            assert!(pair[1] - pair[0] <= 1.000001 / (64. * frequency));
+        }
+    }
+}
+
+#[test]
+fn measurement_events_windows_and_prior_names() {
+    let result = simulate(include_str!("../../../verify/decks/meas_events.cir"));
+    let expected = [
+        1000.,
+        -1000.,
+        0.00225,
+        0.5,
+        0.25,
+        1.,
+        0.,
+        1.,
+        0.5,
+        1. / 3_f64.sqrt(),
+        0.001,
+        1000.,
+    ];
+    assert_eq!(result.measures.len(), expected.len());
+    for (m, v) in result.measures.iter().zip(expected) {
+        assert!(
+            close(m.value.unwrap(), v, 5e-5, 1e-14),
+            "{}: {:?}",
+            m.name,
+            m
+        );
+    }
+    let descending = simulate(
+        "descending\nV1 a 0\nR1 a 0 1k\n.dc v1 1 -1 -0.25\n.meas dc x deriv v(a) when v(a)=-0.6 fall=1\n.meas dc y avg v(a) from=-0.75 to=-0.25\n.meas dc z param='later+1'\n",
+    );
+    assert_eq!(descending.measures[0].value, Some(1.));
+    assert_eq!(descending.measures[1].value, Some(-0.5));
+    assert!(
+        descending.measures[2]
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("later")
+    );
+}
+
+#[test]
+fn bjt_forward_transport_acquires_exact_excess_phase() {
+    let run = |angle| {
+        simulate(&format!(
+            "phase\nVb b 0 0.7 AC 1\nVc c 0 2\nQ1 c b 0 qn\n.model qn npn(is=1e-16 tf=1n ptf={angle})\n.ac lin 1 250meg 250meg\n"
+        ))
+    };
+    let zero = run(0.);
+    let phase = run(45.);
+    let (re, im) = phase.analyses[0].complex("i(vc)").unwrap()[0];
+    let gm = zero.analyses[0].complex("i(vc)").unwrap()[0].0;
+    let angle = -std::f64::consts::TAU * 250e6 * 1e-9 * 45f64.to_radians();
+    assert!(close(re / gm, angle.cos(), 1e-8, 1e-12));
+    assert!(close(im / gm, angle.sin(), 1e-8, 1e-12));
+}
+
+#[test]
+fn bjt_external_collector_charge_bypasses_base_resistance() {
+    let plot = simulate(
+        "partition\nV1 b 0 0 AC 1\nVc c 0 0\nQ1 c b 0 qn\n.model qn npn(rb=1k cjc=2p xcjc=0.25)\n.ac lin 1 1g 1g\n",
+    );
+    let (re, im) = plot.analyses[0].complex("i(v1)").unwrap()[0];
+    let w = std::f64::consts::TAU * 1e9;
+    let b = w * 0.5e-12;
+    let denom = 1. + (1000. * b).powi(2);
+    assert!(close(-re, 1000. * b * b / denom, 1e-7, 1e-12));
+    assert!(close(-im, w * 1.5e-12 + b / denom, 1e-7, 1e-12));
+}
+
+#[test]
+fn diode_breakdown_slope_and_perimeter_capacitance() {
+    let r = simulate(
+        "avalanche\nV1 d 0\nD1 d 0 dd area=2\n.model dd d(bv=3 ibv=2m nbv=1.4 isr=1u)\n.dc v1 -3.05 -3 0.05\n",
+    );
+    let current = r.analyses[0].real("i(v1)").unwrap();
+    let vt = spx_devices::thermal_voltage(spx_devices::REFTEMP);
+    assert!(close(current[1], 0.004, 1e-8, 0.));
+    assert!(close(
+        current[0] / current[1],
+        (0.05 / (1.4 * vt)).exp(),
+        1e-8,
+        0.
+    ));
+    let r = simulate(
+        "junction perimeter\nV1 d 0 0 AC 1\nD1 d 0 dd area=2 pj=5u m=3\n.model dd d(cjo=1p cjp=1u)\n.ac lin 1 1meg 1meg\n",
+    );
+    let (_, b) = r.analyses[0].complex("i(v1)").unwrap()[0];
+    assert!(close(-b, std::f64::consts::TAU * 1e6 * 21e-12, 1e-10, 0.));
+}
+
+#[test]
+fn diode_recombination_and_high_injection() {
+    let r = simulate(
+        "forward\nV1 d 0 0.7\nD1 d 0 dd\n.model dd d(is=1e-14 ikf=2m isr=20p nr=2 vj=1 m=0)\n.op\n",
+    );
+    let vt = spx_devices::thermal_voltage(spx_devices::REFTEMP);
+    let i = 1e-14 * (0.7 / vt).exp_m1();
+    let recombination = 20e-12 * (0.7 / (2. * vt)).exp_m1();
+    let forward = i + recombination;
+    let expected = forward / (1. + (forward / 0.002).sqrt()) + 0.7e-12;
+    assert!(close(
+        -r.analyses[0].real("i(v1)").unwrap()[0],
+        expected,
+        1e-10,
+        0.
+    ));
+}
+
+#[test]
+fn lateral_substrate_junction_returns_current_to_base() {
+    let r = simulate(
+        "substrate\nVc c 0 0\nVb b 0 0\nVs s 0 -0.4\nQ1 c b 0 s qq\n.model qq npn(subs=-1 iss=1p ns=1.5)\n.op\n",
+    );
+    let i = 1e-12 * (0.4 / (1.5 * spx_devices::thermal_voltage(spx_devices::REFTEMP))).exp_m1();
+    assert!(close(r.analyses[0].real("i(vs)").unwrap()[0], i, 1e-10, 0.));
+    assert!(close(
+        r.analyses[0].real("i(vb)").unwrap()[0],
+        -i,
+        1e-10,
+        0.
+    ));
+    assert!(r.analyses[0].real("i(vc)").unwrap()[0].abs() < 1e-14);
+}
+
+#[test]
+fn bjt_transport_transient_step_response() {
+    // PTF in degrees gives a 1 ns delay. The forward-current step is
+    // smoothed over 0.5 ps, and sampled one delay after its leading edge.
+    let r = simulate(
+        "transport step\nVb b 0 DC 0.7 PULSE(0.7 0.701 0.5n 0.5p 1p 10n 20n)\nVc c 0 2\nQ1 c b 0 qq\n.model qq npn(is=1e-16 tf=1n ptf=57.29577951308232)\n.tran 4p 4n 0 4p\n.meas tran initial FIND i(vc) AT=0.25n\n.meas tran delayed FIND i(vc) AT=1.5n\n",
+    );
+    let vt = spx_devices::thermal_voltage(spx_devices::REFTEMP);
+    let step = 1e-16 * (0.7 / vt).exp() * (0.001 / vt).exp_m1();
+    let actual = (r.measures[0].value.unwrap() - r.measures[1].value.unwrap()) / step;
+    let root = 3_f64.sqrt();
+    let expected = 1. - (-1.5_f64).exp() * ((root / 2.).cos() + root * (root / 2.).sin());
+    assert!(close(actual, expected, 0.005, 0.));
+}

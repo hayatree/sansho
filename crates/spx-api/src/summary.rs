@@ -201,11 +201,10 @@ fn analysis_work(a: &AnalysisCard) -> (u64, u64) {
         | AnalysisCard::Sens { ac: None, .. }
         | AnalysisCard::Pz { .. } => (1, 20),
         AnalysisCard::Four { .. } => (10, 0),
-        AnalysisCard::Dc {
-            start, stop, step, ..
-        } => {
-            let n = ((stop - start) / step).abs().floor() as u64 + 1;
-            (n, 4 * n)
+        AnalysisCard::Dc { inner, outer, .. } => {
+            let points = |a: &spx_netlist::DcSweep| a.count().unwrap_or(0) as u64;
+            let n = points(inner).saturating_mul(outer.as_ref().map_or(1, points));
+            (n, n.saturating_mul(4))
         }
         AnalysisCard::Sens {
             ac:
@@ -255,8 +254,8 @@ pub(crate) fn estimate(nl: &Netlist, c: &Circuit) -> CostEstimate {
     let (mut points, mut iters) = (0u64, 0u64);
     for a in &nl.analyses {
         let (p, i) = analysis_work(a);
-        points += p;
-        iters += i;
+        points = points.saturating_add(p);
+        iters = iters.saturating_add(i);
     }
     let devices: usize = st.devices.iter().map(|d| d.count).sum();
     // Calibrated on a MOS1 ring oscillator: ≈ 0.1 µs per device and ≈ 0.05 µs per matrix

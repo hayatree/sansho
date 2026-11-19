@@ -390,7 +390,11 @@ mod tests {
         let mut both = [false; 2];
         for index in 0..20 {
             let nl = plan.sample(Sample { seed: 0, index }).unwrap();
-            let crate::AnalysisCard::Dc { stop, .. } = &nl.analyses[0] else {
+            let crate::AnalysisCard::Dc {
+                inner: crate::DcSweep { stop, .. },
+                ..
+            } = &nl.analyses[0]
+            else {
                 unreachable!()
             };
             let vto = nl.models[0]

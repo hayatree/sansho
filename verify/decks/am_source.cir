@@ -1,0 +1,6 @@
+Delayed AM current into a resistive load
+* Provenance: original R4 verification circuit.
+Iam 0 out AM(0 1m 0.5m 1k 5k 100u 30 0)
+Rload out 0 1k
+.tran 2u 2m 0 2u
+.end

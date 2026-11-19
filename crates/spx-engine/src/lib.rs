@@ -251,13 +251,7 @@ fn run_analysis(
         }
         AnalysisCard::Four { .. } => return Ok((vec![], None)),
         AnalysisCard::Op { .. } => analysis::op(ckt, opts),
-        AnalysisCard::Dc {
-            source,
-            start,
-            stop,
-            step,
-            ..
-        } => {
+        AnalysisCard::Dc { inner, outer, .. } => {
             // A sweep modifies a source value, so it works on its own copy of the circuit.
             let mut own = if ckt.ordering.is_some() {
                 ckt.bind_run(nl, opts)
@@ -270,12 +264,10 @@ fn run_analysis(
                     .unwrap_or_else(|| Diagnostic::error("E-ELAB-INTERNAL", "recompilation failed"))
             })?
             .0;
-            analysis::dc_sweep(&mut own, opts, nl, source, *start, *stop, *step).map(
-                |(analysis, dc)| {
-                    stats = Some(Stats::Dc(dc));
-                    analysis
-                },
-            )
+            analysis::dc_sweep(&mut own, opts, nl, inner, outer.as_ref()).map(|(analysis, dc)| {
+                stats = Some(Stats::Dc(dc));
+                analysis
+            })
         }
         AnalysisCard::Ac {
             sweep,
@@ -467,17 +459,9 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
     let mut outcomes: Vec<_> = match nl.analyses.as_slice() {
         // A lone sweep owns the already elaborated DC circuit. Concurrent
         // analysis cards still need private mutable devices for each sweep.
-        [
-            AnalysisCard::Dc {
-                source,
-                start,
-                stop,
-                step,
-                ..
-            },
-        ] => {
+        [AnalysisCard::Dc { inner, outer, .. }] => {
             vec![
-                analysis::dc_sweep(&mut ckt, &opts, nl, source, *start, *stop, *step).map(
+                analysis::dc_sweep(&mut ckt, &opts, nl, inner, outer.as_ref()).map(
                     |(mut result, stats)| {
                         add_aliases(&ckt, &mut result);
                         (vec![result], Some(Stats::Dc(stats)))

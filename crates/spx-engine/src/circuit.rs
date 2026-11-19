@@ -527,6 +527,14 @@ fn compile_hdl(
     }
 }
 
+fn swept_sources(card: &spx_netlist::AnalysisCard) -> impl Iterator<Item = &str> {
+    let (inner, outer) = match card {
+        spx_netlist::AnalysisCard::Dc { inner, outer, .. } => (Some(inner), outer.as_ref()),
+        _ => (None, None),
+    };
+    inner.into_iter().chain(outer).map(|a| a.source.as_str())
+}
+
 /// Compile a netlist. Returns the circuit and warnings, or all diagnostics on failure.
 pub fn compile(
     nl: &Netlist,
@@ -587,14 +595,7 @@ pub(crate) fn compile_cached(
             "the netlist has no elements",
         )]);
     }
-    let swept: HashSet<_> = nl
-        .analyses
-        .iter()
-        .filter_map(|card| match card {
-            spx_netlist::AnalysisCard::Dc { source, .. } => Some(source.as_str()),
-            _ => None,
-        })
-        .collect();
+    let swept: HashSet<_> = nl.analyses.iter().flat_map(swept_sources).collect();
     let (mut va, va_count) = bind_va(nl, opts, va_modules, &node_index, &swept, false)?;
     let mut nonlinear_count = va_count;
     #[cfg(feature = "jit")]
@@ -1620,12 +1621,14 @@ fn native_groups<'a>(
                         continue;
                     }
                 }
-                let area = inst.get("area", 1.0) * inst.opt(&["m", "mult"]).unwrap_or(1.);
-                if !area.is_finite() || area <= 0. {
+                let copies = inst.opt(&["m", "mult"]).unwrap_or(1.);
+                m.perimeter = inst.get("pj", 0.) * copies;
+                let area = inst.get("area", 1.) * copies;
+                if !area.is_finite() || area <= 0. || m.perimeter < 0. || !m.perimeter.is_finite() {
                     errors.push(
                         Diagnostic::error(
                             "E-ELAB-PARAM",
-                            format!("{}: effective area must be positive", e.name),
+                            format!("{}: invalid effective area or junction perimeter", e.name),
                         )
                         .with_span(e.span),
                     );
@@ -1874,9 +1877,7 @@ impl Circuit {
             }
         }
         for a in &nl.analyses {
-            if let spx_netlist::AnalysisCard::Dc { source, .. } = a {
-                changed.insert(source);
-            }
+            changed.extend(swept_sources(a));
         }
         let indices: HashMap<_, _> = nl
             .elements
@@ -1927,14 +1928,7 @@ impl Circuit {
             &mut diagnostics,
         )?;
         if let Some(ports) = &self.va_ports {
-            let swept = nl
-                .analyses
-                .iter()
-                .filter_map(|a| match a {
-                    spx_netlist::AnalysisCard::Dc { source, .. } => Some(source.as_str()),
-                    _ => None,
-                })
-                .collect();
+            let swept = nl.analyses.iter().flat_map(swept_sources).collect();
             let (mut va, _) = bind_va(
                 nl,
                 opts,
@@ -2099,10 +2093,25 @@ impl<'a> ModelCache<'a> {
             return m.clone();
         }
         let card = self.card(name)?;
-        let m = self.prepare(card, errors).map(|(p, _)| {
+        let m = self.prepare(card, errors).and_then(|(p, _)| {
             let (m, ignored) = DiodeModel::from_params(&p);
             Self::warn_ignored(card, &ignored, diags);
-            m
+            if [m.n, m.nr, m.ns, m.nbv, m.php, m.vj]
+                .iter()
+                .any(|v| !v.is_finite() || *v <= 0.)
+                || [m.fcs, m.fc].iter().any(|v| !(0. ..1.).contains(v))
+                || [m.jsw, m.cjp, m.isr, m.ikf, m.ibv]
+                    .iter()
+                    .any(|v| !v.is_finite() || *v < 0.)
+            {
+                errors.push(
+                    Diagnostic::error("E-ELAB-PARAM", "invalid diode junction parameter")
+                        .with_span(card.span),
+                );
+                None
+            } else {
+                Some(m)
+            }
         });
         self.diodes.insert(name.to_string(), m.clone());
         m
@@ -2118,10 +2127,30 @@ impl<'a> ModelCache<'a> {
             return m.clone();
         }
         let card = self.card(name)?;
-        let m = self.prepare(card, errors).map(|(p, pol)| {
+        let m = self.prepare(card, errors).and_then(|(p, pol)| {
             let (m, ignored) = BjtModel::from_params(&p, pol);
             Self::warn_ignored(card, &ignored, diags);
-            m
+            if !(0. ..=1.).contains(&m.xcjc)
+                || m.rbm < 0.
+                || m.rbm > m.rb
+                || m.irb < 0.
+                || m.ptf < 0.
+                || !matches!(m.subs, 1. | -1.)
+                || m.iss < 0.
+                || m.ns <= 0.
+                || m.nkf <= 0.
+            {
+                errors.push(
+                    Diagnostic::error(
+                        "E-ELAB-PARAM",
+                        "invalid BJT base, transport or substrate parameter",
+                    )
+                    .with_span(card.span),
+                );
+                None
+            } else {
+                Some(m)
+            }
         });
         self.bjts.insert(name.to_string(), m.clone());
         m

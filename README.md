@@ -5,9 +5,9 @@ A fast, agent-native SPICE circuit simulator written in Rust.
 > **Status:** pre-alpha. R, C, L, coupled windings (K), independent and controlled sources
 > (V/I/E/F/G/H/B, including POLY), lossless T lines, SW/CSW switches, diodes,
 > Gummel–Poon BJTs, level-one JFETs, MOS1, partial MOS2/MOS3 and built-in BSIM4.
-> Supports operating and nominal temperatures, DC temperature sweeps, scaled MOS geometry,
+> Supports operating and nominal temperatures, nested DC source and temperature sweeps, SFFM and AM modulation, scaled MOS geometry,
 > capacitor and inductor initial conditions, `.op`, `.dc`, `.ac`, `.tran` (trapezoidal or BDF2 with LTE control),
-> `.noise`, `.tf`, DC/AC `.sens`, `.four`, small-circuit `.pz`, `.meas`, `.model`,
+> `.noise`, `.tf`, DC/AC `.sens`, `.four`, small-circuit `.pz`, `.meas` derivatives and derived scalar expressions, `.model`,
 > `.options`, `.param`/expressions/`.func`, `.subckt`, `.include`/`.lib`, model binning, `.ic`,
 > `.nodeset`, UIC; compiled Verilog-A modules through `.hdl` and `N` instances (VA-3). Results are checked against ngspice (`verify/`). Session API and MCP server for
 > AI agents; pre-run lint and structured diagnostics ([`docs/diagnostics.md`](docs/diagnostics.md));
@@ -16,6 +16,7 @@ A fast, agent-native SPICE circuit simulator written in Rust.
 ```sh
 cargo run -p spx-cli -- run examples/rc_lowpass.cir            # summary
 cargo run -p spx-cli -- run examples/rc_lowpass.cir -r out.raw  # ngspice-compatible raw file
+cargo run -p spx-cli -- run examples/rc_lowpass.cir -r out.raw --raw-format binary
 cargo run -p spx-cli -- run examples/rc_lowpass.cir --json      # machine-readable output
 cargo run -p spx-cli -- check examples/rc_lowpass.cir           # parse + elaborate + lint
 cargo run -p spx-cli -- batch a.cir b.cir -j 8                   # parallel runs, JSON lines

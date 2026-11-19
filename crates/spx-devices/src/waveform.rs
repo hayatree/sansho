@@ -1,9 +1,9 @@
-//! Transient source waveforms (PULSE, SIN, EXP, PWL) and their breakpoints.
+//! Transient source waveforms and timestep constraints.
 //!
 //! Provenance: original work. Waveform definitions and parameter defaults follow the SPICE2
 //! independent-source descriptions in Nagel (1975) and the widely documented SPICE3 behaviour
 //! (zero or missing rise/fall times default to `tstep`, missing width/period to `tstop`).
-//! See `docs/PROVENANCE.md`.
+//! AM and SFFM follow the ngspice user manual, sections 4.1.5 and 4.1.6.
 
 use std::f64::consts::PI;
 
@@ -102,6 +102,67 @@ impl Pulse {
     }
 }
 
+/// Common time base for AM and SFFM, with phase measured from the delay.
+struct Modulation {
+    fc: f64,
+    fm: f64,
+    td: f64,
+    phase_m: f64,
+    phase_c: f64,
+}
+
+impl Modulation {
+    fn new(p: &[f64], carrier: usize, modulator: usize, tp: &TranParams) -> Self {
+        Self {
+            fc: param_or(p, carrier, 500. / tp.tstop, false),
+            fm: param_or(p, modulator, 5. / tp.tstop, false),
+            td: param_or(p, 5, 0., false),
+            phase_m: param_or(p, 6, 0., false).to_radians(),
+            phase_c: param_or(p, 7, 0., false).to_radians(),
+        }
+    }
+
+    fn angles(&self, t: f64) -> (f64, f64) {
+        let angle = 2. * PI * (t - self.td);
+        (
+            self.fc * angle + self.phase_c,
+            self.fm * angle + self.phase_m,
+        )
+    }
+
+    fn index(&self, p: &[f64]) -> f64 {
+        let index = param_or(p, 3, 90., false).max(0.);
+        if self.fm == 0. {
+            index
+        } else {
+            index.min((self.fc / self.fm).abs())
+        }
+    }
+}
+
+/// Start time and maximum step for a modulated source. Bound the upper AM sideband
+/// or the maximum instantaneous FM frequency, including a rapidly varying modulator.
+pub fn step_limit(f: &TranFn, tp: &TranParams) -> Option<(f64, f64)> {
+    let (m, frequency) = match f {
+        TranFn::Am(p) => {
+            let m = Modulation::new(p, 4, 3, tp);
+            let frequency = m.fc.abs() + m.fm.abs();
+            (m, frequency)
+        }
+        TranFn::Sffm(p) => {
+            let m = Modulation::new(p, 2, 4, tp);
+            let index = m.index(p);
+            let mut frequency = m.fc.abs() + index * m.fm.abs();
+            if index > 0. {
+                frequency = frequency.max(m.fm.abs());
+            }
+            (m, frequency)
+        }
+        _ => return None,
+    };
+    (frequency > 0. && m.td < tp.tstop).then(|| (m.td.max(0.), frequency.recip() / 64.))
+}
+
 /// Evaluate a transient function at time `t`.
 pub fn value(f: &TranFn, t: f64, tp: &TranParams) -> f64 {
     match f {
@@ -137,6 +198,24 @@ pub fn value(f: &TranFn, t: f64, tp: &TranParams) -> f64 {
             }
             v
         }
+        TranFn::Sffm(p) => {
+            let m = Modulation::new(p, 2, 4, tp);
+            if t <= m.td {
+                return 0.;
+            }
+            let (carrier, modulator) = m.angles(t);
+            param_or(p, 0, 0., false)
+                + param_or(p, 1, 0., false) * (carrier + m.index(p) * modulator.sin()).sin()
+        }
+        TranFn::Am(p) => {
+            let m = Modulation::new(p, 4, 3, tp);
+            if t <= m.td {
+                return 0.;
+            }
+            let (carrier, modulator) = m.angles(t);
+            let envelope = param_or(p, 1, 0., false) + param_or(p, 2, 1., false) * modulator.sin();
+            param_or(p, 0, 0., false) + envelope * carrier.sin()
+        }
         TranFn::Pwl(pts) => pwl(pts, t),
     }
 }
@@ -169,6 +248,14 @@ pub fn initial_value(f: &TranFn) -> f64 {
             let phase = param_or(p, 5, 0.0, false).to_radians();
             param_or(p, 0, 0.0, false) + param_or(p, 1, 0.0, false) * phase.sin()
         }
+        TranFn::Sffm(_) | TranFn::Am(_) => value(
+            f,
+            0.,
+            &TranParams {
+                tstep: 1.,
+                tstop: 1.,
+            },
+        ),
         TranFn::Pwl(pts) => pwl(pts, 0.0),
     }
 }
@@ -183,6 +270,9 @@ pub fn breakpoints(f: &TranFn, tp: &TranParams, out: &mut Vec<f64>) {
             let td1 = param_or(p, 2, 0.0, false);
             let td2 = param_or(p, 4, td1 + tp.tstep, true);
             out.extend([td1, td2].into_iter().filter(|&t| t > 0.0 && t <= tstop));
+        }
+        TranFn::Am(p) | TranFn::Sffm(p) => {
+            out.extend(param(p, 5).filter(|&td| td > 0. && td <= tstop))
         }
         TranFn::Pwl(pts) => out.extend(pts.iter().map(|p| p.0).filter(|&t| t >= 0.0 && t <= tstop)),
     }
@@ -219,6 +309,28 @@ mod tests {
         let f = TranFn::Pulse(vec![0.0, 2.0]);
         assert!((value(&f, 0.5e-9, &TP) - 1.0).abs() < 1e-12);
         assert_eq!(value(&f, 0.5e-6, &TP), 2.0);
+    }
+
+    #[test]
+    fn modulated_sources_at_quadrature_and_delay() {
+        let fm = TranFn::Sffm(vec![1., 2., 4e6, 0.5, 1e6, 1e-7, 90., 30.]);
+        let am = TranFn::Am(vec![2., 1., 3., 1e6, 5e6, 1e-7, 0., 30.]);
+        for f in [&am, &fm] {
+            assert_eq!(initial_value(f), 0.);
+            assert_eq!(value(f, 1e-7, &TP), 0.);
+            let mut points = Vec::new();
+            breakpoints(f, &TP, &mut points);
+            assert_eq!(points, [1e-7]);
+        }
+        assert!((value(&fm, 0.35e-6, &TP) - 2.).abs() < 1e-12);
+        assert!((value(&am, 0.35e-6, &TP) - (2. + 2. * 3_f64.sqrt())).abs() < 1e-12);
+
+        let t = TP.tstop / 2000.;
+        let modulator = (2. * PI * 5. * t / TP.tstop).sin();
+        let fm = TranFn::Sffm(vec![1., 2.]);
+        let am = TranFn::Am(vec![2., 1.]);
+        assert!((value(&fm, t, &TP) - (1. + 2. * (90. * modulator).cos())).abs() < 1e-12);
+        assert!((value(&am, t, &TP) - (3. + modulator)).abs() < 1e-12);
     }
 
     #[test]

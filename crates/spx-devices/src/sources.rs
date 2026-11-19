@@ -56,6 +56,14 @@ impl SourceSet {
         }
     }
 
+    fn step_limits(&self, tp: &TranParams, out: &mut Vec<(f64, f64)>) {
+        out.extend(
+            self.specs
+                .iter()
+                .filter_map(|s| waveform::step_limit(s.tran.as_ref()?, tp)),
+        );
+    }
+
     fn set_dc(&mut self, instance: &str, param: &str, value: f64) -> bool {
         match self.index(instance) {
             Some(i) if param == "dc" => {
@@ -149,6 +157,9 @@ impl DeviceGroup for VoltageSources {
     fn breakpoints(&self, tp: &TranParams, out: &mut Vec<f64>) {
         self.set.breakpoints(tp, out);
     }
+    fn step_limits(&self, tp: &TranParams, out: &mut Vec<(f64, f64)>) {
+        self.set.step_limits(tp, out);
+    }
     fn set_param(&mut self, instance: &str, param: &str, value: f64) -> bool {
         self.set.set_dc(instance, param, value)
     }
@@ -209,6 +220,9 @@ impl DeviceGroup for CurrentSources {
     }
     fn breakpoints(&self, tp: &TranParams, out: &mut Vec<f64>) {
         self.set.breakpoints(tp, out);
+    }
+    fn step_limits(&self, tp: &TranParams, out: &mut Vec<(f64, f64)>) {
+        self.set.step_limits(tp, out);
     }
     fn set_param(&mut self, instance: &str, param: &str, value: f64) -> bool {
         self.set.set_dc(instance, param, value)

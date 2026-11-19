@@ -29,6 +29,12 @@ struct Cli {
     command: Command,
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum RawFormat {
+    Ascii,
+    Binary,
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Parse and simulate a netlist.
@@ -41,9 +47,11 @@ enum Command {
         mc_run: Option<u64>,
         /// Netlist file.
         netlist: PathBuf,
-        /// Write an ASCII raw file.
+        /// Write an ngspice raw file.
         #[arg(short, long)]
         raw: Option<PathBuf>,
+        #[arg(long, value_enum, default_value = "ascii", requires = "raw")]
+        raw_format: RawFormat,
         /// Print results and diagnostics as JSON on stdout.
         #[arg(long)]
         json: bool,
@@ -177,18 +185,21 @@ fn summary(results: &SimResults, intervals: &[u32]) {
     }
 }
 
-fn write_raw(path: &PathBuf, results: &SimResults) -> Result<(), ExitCode> {
+fn write_raw(path: &PathBuf, format: RawFormat, results: &SimResults) -> Result<(), ExitCode> {
     let file = std::fs::File::create(path).map_err(|e| {
         eprintln!("error: cannot create {}: {e}", path.display());
         ExitCode::from(2)
     })?;
     let mut w = std::io::BufWriter::new(file);
-    spx_output::write_raw_ascii(results, &mut w)
-        .and_then(|()| w.flush())
-        .map_err(|e| {
-            eprintln!("error: cannot write {}: {e}", path.display());
-            ExitCode::from(2)
-        })
+    match format {
+        RawFormat::Ascii => spx_output::write_raw_ascii(results, &mut w),
+        RawFormat::Binary => spx_output::write_raw_binary(results, &mut w),
+    }
+    .and_then(|()| w.flush())
+    .map_err(|e| {
+        eprintln!("error: cannot write {}: {e}", path.display());
+        ExitCode::from(2)
+    })
 }
 
 /// Resolves `.include` / `.lib` relative to the netlist's directory.
@@ -351,6 +362,7 @@ fn input_error(d: &[Diagnostic], json: bool) -> ExitCode {
 fn run(
     netlist: &PathBuf,
     raw: Option<&PathBuf>,
+    raw_format: RawFormat,
     json: bool,
     jobs: Option<usize>,
     replay: Option<(u64, u64)>,
@@ -385,7 +397,7 @@ fn run(
         Ok(out) => {
             let _phase = spx_diag::Phase::start("output");
             if let Some(p) = raw {
-                write_raw(p, &out.results)?;
+                write_raw(p, raw_format, &out.results)?;
             }
             if json {
                 return Ok(print_result(JsonOut::Ok {
@@ -416,7 +428,7 @@ fn run(
             if let (Some(p), Some(partial)) = (raw, &err.partial)
                 && !partial.analyses.is_empty()
             {
-                write_raw(p, partial)?;
+                write_raw(p, raw_format, partial)?;
             }
             if json {
                 return Ok(print_result(JsonOut::Error {
@@ -484,11 +496,19 @@ fn main() -> ExitCode {
         Command::Run {
             netlist,
             raw,
+            raw_format,
             json,
             jobs,
             mc_seed,
             mc_run,
-        } => run(netlist, raw.as_ref(), *json, *jobs, mc_seed.zip(*mc_run)),
+        } => run(
+            netlist,
+            raw.as_ref(),
+            *raw_format,
+            *json,
+            *jobs,
+            mc_seed.zip(*mc_run),
+        ),
         Command::Mc {
             netlist,
             runs,

@@ -679,11 +679,17 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
         Ok(())
     }
 
+    /// Forward transport terms whose small-signal gain acquires exp(-jωτ).
+    fn transport_delays(&self, _state: &[f64], _emit: &mut dyn FnMut(f64, Node, Node, f64)) {}
+
     /// Write the AC excitation into the `b` slots.
     fn eval_ac(&self, out: &mut AcSlots) {
         out.re.iter_mut().for_each(|v| *v = 0.0);
         out.im.iter_mut().for_each(|v| *v = 0.0);
     }
+
+    /// Append (activation time, maximum step) pairs for transient sampling.
+    fn step_limits(&self, _tran: &TranParams, _out: &mut Vec<(f64, f64)>) {}
 
     /// Append transient breakpoints in `[0, tstop]`.
     fn breakpoints(&self, _tran: &TranParams, _out: &mut Vec<f64>) {}

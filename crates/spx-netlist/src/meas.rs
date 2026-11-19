@@ -101,7 +101,8 @@ impl<'a> Cursor<'a> {
                 ));
             }
         };
-        let pos = self.next("a node name")?.lower();
+        let first = self.next("a node name")?;
+        let pos = first.lower();
         let pos = if pos == "gnd" {
             crate::GROUND.into()
         } else {
@@ -111,9 +112,11 @@ impl<'a> Cursor<'a> {
         let neg = match self.t.get(self.i) {
             Some(t)
                 if !current
+                    && !first.ends_group
                     && !t.is_eq()
-                    && !KEYWORDS.contains(&t.lower().as_str())
-                    && !self.t.get(self.i + 1).is_some_and(Token::is_eq) =>
+                    && (t.ends_group
+                        || (!KEYWORDS.contains(&t.lower().as_str())
+                            && !self.t.get(self.i + 1).is_some_and(Token::is_eq))) =>
             {
                 self.i += 1;
                 let n = t.lower();
@@ -130,8 +133,8 @@ impl<'a> Cursor<'a> {
     }
 
     /// Optional `RISE|FALL|CROSS=n|LAST` and `TD=t` qualifiers.
-    fn qualifiers(&mut self) -> Result<(CrossDir, Option<u32>, f64), Diagnostic> {
-        let (mut dir, mut n, mut td) = (CrossDir::Cross, Some(1), 0.0);
+    fn qualifiers(&mut self) -> Result<(CrossDir, Option<u32>, Option<f64>), Diagnostic> {
+        let (mut dir, mut n, mut td) = (CrossDir::Cross, Some(1), None);
         let mut seen_dir = false;
         while let Some(k) = self.peek() {
             match k.as_str() {
@@ -155,7 +158,9 @@ impl<'a> Cursor<'a> {
                         None
                     } else {
                         match parse_number(&t.text) {
-                            Some(v) if v >= 1.0 && v.fract() == 0.0 => Some(v as u32),
+                            Some(v) if v >= 1.0 && v <= f64::from(u32::MAX) && v.fract() == 0.0 => {
+                                Some(v as u32)
+                            }
                             _ => {
                                 return Err(error(
                                     t.span,
@@ -168,7 +173,7 @@ impl<'a> Cursor<'a> {
                         }
                     };
                 }
-                "td" => td = self.kv("TD")?,
+                "td" if td.is_none() => td = Some(self.kv("TD")?),
                 _ => break,
             }
         }
@@ -189,6 +194,7 @@ impl<'a> Cursor<'a> {
         Ok(MeasEvent::Cross {
             signal,
             value,
+            reference: None,
             dir,
             n,
             td,
@@ -202,11 +208,21 @@ impl<'a> Cursor<'a> {
         }
         let signal = self.signal()?;
         self.eat_eq()?;
-        let value = self.number("the threshold")?;
+        let (value, reference) = if self
+            .t
+            .get(self.i)
+            .and_then(|t| parse_number(&t.text))
+            .is_some()
+        {
+            (self.number("the threshold")?, None)
+        } else {
+            (0., Some(self.signal()?))
+        };
         let (dir, n, td) = self.qualifiers()?;
         Ok(MeasEvent::Cross {
             signal,
             value,
+            reference,
             dir,
             n,
             td,
@@ -261,7 +277,19 @@ pub(crate) fn parse_meas(line: &Line) -> Result<MeasureCard, Diagnostic> {
         "when" => MeasKind::When {
             event: c.when_event()?,
         },
-        "find" => {
+        "param" => {
+            c.eat_eq()?;
+            let (_, expression) = line
+                .raw
+                .split_once('=')
+                .ok_or_else(|| error(span, "expected PARAM=expression"))?;
+            crate::parse_expr(expression).map_err(|e| error(span, e))?;
+            c.i = t.len();
+            MeasKind::Param {
+                expression: expression.trim().into(),
+            }
+        }
+        "deriv" | "derivative" | "find" => {
             let signal = c.signal()?;
             let event = match c.peek().as_deref() {
                 Some("when") => {
@@ -269,12 +297,23 @@ pub(crate) fn parse_meas(line: &Line) -> Result<MeasureCard, Diagnostic> {
                     c.when_event()?
                 }
                 Some("at") => MeasEvent::At { at: c.kv("AT")? },
-                _ => return Err(error(c.span(), "expected WHEN or AT after FIND <signal>")),
+                _ => {
+                    return Err(error(
+                        c.span(),
+                        "expected WHEN or AT after the measured signal",
+                    ));
+                }
             };
-            MeasKind::Find { signal, event }
+            if head == "find" {
+                MeasKind::Find { signal, event }
+            } else {
+                MeasKind::Deriv { signal, event }
+            }
         }
-        "max" | "min" | "pp" | "avg" | "rms" | "integ" | "integral" => {
+        "max_at" | "min_at" | "max" | "min" | "pp" | "avg" | "rms" | "integ" | "integral" => {
             let stat = match head.as_str() {
+                "max_at" => MeasStat::MaxAt,
+                "min_at" => MeasStat::MinAt,
                 "max" => MeasStat::Max,
                 "min" => MeasStat::Min,
                 "pp" => MeasStat::Pp,
@@ -286,8 +325,8 @@ pub(crate) fn parse_meas(line: &Line) -> Result<MeasureCard, Diagnostic> {
             let (mut from, mut to) = (None, None);
             while let Some(k) = c.peek() {
                 match k.as_str() {
-                    "from" => from = Some(c.kv("FROM")?),
-                    "to" => to = Some(c.kv("TO")?),
+                    "from" if from.is_none() => from = Some(c.kv("FROM")?),
+                    "to" if to.is_none() => to = Some(c.kv("TO")?),
                     _ => break,
                 }
             }
@@ -301,7 +340,7 @@ pub(crate) fn parse_meas(line: &Line) -> Result<MeasureCard, Diagnostic> {
         other => {
             return Err(
                 error(t[3].span, format!("unsupported .meas form `{other}`"))
-                    .with_note("supported: TRIG/TARG, WHEN, FIND, MAX, MIN, PP, AVG, RMS, INTEG"),
+                    .with_note("supported: TRIG/TARG, WHEN, FIND, DERIV, PARAM, MAX, MAX_AT, MIN, MIN_AT, PP, AVG, RMS, INTEG"),
             );
         }
     };
@@ -343,7 +382,7 @@ C1 b 0 1n
                 event: MeasEvent::Cross { n, td, .. },
             } => {
                 assert_eq!(*n, None);
-                assert_eq!(*td, 1e-6);
+                assert_eq!(*td, Some(1e-6));
             }
             k => panic!("{k:?}"),
         }

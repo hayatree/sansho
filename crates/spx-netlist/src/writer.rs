@@ -45,6 +45,12 @@ fn source(out: &mut String, s: &SourceSpec) {
         Some(TranFn::Sin(v)) => {
             let _ = write!(out, " sin({})", list(v));
         }
+        Some(TranFn::Sffm(v)) => {
+            let _ = write!(out, " sffm({})", list(v));
+        }
+        Some(TranFn::Am(v)) => {
+            let _ = write!(out, " am({})", list(v));
+        }
         Some(TranFn::Exp(v)) => {
             let _ = write!(out, " exp({})", list(v));
         }
@@ -72,7 +78,7 @@ fn signal(s: &Signal) -> String {
     }
 }
 
-fn qualifiers(dir: CrossDir, n: Option<u32>, td: f64) -> String {
+fn qualifiers(dir: CrossDir, n: Option<u32>, td: Option<f64>) -> String {
     let d = match dir {
         CrossDir::Rise => "rise",
         CrossDir::Fall => "fall",
@@ -80,7 +86,7 @@ fn qualifiers(dir: CrossDir, n: Option<u32>, td: f64) -> String {
     };
     let n = n.map_or("last".to_string(), |n| n.to_string());
     let mut s = format!(" {d}={n}");
-    if td != 0.0 {
+    if let Some(td) = td {
         let _ = write!(s, " td={}", num(td));
     }
     s
@@ -93,6 +99,7 @@ fn event(e: &MeasEvent, when: bool) -> String {
         MeasEvent::Cross {
             signal: s,
             value,
+            reference,
             dir,
             n,
             td,
@@ -101,7 +108,7 @@ fn event(e: &MeasEvent, when: bool) -> String {
             format!(
                 "{}{sep}{}{}",
                 signal(s),
-                num(*value),
+                reference.as_ref().map_or_else(|| num(*value), signal),
                 qualifiers(*dir, *n, *td)
             )
         }
@@ -120,13 +127,27 @@ pub fn write_measure(m: &MeasureCard) -> String {
             format!("trig {} targ {}", event(trig, false), event(targ, false))
         }
         MeasKind::When { event: e } => format!("when {}", event(e, true)),
+        MeasKind::Param { expression } => format!("param={expression}"),
         MeasKind::Find {
             signal: s,
             event: e,
-        } => match e {
-            MeasEvent::At { .. } => format!("find {} {}", signal(s), event(e, true)),
-            MeasEvent::Cross { .. } => format!("find {} when {}", signal(s), event(e, true)),
-        },
+        }
+        | MeasKind::Deriv {
+            signal: s,
+            event: e,
+        } => {
+            let op = if matches!(m.kind, MeasKind::Find { .. }) {
+                "find"
+            } else {
+                "deriv"
+            };
+            let when = if matches!(e, MeasEvent::At { .. }) {
+                ""
+            } else {
+                "when "
+            };
+            format!("{op} {} {when}{}", signal(s), event(e, true))
+        }
         MeasKind::Stat {
             stat,
             signal: s,
@@ -134,6 +155,8 @@ pub fn write_measure(m: &MeasureCard) -> String {
             to,
         } => {
             let st = match stat {
+                MeasStat::MaxAt => "max_at",
+                MeasStat::MinAt => "min_at",
                 MeasStat::Max => "max",
                 MeasStat::Min => "min",
                 MeasStat::Pp => "pp",
@@ -227,13 +250,20 @@ pub fn write_analysis(a: &AnalysisCard) -> String {
                 num(*fstop)
             )
         }
-        AnalysisCard::Dc {
-            source,
-            start,
-            stop,
-            step,
-            ..
-        } => format!(".dc {source} {} {} {}", num(*start), num(*stop), num(*step)),
+        AnalysisCard::Dc { inner, outer, .. } => {
+            let mut text = String::from(".dc");
+            for axis in std::iter::once(inner).chain(outer) {
+                let _ = write!(
+                    text,
+                    " {} {} {} {}",
+                    axis.source,
+                    num(axis.start),
+                    num(axis.stop),
+                    num(axis.step)
+                );
+            }
+            text
+        }
         AnalysisCard::Ac {
             sweep,
             points,

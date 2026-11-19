@@ -762,7 +762,7 @@ impl Parser {
                         }
                     }
                 }
-                "pulse" | "sin" | "exp" | "pwl" => {
+                "pulse" | "sin" | "exp" | "pwl" | "sffm" | "am" => {
                     let start = i;
                     i += 1;
                     let mut vals = Vec::new();
@@ -798,7 +798,7 @@ impl Parser {
 
     fn tran_fn(&mut self, word: &str, vals: Vec<f64>, span: Span) -> Option<TranFn> {
         let (min, max) = match word {
-            "pulse" => (2, 8),
+            "pulse" | "sffm" | "am" => (2, 8),
             "sin" => (2, 6),
             "exp" => (2, 6),
             _ => (2, usize::MAX),
@@ -824,6 +824,8 @@ impl Parser {
         Some(match word {
             "pulse" => TranFn::Pulse(vals),
             "sin" => TranFn::Sin(vals),
+            "sffm" => TranFn::Sffm(vals),
+            "am" => TranFn::Am(vals),
             "exp" => TranFn::Exp(vals),
             _ => {
                 let pts: Vec<(f64, f64)> = vals
@@ -1508,7 +1510,7 @@ impl Parser {
     }
 
     fn frequency_sweep(&mut self, t: &[Token], span: Span) -> Option<crate::FrequencySweep> {
-        if t.len() < 4 {
+        if t.len() != 4 {
             self.err("E-PARSE-ARITY", "expected dec|oct|lin n fstart fstop", span);
             return None;
         }
@@ -1561,6 +1563,16 @@ impl Parser {
 
     fn analysis_probe(&mut self, t: &[Token], span: Span) -> Option<crate::Probe> {
         use crate::Probe;
+        if let Some(k) = t.iter().position(|t| t.ends_group)
+            && k + 1 < t.len()
+        {
+            self.err(
+                "E-PARSE-ARITY",
+                "unexpected argument after output probe",
+                t[k + 1].span,
+            );
+            return None;
+        }
         match t {
             [k, p] if k.lower() == "v" => Some(Probe::Voltage(node_name(p), "0".into())),
             [k, p, n] if k.lower() == "v" => Some(Probe::Voltage(node_name(p), node_name(n))),
@@ -1576,42 +1588,46 @@ impl Parser {
         let span = line.span();
         let t = &line.tokens;
         match head {
-            ".op" => self.analyses.push(AnalysisCard::Op { span }),
+            ".op" if t.len() == 1 => self.analyses.push(AnalysisCard::Op { span }),
+            ".op" => self.err("E-PARSE-ARITY", ".op takes no arguments", t[1].span),
             ".dc" => {
-                let Some(t) = self.need(line, 5, ".dc srcname start stop incr") else {
-                    return;
-                };
-                let (Some(start), Some(stop), Some(step)) = (
-                    self.number(&t[2], "start"),
-                    self.number(&t[3], "stop"),
-                    self.number(&t[4], "increment"),
-                ) else {
-                    return;
-                };
-                if step == 0.0 || (stop - start) * step < 0.0 {
+                if !matches!(t.len(), 5 | 9) {
                     self.err(
-                        "E-PARSE-VALUE",
-                        "DC sweep increment must be non-zero and point from start to stop",
-                        t[4].span,
+                        "E-PARSE-ARITY",
+                        ".dc requires one or two source/start/stop/step groups",
+                        span,
                     );
                     return;
                 }
-                if t.len() > 5 {
-                    self.diags.push(
-                        Diagnostic::warning(
-                            "W-PARSE-IGNORED",
-                            "nested DC sweeps are not supported yet; the second sweep was ignored",
-                        )
-                        .with_span(t[5].span),
-                    );
-                }
-                self.analyses.push(AnalysisCard::Dc {
-                    span,
-                    source: t[1].lower(),
-                    start,
-                    stop,
-                    step,
-                });
+                let mut axis = |t: &[Token]| {
+                    let sweep = crate::DcSweep {
+                        source: t[0].lower(),
+                        start: self.number(&t[1], "start")?,
+                        stop: self.number(&t[2], "stop")?,
+                        step: self.number(&t[3], "increment")?,
+                    };
+                    if sweep.count().is_none() {
+                        self.err(
+                            "E-PARSE-VALUE",
+                            "invalid DC sweep range or increment",
+                            t[3].span,
+                        );
+                        return None;
+                    }
+                    Some(sweep)
+                };
+                let Some(inner) = axis(&t[1..5]) else { return };
+                let outer = if t.len() == 9 {
+                    let Some(outer) = axis(&t[5..]) else { return };
+                    if outer.source == inner.source {
+                        self.err("E-PARSE-VALUE", "DC sweep axes must be distinct", t[5].span);
+                        return;
+                    }
+                    Some(outer)
+                } else {
+                    None
+                };
+                self.analyses.push(AnalysisCard::Dc { span, inner, outer });
             }
             ".tf" | ".sens" => {
                 let mut end = t.len() - usize::from(head == ".tf");
@@ -1771,7 +1787,7 @@ impl Parser {
                     points,
                     fstart,
                     fstop,
-                }) = self.frequency_sweep(&t[1..], span)
+                }) = self.frequency_sweep(if noise.is_some() { &t[1..5] } else { &t[1..] }, span)
                 else {
                     return;
                 };
@@ -1803,7 +1819,7 @@ impl Parser {
                 let mut uic = false;
                 let mut nums = Vec::new();
                 for tok in &t[1..] {
-                    if tok.lower() == "uic" {
+                    if tok.lower() == "uic" && tok.span == t[t.len() - 1].span {
                         uic = true;
                     } else if let Some(v) = self.number(tok, ".tran parameter") {
                         nums.push(v);
@@ -1924,6 +1940,7 @@ impl Parser {
                 let Some(t) = self.need(line, 2, ".temp value") else {
                     return;
                 };
+                self.no_extra(t, 2);
                 if let Some(v) = self.number(&t[1], "the temperature") {
                     self.options.push(OptionCard {
                         name: "temp".into(),
@@ -2140,5 +2157,31 @@ R2 ignored after end 1
         assert!(
             matches!(&nl.elements[1].kind, ElementKind::Resistor { value, .. } if *value == 2e3)
         );
+    }
+}
+
+#[cfg(test)]
+mod analysis_arity_tests {
+    #[test]
+    fn trailing_analysis_arguments_are_diagnosed() {
+        for card in [
+            ".op junk",
+            ".dc v1 0 1 1 temp 0 10",
+            ".dc v1 0 1 1 temp 0 10 10 junk",
+            ".ac dec 1 1 10 extra",
+            ".tran 1n 1u uic uic",
+            ".tran 1n 1u 0 1n 1n",
+            ".noise v(a) v1 lin 1 1 10 2 junk",
+            ".sens v(a) ac lin 1 1 10 extra",
+            ".tf v(a) v1 junk",
+            ".sens v(a) junk",
+            ".pz a 0 b 0 vol pol junk",
+            ".four 100 v(a) junk",
+        ] {
+            assert!(
+                crate::parse(&format!("arity\nV1 a 0\nR1 a 0 1k\n{card}\n")).is_err(),
+                "{card}"
+            );
+        }
     }
 }

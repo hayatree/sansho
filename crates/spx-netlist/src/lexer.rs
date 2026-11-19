@@ -17,6 +17,8 @@ pub struct Token {
     pub text: String,
     /// Position of the first character.
     pub span: Span,
+    /// The token is followed by a closing parenthesis.
+    pub ends_group: bool,
 }
 
 impl Token {
@@ -108,6 +110,7 @@ fn tokenize(text: &str, line_no: u32, col_offset: u32, out: &mut Vec<Token>) {
             out.push(Token {
                 text: std::mem::take(cur),
                 span: Span::new(line_no, cur_col),
+                ends_group: false,
             });
         }
     };
@@ -138,7 +141,13 @@ fn tokenize(text: &str, line_no: u32, col_offset: u32, out: &mut Vec<Token>) {
                 close = Some(if ch == '{' { '}' } else { ch });
                 depth = 0;
             }
-            c if c.is_whitespace() || c == ',' || c == '(' || c == ')' => {
+            ')' => {
+                flush(&mut cur, cur_col, out);
+                if let Some(token) = out.last_mut() {
+                    token.ends_group = true;
+                }
+            }
+            c if c.is_whitespace() || c == ',' || c == '(' => {
                 flush(&mut cur, cur_col, out);
             }
             '=' => {
@@ -146,6 +155,7 @@ fn tokenize(text: &str, line_no: u32, col_offset: u32, out: &mut Vec<Token>) {
                 out.push(Token {
                     text: "=".into(),
                     span: Span::new(line_no, col),
+                    ends_group: false,
                 });
             }
             c => {

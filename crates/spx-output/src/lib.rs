@@ -231,6 +231,15 @@ pub struct SimResults {
 
 /// Write results as an ngspice-compatible ASCII raw file (one plot per analysis).
 pub fn write_raw_ascii(results: &SimResults, w: &mut impl Write) -> io::Result<()> {
+    write_raw(results, w, false)
+}
+
+/// Write point-major native double precision records after each plot header.
+pub fn write_raw_binary(results: &SimResults, w: &mut impl Write) -> io::Result<()> {
+    write_raw(results, w, true)
+}
+
+fn write_raw(results: &SimResults, w: &mut impl Write, binary: bool) -> io::Result<()> {
     for a in &results.analyses {
         let complex = matches!(a.data, Data::Complex { .. });
         let mut vars: Vec<&Variable> = Vec::new();
@@ -239,6 +248,21 @@ pub fn write_raw_ascii(results: &SimResults, w: &mut impl Write) -> io::Result<(
         }
         vars.extend(a.variables.iter());
         let npoints = a.len();
+
+        let valid = match &a.data {
+            Data::Real { columns } => {
+                columns.len() == a.variables.len() && columns.iter().all(|c| c.len() == npoints)
+            }
+            Data::Complex { columns } => {
+                columns.len() == a.variables.len() && columns.iter().all(|c| c.len() == npoints)
+            }
+        };
+        if !valid {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "raw plot has inconsistent column dimensions",
+            ));
+        }
         writeln!(w, "Title: {}", results.title)?;
         writeln!(w, "Date: unknown")?;
         writeln!(w, "Plotname: {}", a.kind.plot_name())?;
@@ -248,6 +272,31 @@ pub fn write_raw_ascii(results: &SimResults, w: &mut impl Write) -> io::Result<(
         writeln!(w, "Variables:")?;
         for (i, v) in vars.iter().enumerate() {
             writeln!(w, "\t{i}\t{}\t{}", v.name, v.quantity.raw_name())?;
+        }
+        if binary {
+            writeln!(w, "Binary:")?;
+            for p in 0..npoints {
+                if a.scale.is_some() {
+                    w.write_all(&a.scale_values[p].to_ne_bytes())?;
+                    if complex {
+                        w.write_all(&0f64.to_ne_bytes())?;
+                    }
+                }
+                match &a.data {
+                    Data::Real { columns } => {
+                        for c in columns {
+                            w.write_all(&c[p].to_ne_bytes())?;
+                        }
+                    }
+                    Data::Complex { columns } => {
+                        for c in columns {
+                            w.write_all(&c[p].0.to_ne_bytes())?;
+                            w.write_all(&c[p].1.to_ne_bytes())?;
+                        }
+                    }
+                }
+            }
+            continue;
         }
         writeln!(w, "Values:")?;
         for p in 0..npoints {
@@ -312,6 +361,31 @@ mod tests {
         };
         let mut buf = Vec::new();
         write_raw_ascii(&r, &mut buf).unwrap();
+        let mut binary = Vec::new();
+        let mut plots = r.clone();
+        let mut ac = r.analyses[0].clone();
+        ac.kind = AnalysisKind::Ac;
+        ac.data = Data::Complex {
+            columns: vec![vec![(1., -2.), (3., -4.)]],
+        };
+        plots.analyses.push(ac);
+        write_raw_binary(&plots, &mut binary).unwrap();
+        let marker = b"Binary:\n";
+        let mut rest = binary.as_slice();
+        for expected in [
+            vec![0., 0., 1e-9, 0.5],
+            vec![0., 0., 1., -2., 1e-9, 0., 3., -4.],
+        ] {
+            let offset = rest
+                .windows(marker.len())
+                .position(|v| v == marker)
+                .unwrap()
+                + marker.len();
+            let bytes: Vec<_> = expected.into_iter().flat_map(f64::to_ne_bytes).collect();
+            assert_eq!(&rest[offset..offset + bytes.len()], bytes);
+            rest = &rest[offset + bytes.len()..];
+        }
+        assert!(rest.is_empty());
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("No. Variables: 2\nNo. Points: 2\n"));
         assert!(s.contains("\t1\tv(out)\tvoltage\n"));
