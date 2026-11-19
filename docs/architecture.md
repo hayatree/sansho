@@ -154,7 +154,8 @@ pub trait DeviceGroup: Send + Sync {
    positions within a group are fixed.
 2. The gather map stores a per-group scatter table in the original accumulation
    order. Native circuits stream these tables, with conductance and charge
-   assembly in independent tasks. Circuits containing Verilog-A devices also
+   assembly in independent tasks. Large native nonlinear circuits can also
+   split a table by destination tile while preserving its source order. Circuits containing Verilog-A devices also
    have a CSR-style table for arrays above 2,048 destinations.
 3. The summation can be parallelized per matrix value k (each k is independent; its summation order
    is fixed).
@@ -451,10 +452,10 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 
 | Layer | Target | Mechanism | When |
 |---|---|---|---|
-| L0 | Independent jobs (analyses of one netlist, batches of netlists) | Shared compiled circuit, one workspace per job, `std::thread::scope` with index-ordered results | M2 (done) |
+| L0 | Independent jobs (analyses of one netlist, batches of netlists) | Shared compiled circuit, one workspace per job, Rayon with index-ordered results | M2 (done) |
 | L1 | Device evaluation within a run | Parallel over group × chunk (D3/D4) | M3 (done) |
 | L2 | Matrix assembly within a run | Parallel reduction per value index | M3 (done) |
-| L3 | LU within a run | Parallel BTF blocks, parallel refactor | M5 |
+| L3 | Numeric LU within a run | Independent column subtrees of a pivoted BTF block | M5-4 |
 | G1 | GPU batch | Same topology × N instances (MC): device eval on GPU; LU as CPU batch or cuDSS uniform batch | M5 |
 | G2 | GPU-resident single run | Assembly through LU entirely on GPU. Research track | TBD |
 
@@ -467,9 +468,32 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
   BSIM4 has weight four. Linear-only analyses currently use one engine worker.
   The serial gather traverses source slots by group. Parallel workers can
   gather conductance and charge concurrently, each in fixed addition order.
-- BTF factorization is serial in M5-1. In both multipliers one block holds
-  5,034 of the 5,106 unknowns. Parallel work within this block would address
-  substantially more arithmetic than scheduling the 67 other blocks.
+- L3 uses the upper pattern of the pivoted Gilbert–Peierls factors. Each
+  upper entry in column `j` creates a dependency on the corresponding earlier
+  lower column. For blocks of at least 2,048 columns, a union-find traversal
+  collects independent components until the next component exceeds
+  `max(64, block_size / min(workers, 8))` columns. A prefix of at least 256 columns and two components
+  qualifies. Whole components are assigned by estimated update count to at
+  most twelve tasks on the run's existing pool. Each task has a private
+  scatter vector of eight bytes per block row and exclusive write ownership
+  of its columns. The join precedes the serial suffix.
+- Each column follows its original input and update order. Tasks return the
+  smallest rejected column in elimination order. All preceding factors are
+  then valid for this Jacobian. Fresh pivot search reconstructs the suffix
+  in serial order. It can replay a structural reach when every predecessor
+  still has the recorded pivot and lower-row sequence and every candidate
+  row is still free. Blocks enable this cache after at least eight pivot
+  searches in a window of 128 factorizations. A changed edge crossing
+  task boundaries triggers a schedule rebuild.
+  Triangular solves accumulate contributions in the original column order.
+- Native nonlinear circuits of at least 2,048 unknowns can split gather maps
+  of at least 32,768 contributions into 512-destination tiles. Each tile
+  accumulates every contribution in group and slot order. For histories of
+  at least 32,768 charge samples the step controller computes derivatives
+  and LTE in chunks of 2,048. Each sample follows the same scalar formula.
+  The parallel reduction takes the maximum after mapping a nonfinite error
+  ratio to infinity. The MOS1 converged sampler writes its terminal charges
+  and Meyer history using the same voltage reconstruction as Newton.
 - L1 and L2 use the circuit-size thresholds in §4. The [performance report](performance.md) describes the VA benchmarks and timings.
 - Measured (M3, 1001-stage MOS1 ring oscillator, 1595 Newton iterations): assembly 466 ms on 1
   thread, 219 ms on 4, 194 ms on 8; LU (serial until M5) ≈ 145 ms. Results are bit-identical.

@@ -13,3 +13,4 @@ workspace = true
 [dependencies]
 faer = "0.24.4"
 
+rayon = "1.12.0"

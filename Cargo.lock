@@ -1615,6 +1615,7 @@ name = "spx-sparse"
 version = "0.0.0"
 dependencies = [
  "faer",
+ "rayon",
 ]
 
 [[package]]

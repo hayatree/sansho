@@ -74,24 +74,25 @@ def sample(binary, deck, jobs, raw, profile):
     return wall, digest
 
 
-def check_bits(binary, decks, directory):
+def check_bits(binary, decks, directory, jobs):
     """Compare round-trip JSON for every internal and exported binary64 sample."""
     for deck in decks:
         path = directory / (deck + ".cir")
         path.write_text("".join(line for line in (HERE / path.name).read_text().splitlines(True)
                                 if line.strip().lower().split()[:1] != [".save"]))
         digests = []
-        for jobs in (["-j1"], []):
+        for count in jobs:
+            flags = [] if count == "default" else ["-j", count]
             with tempfile.TemporaryFile() as result:
-                subprocess.run([binary, "run", *jobs, "--json", path], stdout=result, check=True)
+                subprocess.run([binary, "run", *flags, "--json", path], stdout=result, check=True)
                 result.seek(0)
                 digest = hashlib.sha256()
                 for chunk in iter(lambda: result.read(1 << 20), b""):
                     digest.update(chunk)
                 digests.append(digest.hexdigest())
-        if digests[0] != digests[1]:
+        if len(set(digests)) != 1:
             raise ValueError(f"{deck}: full-precision waveforms differ by worker count")
-        print(f"{deck}: identical ({digests[0]})", flush=True)
+        print(f"{deck}: identical at {', '.join(jobs)} ({digests[0]})", flush=True)
 
 
 def main():
@@ -100,17 +101,23 @@ def main():
     p.add_argument("--allow-worker-differences", action="store_true",
                    help="report historical baselines even if workers produced different results")
     p.add_argument("--check-bits", action="store_true",
-                   help="compare every full-precision vector at one and default workers instead of timing")
+                   help="compare every full-precision vector at one, four and default workers (or the supplied --jobs settings)")
     p.add_argument("--wall-binary", type=Path, help="unchanged HEAD executable for baseline wall times")
     p.add_argument("--runs", type=int, default=3)
     p.add_argument("--deck", choices=DECKS, action="append")
-    p.add_argument("--jobs", choices=("1", "default"), action="append")
+    p.add_argument("--jobs", action="append", help="positive worker limit or default, repeatable")
     args = p.parse_args()
+    if any(j != "default" and (not j.isascii() or not j.isdigit() or int(j) < 1)
+           for j in args.jobs or []):
+        p.error("--jobs requires a positive integer or default")
     if args.runs < 1:
         p.error("--runs must be positive")
     if args.check_bits:
         with tempfile.TemporaryDirectory() as tmp:
-            check_bits(args.binary.resolve(), args.deck or DECKS, Path(tmp))
+            jobs = list(dict.fromkeys(["1", *(args.jobs or ["4", "default"])]))
+            if len(jobs) < 2:
+                p.error("--check-bits needs a second worker setting")
+            check_bits(args.binary.resolve(), args.deck or DECKS, Path(tmp), jobs)
         return
     titles = ("Deck", "Workers", "Wall", *PHASES, "Newton", "Points", "Rejected", "Pivot", "Refactor", "Identical")
     print(f"Median timings in milliseconds over {args.runs} run(s).\n")
@@ -141,7 +148,7 @@ def main():
                             raise ValueError(message)
                         print(message, file=sys.stderr)
                     rows.append(row)
-                label = f"default ({workers})" if jobs == "default" and workers else jobs
+                label = f"{jobs} ({workers})" if workers and jobs != workers else jobs
                 print("| " + " | ".join([deck, label, *(f"{median(col):.2f}" for col in zip(*rows)),
                                           *map(str, counts)]) + " |", flush=True)
 

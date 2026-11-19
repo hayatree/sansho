@@ -75,6 +75,21 @@ pub(crate) enum GroupScatter {
 }
 
 impl GroupScatter {
+    fn new(entries: Vec<(usize, usize)>) -> Self {
+        if entries
+            .iter()
+            .all(|&(k, d)| k.max(d) <= usize::from(u16::MAX))
+        {
+            Self::Small(
+                entries
+                    .into_iter()
+                    .map(|(k, d)| (k as u16, d as u16))
+                    .collect(),
+            )
+        } else {
+            Self::Wide(entries)
+        }
+    }
     pub(crate) fn sum(&self, values: &[f64], dst: &mut [f64]) {
         match self {
             Self::Small(entries) => {
@@ -99,6 +114,7 @@ impl GroupScatter {
 #[derive(Debug)]
 pub(crate) struct Gather {
     pub(crate) by_group: Vec<GroupScatter>,
+    pub(crate) tiles: Vec<Vec<(usize, GroupScatter)>>,
     pub(crate) contributions: u64,
     pub(crate) by_destination: Option<(Vec<usize>, Vec<Src>)>,
 }
@@ -109,6 +125,7 @@ impl Gather {
     fn build(
         len: usize,
         split_rows: bool,
+        tile_rows: bool,
         entries: impl Iterator<Item = (usize, usize, usize)> + Clone,
     ) -> Self {
         let mut by_group = Vec::<Vec<_>>::new();
@@ -119,24 +136,26 @@ impl Gather {
             by_group[g].push((k, d));
         }
         let contributions = by_group.iter().map(|g| g.len() as u64).sum();
-        let by_group = by_group
-            .into_iter()
-            .map(|entries| {
-                if entries
-                    .iter()
-                    .all(|&(k, d)| k.max(d) <= usize::from(u16::MAX))
-                {
-                    GroupScatter::Small(
-                        entries
-                            .into_iter()
-                            .map(|(k, d)| (k as u16, d as u16))
-                            .collect(),
-                    )
-                } else {
-                    GroupScatter::Wide(entries)
+        let mut tiles = Vec::new();
+        if tile_rows && contributions >= 32768 {
+            let size = crate::solve::SCATTER_TILE;
+            tiles.resize_with(len.div_ceil(size), Vec::new);
+            let mut bins = vec![Vec::new(); tiles.len()];
+            let mut touched = Vec::new();
+            for (group, entries) in by_group.iter().enumerate() {
+                for &(slot, row) in entries {
+                    let id = row / size;
+                    if bins[id].is_empty() {
+                        touched.push(id);
+                    }
+                    bins[id].push((slot, row % size));
                 }
-            })
-            .collect();
+                for id in touched.drain(..) {
+                    tiles[id].push((group, GroupScatter::new(std::mem::take(&mut bins[id]))));
+                }
+            }
+        }
+        let by_group = by_group.into_iter().map(GroupScatter::new).collect();
         let by_destination = (split_rows && len > crate::solve::GATHER_CHUNK).then(|| {
             let mut ptr = vec![0usize; len + 1];
             for (_, _, d) in entries.clone() {
@@ -155,6 +174,7 @@ impl Gather {
         });
         Self {
             by_group,
+            tiles,
             contributions,
             by_destination,
         }
@@ -1267,12 +1287,16 @@ pub(crate) fn compile_cached(
     // Large native groups stream their source-ordered maps, with G and C in
     // separate tasks. The smaller VA groups use a destination-parallel gather.
     let split_rows = va_instances > 0;
+    let tile_rows = !split_rows
+        && n >= 2048
+        && nonlinear_count >= PARALLEL_MIN_NONLINEAR
+        && (rayon::current_thread_index().is_none() || rayon::current_num_threads() > 1);
     let gather = GatherMaps {
-        g: Gather::build(nnz, split_rows, slots_to(&gmap).into_iter()),
-        c: Gather::build(nnz, split_rows, slots_to(&cmap).into_iter()),
-        f: Gather::build(n, split_rows, rows_to(|l| &l.f).into_iter()),
-        q: Gather::build(n, split_rows, rows_to(|l| &l.q).into_iter()),
-        b: Gather::build(n, split_rows, rows_to(|l| &l.b).into_iter()),
+        g: Gather::build(nnz, split_rows, tile_rows, slots_to(&gmap).into_iter()),
+        c: Gather::build(nnz, split_rows, tile_rows, slots_to(&cmap).into_iter()),
+        f: Gather::build(n, split_rows, tile_rows, rows_to(|l| &l.f).into_iter()),
+        q: Gather::build(n, split_rows, tile_rows, rows_to(|l| &l.q).into_iter()),
+        b: Gather::build(n, split_rows, tile_rows, rows_to(|l| &l.b).into_iter()),
     };
     // Shunts connect physical electrical nodes, including internal device terminals.
     let node_diag = (0..n)

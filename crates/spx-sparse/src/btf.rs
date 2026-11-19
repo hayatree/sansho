@@ -11,6 +11,34 @@ use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap};
 use std::ops::Range;
 
+mod schedule;
+
+const LARGE_BLOCK: usize = 2048;
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Disjoint task-owned factor entries. Relaxed loads and stores let the
+/// scheduler borrow the arrays safely. Rayon joins publish completed lanes.
+#[derive(Debug, Default)]
+struct Value(AtomicU64);
+impl Value {
+    fn new(v: f64) -> Self {
+        Self(AtomicU64::new(v.to_bits()))
+    }
+    fn store_exclusive(&mut self, v: f64) {
+        *self.0.get_mut() = v.to_bits();
+    }
+    fn load_exclusive(&mut self) -> f64 {
+        f64::from_bits(*self.0.get_mut())
+    }
+    fn get(&self) -> f64 {
+        f64::from_bits(self.0.load(Ordering::Relaxed))
+    }
+    fn set(&self, v: f64) {
+        self.0.store(v.to_bits(), Ordering::Relaxed);
+    }
+}
+
 const EMPTY: usize = usize::MAX;
 const TOL: f64 = 0.1;
 
@@ -277,7 +305,7 @@ impl Btf {
 #[derive(Debug, Default)]
 struct FactorColumn {
     pivot: usize,
-    diagonal: f64,
+    diagonal: Value,
     lower: Range<usize>,
     upper: Range<usize>,
 }
@@ -287,13 +315,29 @@ struct Gp {
     input: Vec<Vec<(usize, usize)>>,
     order: Vec<usize>,
     columns: Vec<FactorColumn>,
-    lower: Vec<(usize, f64)>,
-    upper: Vec<(usize, f64)>,
+    lower: Vec<(usize, Value)>,
+    upper: Vec<(usize, Value)>,
+    schedule: schedule::Schedule,
+    workers: usize,
     work: Vec<f64>,
     pivot_at: Vec<usize>,
     seen: Vec<usize>,
     queue: BinaryHeap<Reverse<usize>>,
     candidates: Vec<usize>,
+    traces: Vec<Reach>,
+    attempts: usize,
+    failures: usize,
+    cache_reach: bool,
+}
+
+/// Structural reach of a fresh search. An unchanged predecessor supplies
+/// the same pivot and the same lower rows in discovery order.
+#[derive(Debug, Default)]
+struct Reach {
+    parents: Vec<(usize, usize)>,
+    candidates: Vec<usize>,
+    pivot: Option<usize>,
+    version: usize,
 }
 
 /// Minimum degree on the symmetric structure of a sparse circuit block.
@@ -362,12 +406,22 @@ impl Gp {
             input,
             columns: Vec::with_capacity(n),
             upper: vec![],
+            schedule: Default::default(),
+            workers: if n >= LARGE_BLOCK && rayon::current_thread_index().is_some() {
+                rayon::current_num_threads()
+            } else {
+                1
+            },
             lower: vec![],
             work: vec![0.; n],
             pivot_at: vec![EMPTY; n],
             seen: vec![EMPTY; n],
             queue: BinaryHeap::new(),
             candidates: Vec::new(),
+            traces: Vec::new(),
+            attempts: 0,
+            failures: 0,
+            cache_reach: false,
         })
     }
 
@@ -378,6 +432,12 @@ impl Gp {
         // A rejected pivot invalidates its own column and its successors.
         // Earlier accepted pivots and updates already factor the new matrix.
         let first = self.columns.is_empty() && self.order.len() >= 256;
+        if self.order.len() >= LARGE_BLOCK {
+            self.failures += 1;
+            if self.cache_reach && self.traces.is_empty() {
+                self.traces.resize_with(self.order.len(), Reach::default);
+            }
+        }
         self.columns.truncate(valid);
         self.lower
             .truncate(self.columns.last().map_or(0, |c| c.lower.end));
@@ -395,37 +455,69 @@ impl Gp {
         let candidates = &mut self.candidates;
         for (j, &col) in self.order.iter().enumerate().skip(valid) {
             candidates.clear();
-            let mut visit =
-                |r: usize, queue: &mut BinaryHeap<Reverse<usize>>, rows: &mut Vec<usize>| {
-                    if seen[r] != j {
-                        seen[r] = j;
-                        if pivot_at[r] == EMPTY {
-                            rows.push(r);
-                        } else {
-                            queue.push(Reverse(pivot_at[r]));
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                };
-            for &(r, k) in &self.input[col] {
-                visit(r, queue, candidates);
-                self.work[r] = values[k];
-            }
             let u = self.upper.len();
-            while let Some(Reverse(i)) = queue.pop() {
-                let prev = &self.columns[i];
-                let v = self.work[prev.pivot];
-                if !v.is_finite() {
-                    return Err(col);
+            let cached = self.traces.get(j).is_some_and(|t| {
+                t.pivot.is_some()
+                    && t.parents.iter().all(|&(i, v)| self.traces[i].version == v)
+                    && t.candidates.iter().all(|&r| pivot_at[r] == EMPTY)
+            });
+            if cached {
+                let t = &self.traces[j];
+                candidates.extend_from_slice(&t.candidates);
+                for &r in candidates.iter() {
+                    self.work[r] = 0.;
+                    seen[r] = j;
                 }
-                self.upper.push((i, v));
-                for &(r, l) in &self.lower[prev.lower.clone()] {
-                    if visit(r, queue, candidates) {
-                        self.work[r] = 0.;
+                for &(i, _) in &t.parents {
+                    self.work[self.columns[i].pivot] = 0.;
+                }
+                for &(r, k) in &self.input[col] {
+                    self.work[r] = values[k];
+                }
+                for &(i, _) in &t.parents {
+                    let prev = &self.columns[i];
+                    let v = self.work[prev.pivot];
+                    if !v.is_finite() {
+                        return Err(col);
                     }
-                    self.work[r] -= l * v;
+                    self.upper.push((i, Value::new(v)));
+                    for (r, l) in &self.lower[prev.lower.clone()] {
+                        self.work[*r] -= l.get() * v;
+                    }
+                }
+            } else {
+                let mut visit =
+                    |r: usize, queue: &mut BinaryHeap<Reverse<usize>>, rows: &mut Vec<usize>| {
+                        if seen[r] != j {
+                            seen[r] = j;
+                            if pivot_at[r] == EMPTY {
+                                rows.push(r);
+                            } else {
+                                queue.push(Reverse(pivot_at[r]));
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                for &(r, k) in &self.input[col] {
+                    visit(r, queue, candidates);
+                    self.work[r] = values[k];
+                }
+                while let Some(Reverse(i)) = queue.pop() {
+                    let prev = &self.columns[i];
+                    let v = self.work[prev.pivot];
+                    if !v.is_finite() {
+                        return Err(col);
+                    }
+                    self.upper.push((i, Value::new(v)));
+                    for (r, l) in &self.lower[prev.lower.clone()] {
+                        let r = *r;
+                        if visit(r, queue, candidates) {
+                            self.work[r] = 0.;
+                        }
+                        self.work[r] -= l.get() * v;
+                    }
                 }
             }
             let best = candidates
@@ -447,13 +539,29 @@ impl Gp {
             let l = self.lower.len();
             for &r in candidates.iter() {
                 if r != pivot {
-                    self.lower.push((r, self.work[r] / diagonal));
+                    self.lower.push((r, Value::new(self.work[r] / diagonal)));
+                }
+            }
+            if !self.traces.is_empty() {
+                let (prior, rest) = self.traces.split_at_mut(j);
+                let t = &mut rest[0];
+                if !cached {
+                    t.parents.clear();
+                    t.parents
+                        .extend(self.upper[u..].iter().map(|(i, _)| (*i, prior[*i].version)));
+                }
+                if t.pivot != Some(pivot) || (!cached && t.candidates != *candidates) {
+                    t.pivot = Some(pivot);
+                    t.version += 1;
+                    if !cached {
+                        t.candidates.clone_from(candidates);
+                    }
                 }
             }
             pivot_at[pivot] = j;
             self.columns.push(FactorColumn {
                 pivot,
-                diagonal,
+                diagonal: Value::new(diagonal),
                 lower: l..self.lower.len(),
                 upper: u..self.upper.len(),
             });
@@ -480,30 +588,100 @@ impl Gp {
                 n + self.lower.len() + self.upper.len()
             );
         }
+        if self.workers > 1
+            && (self.schedule.len() == 0 || !self.schedule.valid(valid, &self.columns, &self.upper))
+        {
+            self.schedule
+                .build(&self.columns, &self.upper, self.workers);
+        }
         Ok(())
     }
 
     fn refactor(&mut self, values: &[f64]) -> usize {
+        if self.order.len() >= LARGE_BLOCK {
+            // Repivot-heavy blocks amortize the additional symbolic records.
+            if self.attempts == 128 {
+                self.cache_reach = self.failures >= 8;
+                if !self.cache_reach {
+                    self.traces = Vec::new();
+                }
+                self.attempts = 0;
+                self.failures = 0;
+            }
+            self.attempts += 1;
+        }
         if self.columns.len() != self.order.len() {
             return 0;
         }
+        let end = self.schedule.len();
+        if end == 0 || rayon::current_thread_index().is_none() || rayon::current_num_threads() == 1
+        {
+            return self.serial_refactor(0, values);
+        }
+        let columns = &self.columns;
+        let lower = &self.lower;
+        let upper = &self.upper;
+        let input = &self.input;
+        let order = &self.order;
+        let factor = |j: usize, work: &mut [f64]| {
+            let c = &columns[j];
+            for &(r, k) in &input[order[j]] {
+                work[r] = values[k];
+            }
+            for (i, u) in &upper[c.upper.clone()] {
+                let prev = &columns[*i];
+                let v = std::mem::take(&mut work[prev.pivot]);
+                if !v.is_finite() {
+                    return false;
+                }
+                u.set(v);
+                if v != 0. {
+                    for (r, l) in &lower[prev.lower.clone()] {
+                        work[*r] -= l.get() * v;
+                    }
+                }
+            }
+            let diag = std::mem::take(&mut work[c.pivot]);
+            if !diag.is_normal() {
+                return false;
+            }
+            for (r, l) in &lower[c.lower.clone()] {
+                let value = std::mem::take(&mut work[*r]);
+                if !value.is_finite() || value.abs() * TOL > diag.abs() {
+                    return false;
+                }
+                l.set(value / diag);
+            }
+            c.diagonal.set(diag);
+            true
+        };
+        let first = self.schedule.run(factor);
+        if first < end {
+            return first;
+        }
+        self.serial_refactor(end, values)
+    }
+
+    // The serial suffix has exclusive ownership. Borrow the cells mutably so
+    // LLVM can use ordinary loads and stores throughout the elimination.
+    fn serial_refactor(&mut self, start: usize, values: &[f64]) -> usize {
         self.work.fill(0.);
-        for (j, &col) in self.order.iter().enumerate() {
+        for (j, &col) in self.order.iter().enumerate().skip(start) {
             let c = &self.columns[j];
             for &(r, k) in &self.input[col] {
                 self.work[r] = values[k];
             }
             for (i, u) in &mut self.upper[c.upper.clone()] {
                 let prev = &self.columns[*i];
-                *u = std::mem::take(&mut self.work[prev.pivot]);
-                if !u.is_finite() {
+                let v = std::mem::take(&mut self.work[prev.pivot]);
+                if !v.is_finite() {
                     return j;
                 }
-                if *u == 0. {
-                    continue;
-                }
-                for &(r, l) in &self.lower[prev.lower.clone()] {
-                    self.work[r] -= l * *u;
+                u.store_exclusive(v);
+                if v != 0. {
+                    for (r, l) in &mut self.lower[prev.lower.clone()] {
+                        self.work[*r] -= l.load_exclusive() * v;
+                    }
                 }
             }
             let diag = std::mem::take(&mut self.work[c.pivot]);
@@ -511,32 +689,31 @@ impl Gp {
                 return j;
             }
             for (r, l) in &mut self.lower[c.lower.clone()] {
-                let value = std::mem::take(&mut self.work[*r]);
-                if !value.is_finite() || value.abs() * TOL > diag.abs() {
+                let v = std::mem::take(&mut self.work[*r]);
+                if !v.is_finite() || v.abs() * TOL > diag.abs() {
                     return j;
                 }
-                *l = value / diag;
+                l.store_exclusive(v / diag);
             }
-            self.columns[j].diagonal = diag;
+            self.columns[j].diagonal.store_exclusive(diag);
         }
         self.columns.len()
     }
-
     fn solve(&mut self, rhs: &mut [f64]) {
         for c in &self.columns {
             let x = rhs[c.pivot];
             if x == 0. {
                 continue;
             }
-            for &(r, l) in &self.lower[c.lower.clone()] {
-                rhs[r] -= l * x;
+            for (r, l) in &self.lower[c.lower.clone()] {
+                rhs[*r] -= l.get() * x;
             }
         }
         for (c, &col) in self.columns.iter().zip(&self.order).rev() {
-            let x = rhs[c.pivot] / c.diagonal;
+            let x = rhs[c.pivot] / c.diagonal.get();
             self.work[col] = x;
-            for &(i, u) in &self.upper[c.upper.clone()] {
-                rhs[self.columns[i].pivot] -= u * x;
+            for (i, u) in &self.upper[c.upper.clone()] {
+                rhs[self.columns[*i].pivot] -= u.get() * x;
             }
         }
         rhs.copy_from_slice(&self.work);
@@ -548,6 +725,113 @@ impl Gp {
 mod tests {
     use super::*;
     use crate::PatternBuilder;
+
+    #[test]
+    fn parallel_refactor_matches_every_serial_factor_and_solve_bit() {
+        // A resistively coupled ladder and a sparse random block-banded matrix.
+        // The cyclic strong entries force row exchanges through previously
+        // independent subtrees; signed zeros exercise the zero-update skip.
+        let n = 2048;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        for random in [false, true] {
+            let mut rng = 31u32;
+            let mut next = || {
+                rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
+                rng
+            };
+            let mut input = Vec::new();
+            let mut count = 0;
+            for j in 0..n {
+                let mut rows = vec![j, j ^ 1];
+                if j % 32 != 31 {
+                    rows.push(j + 1);
+                } else {
+                    rows.push(n - 1);
+                }
+                if j % 32 != 0 {
+                    rows.push(j - 1);
+                }
+                if j == n - 1 {
+                    rows.extend((31..n).step_by(32));
+                }
+                if random {
+                    for _ in 0..3 {
+                        rows.push((j / 16) * 16 + next() as usize % 16);
+                    }
+                }
+                rows.sort_unstable();
+                rows.dedup();
+                input.push(
+                    rows.into_iter()
+                        .map(|r| {
+                            count += 1;
+                            (r, count - 1)
+                        })
+                        .collect(),
+                );
+            }
+            let mut serial = Gp::new(input.clone()).unwrap();
+            // Compare with a fresh reach traversal as well as serial refactors.
+            let mut parallel = pool.install(|| Gp::new(input.clone())).unwrap();
+            parallel.cache_reach = true;
+            let mut values = vec![0.; count];
+            let mut refactored = false;
+            let mut repivoted = false;
+            for step in 0..8 {
+                for (j, col) in input.iter().enumerate() {
+                    for &(r, k) in col {
+                        let exchange = (2..5).contains(&step) && j % 64 < 32;
+                        let pivot = if exchange { j ^ 1 } else { j };
+                        values[k] = if r == pivot {
+                            8.
+                        } else if (j + k + step) % 5 == 0 {
+                            -0.
+                        } else {
+                            ((next() % 100) as f64 - 49.) / 400.
+                        };
+                    }
+                }
+                let first = serial.refactor(&values);
+                let other = pool.install(|| parallel.refactor(&values));
+                assert_eq!(first, other);
+                refactored |= first == n;
+                repivoted |= step > 0 && first < n;
+                if first < n {
+                    serial.factor_from(first, &values).unwrap();
+                    pool.install(|| parallel.factor_from(other, &values))
+                        .unwrap();
+                }
+                assert!(parallel.schedule.len() > 0);
+                for (a, b) in serial.columns.iter().zip(&parallel.columns) {
+                    assert_eq!(
+                        (a.pivot, a.diagonal.get().to_bits(), &a.lower, &a.upper),
+                        (b.pivot, b.diagonal.get().to_bits(), &b.lower, &b.upper)
+                    );
+                }
+                let entries = |factor: &[(usize, Value)]| {
+                    factor
+                        .iter()
+                        .map(|(i, v)| (*i, v.get().to_bits()))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(entries(&serial.lower), entries(&parallel.lower));
+                assert_eq!(entries(&serial.upper), entries(&parallel.upper));
+                let mut rhs: Vec<_> = (0..n).map(|i| (i % 23) as f64 - 11.).collect();
+                let mut other = rhs.clone();
+                serial.solve(&mut rhs);
+                parallel.solve(&mut other);
+                assert!(
+                    rhs.iter()
+                        .zip(other)
+                        .all(|(x, y)| x.to_bits() == y.to_bits())
+                );
+            }
+            assert!(refactored && repivoted);
+        }
+    }
 
     #[test]
     fn alternating_path_and_disconnected_singular_graph() {

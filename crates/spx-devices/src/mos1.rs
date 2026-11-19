@@ -154,6 +154,8 @@ impl Default for Mos1Geometry {
 /// Per-instance derived constants.
 #[derive(Debug, Clone)]
 struct Derived {
+    has_storage: bool,
+    sqrt_phi: f64,
     beta: f64,
     cox_total: f64,
     cgs_ov: f64,
@@ -168,7 +170,7 @@ struct Derived {
 }
 
 impl Derived {
-    fn has_storage(&self) -> bool {
+    fn has_capacitance(&self) -> bool {
         [
             self.cox_total,
             self.cgs_ov,
@@ -213,7 +215,9 @@ impl Mos1s {
         off: bool,
     ) {
         let leff = geom.l - 2.0 * model.ld;
-        let d = Derived {
+        let mut d = Derived {
+            has_storage: false,
+            sqrt_phi: model.phi.sqrt(),
             beta: model.kp * geom.w / leff,
             cox_total: model.cox * geom.w * leff,
             cgs_ov: model.cgso * geom.w,
@@ -234,6 +238,7 @@ impl Mos1s {
             cbd_sw: model.cjsw * geom.pd,
             cbs_sw: model.cjsw * geom.ps,
         };
+        d.has_storage = d.has_capacitance();
         self.names.push(name.to_string());
         self.ext.push(nodes);
         self.int.push(nodes);
@@ -330,7 +335,7 @@ impl DeviceGroup for Mos1s {
                 b.resistor(self.ext[i][2], self.int[i][2]);
             }
             b.core(&self.int[i]);
-            if self.derived[i].has_storage() {
+            if self.derived[i].has_storage {
                 for _ in 0..5 {
                     b.tracked_q(None);
                 }
@@ -338,14 +343,51 @@ impl DeviceGroup for Mos1s {
         }
         Ok(())
     }
-    #[allow(clippy::many_single_char_names)]
     fn eval(&self, ctx: &EvalCtx, x: &[f64], st: StateRef<'_>, out: &mut Slots) {
+        self.evaluate::<false>(ctx, x, st, out);
+    }
+    fn sample_charges(
+        &self,
+        x: &[f64],
+        st: &mut StateRef<'_>,
+        out: &mut Slots,
+        _: &mut crate::bsim4::CoreCache,
+    ) -> bool {
+        // The converged charge and Meyer history depend only on voltage and
+        // the accepted state. Temperature and gmin enter the IV equations.
+        let sample = EvalCtx {
+            limit: false,
+            ..EvalCtx::dc()
+        };
+        self.evaluate::<true>(
+            &sample,
+            x,
+            StateRef {
+                accepted: st.accepted,
+                current: st.current,
+            },
+            out,
+        );
+        true
+    }
+}
+impl Mos1s {
+    #[allow(clippy::many_single_char_names)]
+    fn evaluate<const CHARGES_ONLY: bool>(
+        &self,
+        ctx: &EvalCtx,
+        x: &[f64],
+        st: StateRef<'_>,
+        out: &mut Slots,
+    ) {
         let vt = thermal_voltage(ctx.temp);
+        let common_is = self.derived.first().map_or(0., |d| d.iss.max(d.isd));
+        let common_vcrit = if ctx.limit { vcrit(common_is, vt) } else { 0. };
         for i in 0..self.len() {
             let m = &self.model[i];
             let dv = &self.derived[i];
             let mut at = self.at[i];
-            if m.rd > 0.0 {
+            if !CHARGES_ONLY && m.rd > 0.0 {
                 out.resistor(
                     &mut at,
                     1.0 / m.rd,
@@ -353,7 +395,7 @@ impl DeviceGroup for Mos1s {
                     volt(x, self.int[i][0]),
                 );
             }
-            if m.rs > 0.0 {
+            if !CHARGES_ONLY && m.rs > 0.0 {
                 out.resistor(
                     &mut at,
                     1.0 / m.rs,
@@ -379,7 +421,12 @@ impl DeviceGroup for Mos1s {
             } else if ctx.limit {
                 let (vgs, l1) = limit_step(vgs_a, s[0], s[0] - vto);
                 let (vds, l2) = limit_step(vds_a, s[1], s[1]);
-                let vc = vcrit(dv.iss.max(dv.isd), vt);
+                let peak = dv.iss.max(dv.isd);
+                let vc = if peak.to_bits() == common_is.to_bits() {
+                    common_vcrit
+                } else {
+                    vcrit(peak, vt)
+                };
                 let (vbs, l3) = limit_junction(vbs_a, s[2], vt, vc);
                 // Also keep the bulk-drain junction from jumping into strong forward bias.
                 let (vbd, l4) = limit_junction(vbs - vds, s[2] - s[1], vt, vc);
@@ -408,7 +455,7 @@ impl DeviceGroup for Mos1s {
             } else {
                 (vgs, vds, vbs)
             };
-            let sqrt_phi = m.phi.sqrt();
+            let sqrt_phi = dv.sqrt_phi;
             let sarg = if vbs_e.v <= 0.0 {
                 (-vbs_e + m.phi).sqrt()
             } else {
@@ -471,8 +518,19 @@ impl DeviceGroup for Mos1s {
                 (-qgs - qbs) * sgn,
                 (qbd + qbs - qgb) * sgn,
             ];
-            out.core(&mut at, &i_t, &q_t, &act, &lin);
-            if dv.has_storage() {
+            if CHARGES_ONLY {
+                let delta: [f64; 4] = std::array::from_fn(|k| act[k] - lin[k]);
+                for (dst, q) in out.q[at.q..at.q + 4].iter_mut().zip(q_t) {
+                    *dst = q.v;
+                    for (d, v) in q.d.into_iter().zip(delta) {
+                        *dst += d * v;
+                    }
+                }
+                at.q += 4;
+            } else {
+                out.core(&mut at, &i_t, &q_t, &act, &lin);
+            }
+            if dv.has_storage {
                 out.q[at.q..at.q + 5].copy_from_slice(&[qgs.v, qgd.v, qgb.v, qbd.v, qbs.v]);
             }
         }
@@ -536,6 +594,70 @@ mod tests {
         // PMOS mirrors NMOS.
         let p = eval_ids(-1.5, -3.0, -1.0);
         assert!((p + sat).abs() < 1e-15);
+    }
+
+    #[test]
+    fn converged_sample_matches_charge_slots_and_meyer_history() {
+        let params = ModelParams::new(&[
+            ("tox".into(), 8e-9),
+            ("cgso".into(), 1e-10),
+            ("cbd".into(), 2e-15),
+            ("rd".into(), 1.),
+        ]);
+        for polarity in [1., -1.] {
+            let (model, _) = Mos1Model::from_params(&params, polarity);
+            let mut group = Mos1s::default();
+            group.push(
+                "m1",
+                [Some(0), Some(1), Some(2), None],
+                model,
+                Default::default(),
+                false,
+            );
+            let mut u = Unknowns::with_nodes(["d", "g", "s"]);
+            group.alloc_unknowns(&mut u);
+            let mut builder = StampBuilder::new(&u);
+            group.setup(&mut builder).unwrap();
+            let layout = builder.finish();
+            let mut full = Slots::for_layout(&layout);
+            let mut sample = Slots::for_layout(&layout);
+            let mut accepted = [0.; NSTATE];
+            for drain in [-0.9, 0.01, 0.7] {
+                let x = [drain, 0.83, 0.13, drain + 0.01].map(|v| v * polarity);
+                let mut a = accepted;
+                let mut b = accepted;
+                group.eval(
+                    &EvalCtx {
+                        limit: false,
+                        temp: 345.,
+                        ..EvalCtx::dc()
+                    },
+                    &x,
+                    StateRef {
+                        accepted: &accepted,
+                        current: &mut a,
+                    },
+                    &mut full,
+                );
+                assert!(group.sample_charges(
+                    &x,
+                    &mut StateRef {
+                        accepted: &accepted,
+                        current: &mut b
+                    },
+                    &mut sample,
+                    &mut Default::default()
+                ));
+                assert_eq!(a.map(f64::to_bits), b.map(f64::to_bits));
+                assert!(
+                    full.q
+                        .iter()
+                        .zip(&sample.q)
+                        .all(|(a, b)| a.to_bits() == b.to_bits())
+                );
+                accepted = a;
+            }
+        }
     }
 
     #[test]

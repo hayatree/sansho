@@ -4,6 +4,7 @@
 //! breakpoints, trapezoidal rule otherwise, breakpoint-aligned steps) follows the classic SPICE
 //! approach described in Nagel (1975). See `docs/PROVENANCE.md`.
 
+use rayon::prelude::*;
 use spx_devices::{AcSlots, EvalCtx, Mode, TranParams, UnknownKind};
 use spx_diag::{Confidence, Diagnostic};
 use spx_netlist::AcSweep;
@@ -459,16 +460,14 @@ impl History {
         self.t.clear();
         self.q.clear();
     }
-    fn push(&mut self, t: f64, q: &[f64]) {
-        if self.t.len() == HISTORY {
+    fn push(&mut self, t: f64, buffer: &mut Vec<f64>) {
+        let spare = if self.t.len() == HISTORY {
             self.t.pop();
-            if let Some(mut old) = self.q.pop() {
-                old.copy_from_slice(q);
-                self.q.insert(0, old);
-            }
+            self.q.pop().unwrap_or_default()
         } else {
-            self.q.insert(0, q.to_vec());
-        }
+            Vec::new()
+        };
+        self.q.insert(0, std::mem::replace(buffer, spare));
         self.t.insert(0, t);
     }
     fn len(&self) -> usize {
@@ -476,39 +475,50 @@ impl History {
     }
 }
 
-/// Integration coefficients for a step of size `h` from the newest history point.
-fn integration(
-    method: Method,
-    order: usize,
-    h: f64,
-    hist: &History,
-    qdot: &[f64],
-    integ: &mut Integration,
-) {
-    let q0 = &hist.q[0];
-    if order == 1 {
-        integ.a0 = 1.0 / h;
-        for (i, v) in integ.hist.iter_mut().enumerate() {
-            *v = -q0[i] / h;
+/// Coefficients of the accepted charge and current samples. Only the MNA
+/// rows need their history term before Newton. Local charges use it at LTE.
+#[derive(Clone, Copy)]
+enum HistoryTerm {
+    Euler(f64),
+    Trap(f64),
+    Gear(f64, f64),
+}
+
+impl HistoryTerm {
+    fn step(method: Method, order: usize, h: f64, times: &[f64]) -> (f64, Self) {
+        if order == 1 {
+            return (1. / h, Self::Euler(h));
         }
-        return;
-    }
-    match method {
-        Method::Trap => {
-            integ.a0 = 2.0 / h;
-            for (i, v) in integ.hist.iter_mut().enumerate() {
-                *v = -integ.a0 * q0[i] - qdot[i];
+        match method {
+            Method::Trap => (2. / h, Self::Trap(-2. / h)),
+            Method::Gear => {
+                let w = h / (times[0] - times[1]);
+                (
+                    (1. + 2. * w) / ((1. + w) * h),
+                    Self::Gear(-(1. + w) / h, w * w / ((1. + w) * h)),
+                )
             }
         }
-        Method::Gear => {
-            // Variable-step BDF2 with step ratio w = h / h_prev.
-            let q1 = &hist.q[1];
-            let w = h / (hist.t[0] - hist.t[1]);
-            integ.a0 = (1.0 + 2.0 * w) / ((1.0 + w) * h);
-            let c0 = -(1.0 + w) / h;
-            let c1 = w * w / ((1.0 + w) * h);
-            for (i, v) in integ.hist.iter_mut().enumerate() {
-                *v = c0 * q0[i] + c1 * q1[i];
+    }
+
+    fn write(self, out: &mut [f64], start: usize, history: &History, old: &[f64]) {
+        let range = start..start + out.len();
+        let recent = &history.q[0][range.clone()];
+        match self {
+            Self::Euler(h) => {
+                for (v, &q) in out.iter_mut().zip(recent) {
+                    *v = -q / h;
+                }
+            }
+            Self::Trap(c) => {
+                for ((v, &q), &d) in out.iter_mut().zip(recent).zip(&old[range]) {
+                    *v = c * q - d;
+                }
+            }
+            Self::Gear(c0, c1) => {
+                for ((v, &q0), &q1) in out.iter_mut().zip(recent).zip(&history.q[1][range]) {
+                    *v = c0 * q0 + c1 * q1;
+                }
             }
         }
     }
@@ -516,85 +526,141 @@ fn integration(
 
 /// Charge history starts with the MNA rows. Device-local samples follow in
 /// stamp order, including slots connected to ground or cancelling at a node.
-fn charge_sample<'a>(
-    ws: &'a Workspace,
-    slots: &[(usize, usize)],
-    buffer: &'a mut Vec<f64>,
-) -> &'a [f64] {
-    if slots.is_empty() {
-        return &ws.asm.q;
-    }
+fn charge_sample(ws: &Workspace, slots: &[(usize, std::ops::Range<usize>)], buffer: &mut Vec<f64>) {
     buffer.clear();
     buffer.extend_from_slice(&ws.asm.q);
-    buffer.extend(slots.iter().map(|&(group, slot)| ws.slots[group].q[slot]));
-    buffer
+    for (group, range) in slots {
+        buffer.extend_from_slice(&ws.slots[*group].q[range.clone()]);
+    }
 }
 
-/// Ratio of the estimated local truncation error to its tolerance (≤ 1 means acceptable),
-/// computed from divided differences of the charges over the new point and the history.
-#[allow(clippy::too_many_arguments)]
-fn lte_ratio(
-    method: Method,
-    order: usize,
+/// Variable-step charge truncation estimate shared by all charge chunks.
+struct Truncation {
+    ts: [f64; 4],
+    coeff: f64,
     h: f64,
-    t_new: f64,
-    q_new: &[f64],
-    qdot_new: &[f64],
-    qdot_old: &[f64],
+    order: usize,
+}
+impl Truncation {
+    fn new(method: Method, order: usize, h: f64, t_new: f64, hist: &History) -> Self {
+        let ts = [
+            t_new,
+            hist.t[0],
+            hist.t[1],
+            hist.t.get(2).copied().unwrap_or(0.0),
+        ];
+        // Convert the derivative defect to a charge error by dividing by a0.
+        // Differentiating the BDF2 interpolation remainder at the new point
+        // gives h * (h + h_prev) * DD3; 1/a0 = h * span / (span + h).
+        let coeff = match (order, method) {
+            (1, _) => h * h,
+            (_, Method::Trap) => 0.5 * h * h * h,
+            (_, Method::Gear) => {
+                let span = h + (ts[1] - ts[2]);
+                h * h * span * (span / (span + h))
+            }
+        };
+        Self {
+            ts,
+            coeff,
+            h,
+            order,
+        }
+    }
+
+    fn ratio(
+        &self,
+        range: std::ops::Range<usize>,
+        values: &[f64],
+        dnew: &[f64],
+        dold: &[f64],
+        hist: &History,
+        opts: &SimOptions,
+    ) -> f64 {
+        let Self {
+            ts,
+            coeff,
+            h,
+            order,
+        } = *self;
+        let recent = &hist.q[0][range.clone()];
+        let previous = &hist.q[1][range.clone()];
+        let older = hist.q.get(2).map_or(previous, |q| &q[range]);
+        let mut worst = 0.0f64;
+        for (((((&new, &q0), &q1), &q2), &dnew), &dold) in values
+            .iter()
+            .zip(recent)
+            .zip(previous)
+            .zip(older)
+            .zip(dnew)
+            .zip(dold)
+        {
+            let qs = [new, q0, q1, q2];
+            if qs[0] == qs[1] && qs[1] == qs[2] && (order == 1 || qs[2] == qs[3]) {
+                continue;
+            }
+            let slope = (qs[0] - qs[1]) / (ts[0] - ts[1]);
+            let previous = (qs[1] - qs[2]) / (ts[1] - ts[2]);
+            let curvature = (slope - previous) / (ts[0] - ts[2]);
+            let dd = if order == 1 {
+                curvature
+            } else {
+                let older = (qs[2] - qs[3]) / (ts[2] - ts[3]);
+                let previous_curvature = (previous - older) / (ts[1] - ts[3]);
+                (curvature - previous_curvature) / (ts[0] - ts[3])
+            };
+            let lte = (coeff * dd).abs();
+            if lte == 0.0 {
+                continue;
+            }
+            let qtol = opts.reltol * qs[0].abs().max(qs[1].abs()).max(opts.chgtol);
+            let itol = (opts.abstol + opts.reltol * dnew.abs().max(dold.abs())) * h;
+            let r = lte / (opts.trtol * qtol.max(itol));
+            if !r.is_finite() {
+                return f64::INFINITY;
+            }
+            worst = worst.max(r);
+        }
+        worst
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn charge_derivatives(
+    term: HistoryTerm,
+    a0: f64,
     hist: &History,
+    charges: &[f64],
+    old: &[f64],
+    new: &mut [f64],
+    estimate: Option<&Truncation>,
     opts: &SimOptions,
 ) -> f64 {
-    let ts = [
-        t_new,
-        hist.t[0],
-        hist.t[1],
-        hist.t.get(2).copied().unwrap_or(0.0),
-    ];
-    // Convert the derivative defect to a charge error by dividing by a0.
-    // Differentiating the BDF2 interpolation remainder at the new point
-    // gives h * (h + h_prev) * DD3; 1/a0 = h * span / (span + h).
-    let coeff = match (order, method) {
-        (1, _) => h * h,
-        (_, Method::Trap) => 0.5 * h * h * h,
-        (_, Method::Gear) => {
-            let span = h + (ts[1] - ts[2]);
-            h * h * span * (span / (span + h))
+    const CHUNK: usize = 2048;
+    let evaluate = |(chunk, dnew): (usize, &mut [f64])| {
+        let start = chunk * CHUNK;
+        let range = start..start + dnew.len();
+        let q = &charges[range.clone()];
+        term.write(dnew, start, hist, old);
+        for (d, &v) in dnew.iter_mut().zip(q) {
+            let history_term = *d;
+            *d = a0 * v + history_term;
         }
+        estimate.map_or(0., |lte| {
+            lte.ratio(range.clone(), q, dnew, &old[range], hist, opts)
+        })
     };
-    let mut worst = 0.0f64;
-    for i in 0..q_new.len() {
-        let qs = [
-            q_new[i],
-            hist.q[0][i],
-            hist.q[1][i],
-            hist.q.get(2).map_or(0.0, |q| q[i]),
-        ];
-        if qs[0] == qs[1] && qs[1] == qs[2] && (order == 1 || qs[2] == qs[3]) {
-            continue;
-        }
-        let slope = (qs[0] - qs[1]) / (ts[0] - ts[1]);
-        let previous = (qs[1] - qs[2]) / (ts[1] - ts[2]);
-        let curvature = (slope - previous) / (ts[0] - ts[2]);
-        let dd = if order == 1 {
-            curvature
-        } else {
-            let older = (qs[2] - qs[3]) / (ts[2] - ts[3]);
-            let previous_curvature = (previous - older) / (ts[1] - ts[3]);
-            (curvature - previous_curvature) / (ts[0] - ts[3])
-        };
-        let lte = (coeff * dd).abs();
-        if lte == 0.0 {
-            continue;
-        }
-        let qtol = opts.reltol * qs[0].abs().max(qs[1].abs()).max(opts.chgtol);
-        let itol = (opts.abstol + opts.reltol * qdot_new[i].abs().max(qdot_old[i].abs())) * h;
-        let r = lte / (opts.trtol * qtol.max(itol));
-        if !r.is_finite() {
-            return f64::INFINITY;
-        }
-        worst = worst.max(r);
+    if new.len() >= 16 * CHUNK && rayon::current_num_threads() > 1 {
+        new.par_chunks_mut(CHUNK)
+            .enumerate()
+            .map(evaluate)
+            .reduce(|| 0., f64::max)
+    } else {
+        new.chunks_mut(CHUNK)
+            .enumerate()
+            .map(evaluate)
+            .fold(0., f64::max)
     }
-    worst
 }
 
 /// `.tran`
@@ -662,12 +728,14 @@ pub(crate) fn tran(
     let mut hist = History::default();
     // The leading entries are the MNA equations. Track individual device charges
     // after them so that cancellation at a shared node cannot mask local error.
-    let local_slots: Vec<_> = ckt
-        .layouts
-        .iter()
-        .enumerate()
-        .flat_map(|(group, layout)| layout.lte_q.iter().map(move |&slot| (group, slot)))
-        .collect();
+    let mut local_slots = Vec::new();
+    for (group, layout) in ckt.layouts.iter().enumerate() {
+        for run in layout.lte_q.chunk_by(|&a, &b| a.checked_add(1) == Some(b)) {
+            if let (Some(first), Some(last)) = (run.first(), run.last()) {
+                local_slots.push((group, *first..last + 1));
+            }
+        }
+    }
     // An assembled C stamp also implies a potential dynamic state (e.g. a
     // direct Verilog-A ddt contribution with no separate history variable).
     let has_storage = ckt
@@ -675,10 +743,10 @@ pub(crate) fn tran(
         .iter()
         .any(|l| l.has_independent_charges || !l.c.is_empty());
     let mut buffer = Vec::new();
-    let charges = charge_sample(&ws, &local_slots, &mut buffer);
-    hist.push(0.0, charges);
-    let mut qdot = vec![0.0; charges.len()];
-    let mut qdot_new = vec![0.0; charges.len()];
+    charge_sample(&ws, &local_slots, &mut buffer);
+    let mut qdot = vec![0.; buffer.len()];
+    let mut qdot_new = qdot.clone();
+    hist.push(0., &mut buffer);
 
     let mut times = Vec::new();
     let mut cols: Vec<Vec<f64>> = vec![Vec::new(); n];
@@ -698,7 +766,7 @@ pub(crate) fn tran(
     let mut bp_idx = 0;
     // The first step is taken without error control, so start small.
     let mut h = 0.01 * hmax.min(bps.first().copied().unwrap_or(tstop));
-    let mut integ = Integration::dc(charges.len());
+    let mut integ = Integration::dc(n);
     let mut x_new = x.clone();
     let predict = ckt.groups.iter().any(|g| g.type_name() == "bsim4");
     let mut previous_x = if predict { x.clone() } else { Vec::new() };
@@ -727,7 +795,9 @@ pub(crate) fn tran(
         } else {
             1
         };
-        integration(opts.method, order, h, &hist, &qdot, &mut integ);
+        let (a0, term) = HistoryTerm::step(opts.method, order, h, &hist.t);
+        integ.a0 = a0;
+        term.write(&mut integ.hist, 0, &hist, &qdot);
         ctx.time = t + h;
         ctx.final_step = ctx.time >= tstop - eps;
         x_new.copy_from_slice(&x);
@@ -797,10 +867,20 @@ pub(crate) fn tran(
         eval_ctx.final_step = ctx.final_step;
         crate::solve::assemble_charges(ckt, &eval_ctx, &x_new, &mut ws, opts)?;
         let begin = profile.then(std::time::Instant::now);
-        let charges = charge_sample(&ws, &local_slots, &mut buffer);
-        for i in 0..charges.len() {
-            qdot_new[i] = integ.a0 * charges[i] + integ.hist[i];
-        }
+        charge_sample(&ws, &local_slots, &mut buffer);
+        let error_order = order.min(hist.len() - 1);
+        let estimate = (error_order > 0)
+            .then(|| Truncation::new(opts.method, error_order, h, ctx.time, &hist));
+        let r = charge_derivatives(
+            term,
+            a0,
+            &hist,
+            &buffer,
+            &qdot,
+            &mut qdot_new,
+            estimate.as_ref(),
+            opts,
+        );
         // Truncation-error control (needs order + 1 history points).
         // A UIC voltage jump may place a displacement-current impulse in the first
         // backward-Euler sample. Resolve the right-hand limit before growing the step.
@@ -840,18 +920,6 @@ pub(crate) fn tran(
         if hist.len() >= 2 {
             // Use the conservative first-order estimate while the third divided
             // difference is unavailable at a trapezoidal restart.
-            let error_order = order.min(hist.len() - 1);
-            let r = lte_ratio(
-                opts.method,
-                error_order,
-                h,
-                ctx.time,
-                charges,
-                &qdot_new,
-                &qdot,
-                &hist,
-                opts,
-            );
             let factor = 0.9 * r.max(1e-12).powf(-1.0 / (error_order as f64 + 1.0));
             if r > 1.0 {
                 let h_new = h * factor.clamp(0.125, 0.9);
@@ -881,7 +949,7 @@ pub(crate) fn tran(
             bp_idx += 1;
             hist.clear();
         }
-        hist.push(t, charges);
+        hist.push(t, &mut buffer);
         ws.commit();
         std::mem::swap(&mut qdot, &mut qdot_new);
         if predict {
@@ -981,17 +1049,14 @@ mod tests {
         let mut history = History::default();
         let charge = |t: f64| 1e-17 * t.powi(3);
         for t in [0., 1., 3.] {
-            history.push(t, &[charge(t)]);
+            history.push(t, &mut vec![charge(t)]);
         }
         // In picoseconds the last step is 2 and the new step is 1.
         for t in &mut history.t {
             *t *= 1e-12;
         }
-        let ratio = lte_ratio(
-            Method::Gear,
-            2,
-            1e-12,
-            4e-12,
+        let ratio = Truncation::new(Method::Gear, 2, 1e-12, 4e-12, &history).ratio(
+            0..1,
             &[charge(4.)],
             &[0.],
             &[0.],

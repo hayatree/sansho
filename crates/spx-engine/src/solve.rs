@@ -22,7 +22,7 @@ use crate::options::SimOptions;
 pub(crate) struct Integration {
     /// Coefficient of `q` (0 for DC).
     pub a0: f64,
-    /// Nodal history terms, optionally followed by device-local terms for LTE.
+    /// Nodal history terms for the Newton residual.
     pub hist: Vec<f64>,
 }
 
@@ -421,11 +421,24 @@ fn assemble_for(
     }
 }
 
-/// Destinations per parallel task in [`gather`].
+/// Destinations per source-ordered native scatter tile.
+pub(crate) const SCATTER_TILE: usize = 512;
+/// Destinations per task in the CSR gather.
 pub(crate) const GATHER_CHUNK: usize = 2048;
 
 /// `dst[i] = Σ sources of i`, accumulated in the fixed order of `map`.
 fn gather(dst: &mut [f64], map: &Gather, slots: &[Slots], pick: fn(&Slots) -> &[f64], par: bool) {
+    if par && !map.tiles.is_empty() {
+        dst.par_chunks_mut(SCATTER_TILE)
+            .zip(&map.tiles)
+            .for_each(|(out, tile)| {
+                out.fill(0.);
+                for (g, group) in tile {
+                    group.sum(pick(&slots[*g]), out);
+                }
+            });
+        return;
+    }
     let Some((ptr, src)) = map.by_destination.as_ref().filter(|_| par) else {
         dst.fill(0.);
         for (slots, group) in slots.iter().zip(&map.by_group) {

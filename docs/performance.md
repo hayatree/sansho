@@ -766,3 +766,166 @@ the BSIM4 chain.
 | mult16_bsim4, 1 and 12 workers | `130ab727c5e26c4a7156b4bd9e5ccc0f7db4a3fd61b4abd06f4c9012bcd29a7f` |
 | mult16_mos1, 1 and 5 workers | `39e09dabb59609e26c98704a96e01987e11f25b581dfda889eb6fb96621ab935` |
 | inv_chain1000_bsim4, 1 and 3 workers | `f5739483db7c3f68cb55c9fc4c7031745f92fd5d958c3c0678d9b820fb8274eb` |
+
+### M5-4 column-parallel numeric refactor
+
+The BSIM4 multiplier missed the 9 s target. With profiling disabled,
+three interleaved default-worker runs per build gave a median of **23.96 s
+at a37d005 and 20.28 s at M5-4**, a 15.4% wall reduction. The ranges
+were 23.54–25.21 and 19.12–20.54 s. The full-precision waveform matches
+M5-3, and every deck met the single-worker guard in the profiled comparison.
+
+Both multiplier decks still have 68 BTF blocks. The 5,034-column block sets
+the cost. In the fixed-pivot factorization, an upper entry at row `i` of
+column `j` reads the completed lower column `i`. This gives a DAG directly
+from the stored factors. Disjoint components of its prefix can run on the
+existing pool with private scatter vectors. After the join, the remaining
+columns run in order. A failed pivot preserves every valid earlier column
+for the serial search. The triangular solves retain their original ordering.
+
+The M5-1 estimate refers to an earlier column ordering. For the M5-3
+minimum-degree ordering, counting columns, inputs, L and U entries and
+scalar updates gives 7,551,526 work units and a 7,024,156-unit critical path
+for the startup factorization. A transient sample after 350 attempts had
+59,861 factor entries, 212 levels, 446,136 units of work and an ideal speedup
+of 1.71. These are structural estimates. They exclude synchronization,
+zero-update skips and fresh pivoting.
+
+**Ordering and pivot experiments.** A recursive breadth-first separator
+trial on the block graph kept minimum-degree order within leaves of fewer
+than 128 columns. The startup factor grew from 206,151 to 493,498 entries.
+The estimated ideal speedup rose from 1.08 to 1.19. On a 9 ns transient
+with the original 320 ps step limit, numeric time rose from 1.19 to 14.03 s
+and the waveform changed. Reducing the fixed-pivot acceptance threshold
+from 0.1 to 0.01 cut fresh searches from 274 to 87 and numeric time to
+0.91 s on this interval. It changed the waveform and took 952 Newton
+iterations against the original 951. The shipped ordering and threshold
+preserve the M5-3 waveform.
+
+**Incremental measurements.** Each pair below compares the affected phase
+on the same 9 ns deck. Times are median milliseconds across three interleaved
+processes per executable. Each row is its own experiment. Host load varied
+between and within experiments, especially in the gather trial.
+
+| Change | Phase | Before (ms) | After (ms) |
+|---|---|---:|---:|
+| Copy contiguous charge slots and parallelize the maximum LTE reduction | Control | 687.5 | 262.5 |
+| Schedule independent fixed-pivot subtrees | Numeric | 1,285.4 | 1,253.1 |
+| Replay verified reach during fresh pivot search | Numeric | 1,039.7 | 956.0 |
+| Gather native stamps into disjoint destination tiles | Assembly | 510.2 | 307.8 |
+| Rotate accepted charge buffers and compute local derivatives with LTE | Control | 198.0 | 119.6 |
+
+The last control comparison used a 16-worker trial budget. A backward solve
+trial processed the serial separator first and then solved independent upper
+subtrees in reverse column order. Copying the pivot RHS into per-task scratch
+and gathering solutions took the solve phase from 138 to 139 ms. A four-column
+packed separator increased numeric time from 474 to 561 ms. A contiguous
+lower-factor run kernel took 531 versus 506 ms, and a 96-column dense frontal
+trial took 796 versus 791 ms. The fixed-pivot kernel keeps the original
+scalar update for each column. Testing for unchanged individual columns gave
+1,015 versus 1,021 ms with extra bookkeeping. These trials were discarded.
+
+The MOS1 batch caches voltage-independent geometry and reuses the junction
+limiting voltage for devices with the same peak saturation current. The
+converged-point sampler evaluates terminal charges and updates Meyer histories
+without writing current or Jacobian stamps. In two interleaved full-deck
+single-worker comparisons, the MOS1 multiplier took 12.02 and 12.74 s with
+these changes, against 15.31 and 14.43 s at HEAD. Unit coverage compares
+every charge and history slot across both device polarities, reversed drain
+bias and series resistance.
+
+**Complete decks.** The comparison below uses two release CLIs on the same
+32-hardware-thread host. Each process ran on its own, without affinity.
+For each deck and worker setting the M5-3 and M5-4 builds alternated order.
+Times are medians of three runs per build for the multipliers and generated
+RC grid and seven for the shorter decks. The host was shared. Wall includes
+CLI startup and raw output, and the phase timers were enabled in both builds.
+The 3% guard uses the single-worker wall medians.
+
+| Deck | Default workers | M5-3 -j1 (s) | M5-4 -j1 (s) | -j1 change | M5-3 default (s) | M5-4 default (s) |
+|---|---:|---:|---:|---:|---:|---:|
+| mult16_bsim4 | 12 | 56.87 | 53.90 | −5.2% | 25.85 | 19.11 |
+| mult16_mos1 | 5 | 14.11 | 12.31 | −12.8% | 8.42 | 7.54 |
+| rc_grid_300 | 1 | 4.87 | 4.10 | −15.9% | 4.32 | 4.67 |
+| inv_chain1000_bsim4 | 3 | 0.1960 | 0.1909 | −2.6% | 0.1988 | 0.1463 |
+| ring1001_mos1 | 2 | 0.1135 | 0.1078 | −5.0% | 0.1338 | 0.0911 |
+| sky_ring5 | 1 | 0.3022 | 0.2810 | −7.0% | 0.2963 | 0.2803 |
+| ring_osc | 1 | 0.0054 | 0.0053 | −1.8% | 0.0052 | 0.0047 |
+
+All seven decks met the single-worker guard in this comparison. The RC grid
+used one worker in both modes, and its two series moved in opposite
+directions. The grid retains the general sparse backend. The earlier M5-3
+reference measured 41.87 s at one worker and 14.79 s at twelve on the BSIM4
+multiplier. The same-session baseline above is the denominator for speedups.
+
+**BSIM4 worker sweep.** Times below are seconds. The one- and twelve-worker
+rows are medians from the paired experiment. Other rows are single
+processes. Phase medians are calculated independently. Wall also includes
+engine work outside the phase timers. The production CLI treats `-j` as
+a ceiling. To measure sixteen actual workers, the timing build raised only
+the native single-analysis budget floor to sixteen and ran with `-j16`.
+The production worker heuristic and affinity policy are unchanged.
+
+| Build | Actual workers | Wall | Setup + parse | Device | Assembly | Symbolic | Numeric LU | Solve | Step control | Output |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| M5-3 | 1 | 56.871 | 0.074 | 39.191 | 3.546 | 0.016 | 8.132 | 1.243 | 4.249 | 0.031 |
+| M5-4 | 1 | 53.902 | 0.061 | 38.447 | 3.318 | 0.019 | 7.162 | 1.218 | 3.212 | 0.040 |
+| M5-4 | 4 | 23.064 | 0.056 | 11.770 | 2.213 | 0.016 | 5.800 | 1.309 | 1.445 | 0.033 |
+| M5-4 | 8 | 19.007 | 0.091 | 7.315 | 2.096 | 0.024 | 6.469 | 1.369 | 1.161 | 0.029 |
+| M5-3 | 12 | 25.848 | 0.077 | 6.799 | 3.169 | 0.017 | 8.701 | 1.386 | 5.256 | 0.036 |
+| M5-4 | 12 | 19.106 | 0.090 | 6.426 | 2.460 | 0.023 | 6.888 | 1.457 | 1.212 | 0.037 |
+| M5-4 | 16 | 20.248 | 0.051 | 6.667 | 2.484 | 0.015 | 7.476 | 1.532 | 1.364 | 0.078 |
+
+The complete BSIM4 transient required 10,257 Newton iterations and rejected
+527 steps. Of its 10,257 LU calls, 2,122 (20.7%) searched for a new pivot
+and 8,135 completed with fixed pivots. At twelve workers the respective
+times were 2.79 and 4.10 s. The replay cache reduces the cost of a search
+while preserving the original pivot decisions. Eight and twelve workers
+were within 0.1 s in this sweep. Sixteen increased wall by 1.14 s relative
+to twelve, and a lighter-load trial favored twelve over eight. These runs
+did not justify raising the default worker budget.
+
+**Accuracy and determinism.** Each projected raw file at one and default
+workers matched its HEAD counterpart byte for byte on all seven decks.
+The four-, eight-, twelve- and sixteen-worker BSIM4 sweep also produced
+the HEAD projection. Removing the save projection and hashing all internal
+and exported binary64 time series reproduced the M5-3 SHA-256 values above
+at one, four and default workers for both multipliers. Both passed the
+per-bit product checks on every profiled run.
+
+| Multiplier | Points | Mean absolute error against cached gold (mV) | Crossings | Crossing difference |
+|---|---:|---:|---:|---:|
+| BSIM4 | 2,750 | 4.834 | 558 | 6 |
+| MOS1 | 1,560 | 4.338 | 486 | 24 |
+
+The unit test for fixed-pivot L3 forces accepted refactors and pivot changes
+on a random sparse block-banded matrix and a coupled ladder. It compares
+the earliest failed column, factor index sequences, every factor value and
+the triangular solution against the serial traversal.
+
+| Verification | Result |
+|---|---|
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings`, default and all features | Both passed |
+| `cargo test`, default and all features | 182 passed, 2 ignored / 193 passed, 3 ignored |
+| Release JIT verifier with cached regular, VA, BSIM4 and SKY130 decks | 55/55 passed, 4 known, 0 skipped |
+| `run.py --check-bits` on both multipliers | Both matched M5-3 at all three worker settings |
+
+**Next measurements.** Repeat the paired default-worker runs on an idle host
+to compare against the historical 14.79 s baseline. Instrument update counts
+and time by column in the serial factor suffix, including the 2,122 calls
+that repivoted. The 12-worker profile puts 13.31 s into numeric LU and
+device evaluation together. For LU, evaluate SIMD across independent
+destination rows of a single predecessor update. For device evaluation,
+measure batching BSIM4 cache misses across instances with the same geometry.
+Both experiments can preserve the existing operation order per output.
+
+The checked-in runner accepts repeated worker limits. From the repository
+root the following runs reproduce the normal CLI sweep and full-vector checks.
+
+```sh
+cargo build --release -p spx-cli
+python3 benches/large/gen.py
+python3 benches/large/run.py --deck mult16_bsim4 --jobs 1 --jobs 4 --jobs 8 --jobs 12
+python3 benches/large/run.py --check-bits --deck mult16_bsim4 --deck mult16_mos1
+```

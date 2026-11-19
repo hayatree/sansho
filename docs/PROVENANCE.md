@@ -236,3 +236,17 @@ divided differences supply the transient predictor. The block ordering
 implements minimum-degree elimination on a symmetric graph as described in
 Davis, *Direct Methods for Sparse Linear Systems* (2006). The implementations
 and performance probes are original.
+
+### M5-4 parallel fixed-pivot LU
+
+The BTF column dependency schedule and cached symbolic reach in
+`spx-sparse/src/btf.rs` and `btf/schedule.rs` are original implementations.
+The numerical algorithm follows Gilbert and Peierls (1988) and Davis and
+Palamadai Natarajan, Algorithm 907 (2010). The dependency forest and
+independent work scheduling use the principles described by Liu (1990) and
+Anderson and Saad (1989). The discarded separator-ordering experiment used
+George (1973). The tile gather, charge-history buffer rotation, parallel LTE
+and determinism fixtures extend the repository's existing algorithms. The
+MOS1 charge-only specialization uses this repository's existing charge and
+linearization equations. The sparse crate uses the workspace's existing
+Rayon library.
