@@ -5,11 +5,12 @@ A fast, agent-native SPICE circuit simulator written in Rust.
 > **Status:** pre-alpha. R, C, L, coupled windings (K), independent and controlled sources
 > (V/I/E/F/G/H/B), SW/CSW switches, diodes, Gummel–Poon BJTs, MOS1 and built-in BSIM4.
 > Supports operating and nominal temperatures, DC temperature sweeps, scaled MOS geometry,
-> capacitor and inductor initial conditions, `.op`, `.dc`, `.ac`, `.tran` (trapezoidal or BDF2 with LTE control), `.meas`, `.model`,
+> capacitor and inductor initial conditions, `.op`, `.dc`, `.ac`, `.tran` (trapezoidal or BDF2 with LTE control),
+> `.noise`, `.tf`, DC/AC `.sens`, `.four`, small-circuit `.pz`, `.meas`, `.model`,
 > `.options`, `.param`/expressions/`.func`, `.subckt`, `.include`/`.lib`, model binning, `.ic`,
 > `.nodeset`, UIC; compiled Verilog-A modules through `.hdl` and `N` instances (VA-3). Results are checked against ngspice (`verify/`). Session API and MCP server for
 > AI agents; pre-run lint and structured diagnostics ([`docs/diagnostics.md`](docs/diagnostics.md));
-> bit-deterministic multithreading. See [`docs/architecture.md`](docs/architecture.md).
+> bit-deterministic multithreading. [Analysis cards and outputs](docs/analyses.md) · [Architecture](docs/architecture.md).
 
 ```sh
 cargo run -p spx-cli -- run examples/rc_lowpass.cir            # summary

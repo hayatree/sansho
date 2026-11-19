@@ -46,7 +46,7 @@ measure the accuracy and work counts for both bypass settings. [Performance meas
 | 8, alternative materials | Selecting a nonzero MTRLMOD produces E-UNSUPPORTED during binding. |
 | 9.1, non-quasi-static response | Selecting transient or AC NQS produces E-UNSUPPORTED during binding. |
 | 9.2–9.3, RF | Gate resistance modes 0–3, the middle-gate overlap connection and a controlled channel-charging conductance. Body modes 0–2 include drain-side and source-side junction nodes. |
-| 10, noise | The evaluated card retains the noise selectors and Appendix A.10 coefficients. Noise spectra require a future noise analysis. |
+| 10, noise | Channel thermal and flicker noise selectors 0 and 1, resistive network thermal noise and gate leakage shot noise feed adjoint noise analysis. The correlated thermal selector 2 is unsupported. [Methods and outputs](analyses.md#noise) |
 | 11, junctions | Bottom, isolation-sidewall and gate-edge leakage and charge, dioMod 0–2, avalanche and limiting currents, trap-assisted reverse current. |
 | 12, layout | Supplied or derived drain/source area, perimeter and squares, finger count, gate contacts and electrode resistance. Shared/contact diffusion resistances use a rectangular approximation. |
 | 13, temperature | Threshold, mobility, velocity, resistance, diode current and junction capacitance specialization for tempMod 0–3. Circuit TEMP and model TNOM are converted from °C to kelvin. |
@@ -152,3 +152,12 @@ The original 14 decks and ten JIT Verilog-A decks passed and all 24 spx raw file
 In B4-1, median check / run times in seconds for three warm release CLI invocations were 0.154 / 0.167 for `sky_cs_ac`, 0.188 / 0.217 for `sky_inverter_tran`, 0.163 / 0.154 for `sky_nfet_idvd`, 0.164 / 0.158 for `sky_nfet_iv`, 0.158 / 0.209 for `sky_pfet_iv` and 0.169 / 0.220 for `sky_ring5`.
 
 The B4-1 release microbenchmark measured 431.3 ns per intrinsic current, charge and both four-terminal Jacobians with default selectors. External network stamps and the matrix solve are excluded. The maintainer reports approximately 16 s for ngspice to load the SKY130 library.
+
+## Noise defaults
+
+The NOIC default follows the BSIM4 4.8.2 manual (Appendix A: 8.75). ngspice 44 behaves
+as if the default were 8.75e9 (black-box comparison,
+`verify/decks/noise_bsim4_noic_default.cir`, a known difference). With NOIC given
+explicitly the flicker and thermal noise agree with ngspice
+(`verify/decks/noise_bsim4_cs.cir`). Production PDK cards such as SKY130 set NOIC
+explicitly, so the default rarely applies.

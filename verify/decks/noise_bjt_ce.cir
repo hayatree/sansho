@@ -1,0 +1,11 @@
+Common-emitter base and collector noise
+* verify: atol_v=1e-18 atol_i=1e-21
+* Provenance: original R2 verification circuit.
+Vcc rail 0 5
+Vsig in 0 dc 0.68 ac 1
+Rb in b 1k
+Rc rail out 3k
+Qamp out b 0 amp
+.model amp npn(is=1e-15 bf=130 vaf=90 rb=12 rc=2 kf=2e-14 af=1)
+.noise v(out) Vsig oct 3 10 163840
+.end

@@ -9,11 +9,14 @@
 
 mod analysis;
 mod circuit;
+mod fourier;
+pub use fourier::fourier;
 mod lint;
 mod measure;
 pub mod monte_carlo;
 mod options;
 mod parallel;
+mod small_signal;
 mod solve;
 
 pub use circuit::{Circuit, compile, hdl_files};
@@ -80,6 +83,8 @@ impl MeasurementContext {
 pub struct RunOutput {
     /// Full traces retained for post-run measurements when output was projected.
     pub measurement_context: Option<MeasurementContext>,
+    /// CLI contributor reporting intervals, in noise card order.
+    pub noise_summary_intervals: Vec<u32>,
     /// Statistics in transient card order.
     pub tran_stats: Vec<TranStats>,
     /// Statistics in DC card order.
@@ -172,12 +177,12 @@ fn run_analysis(
     nl: &Netlist,
     opts: &SimOptions,
     card: &AnalysisCard,
-) -> Result<(spx_output::AnalysisResult, Option<Stats>), Diagnostic> {
+) -> Result<(Vec<spx_output::AnalysisResult>, Option<Stats>), Diagnostic> {
     let mut stats = None;
     // Retained VA interpreter variables belong to an analysis, never to concurrent analyses.
     let owned = if nl.analyses.len() > 1
         && !nl.hdl.is_empty()
-        && !matches!(card, AnalysisCard::Dc { .. })
+        && !matches!(card, AnalysisCard::Dc { .. } | AnalysisCard::Four { .. })
     {
         Some(
             if ckt.ordering.is_some() {
@@ -202,6 +207,49 @@ fn run_analysis(
     };
     let ckt = owned.as_ref().unwrap_or(ckt);
     let mut result = match card {
+        AnalysisCard::Noise {
+            output,
+            source,
+            sweep,
+            points,
+            fstart,
+            fstop,
+            ..
+        } => {
+            return small_signal::noise(
+                ckt,
+                nl,
+                opts,
+                output,
+                source,
+                analysis::ac_frequencies(*sweep, *points, *fstart, *fstop)?,
+            )
+            .map(|plots| (plots, None));
+        }
+        AnalysisCard::Tf { output, source, .. } => {
+            return small_signal::tf(ckt, nl, opts, output, source).map(|a| (vec![a], None));
+        }
+        AnalysisCard::Sens {
+            output,
+            ac: Some(grid),
+            ..
+        } => return small_signal::ac_sens(ckt, nl, opts, output, *grid).map(|a| (vec![a], None)),
+        AnalysisCard::Sens {
+            output, ac: None, ..
+        } => {
+            return small_signal::sens(ckt, nl, opts, output).map(|a| (vec![a], None));
+        }
+        AnalysisCard::Pz {
+            nodes,
+            voltage,
+            poles,
+            zeros,
+            ..
+        } => {
+            return small_signal::pz(ckt, opts, nodes, *voltage, *poles, *zeros)
+                .map(|a| (vec![a], None));
+        }
+        AnalysisCard::Four { .. } => return Ok((vec![], None)),
         AnalysisCard::Op { .. } => analysis::op(ckt, opts),
         AnalysisCard::Dc {
             source,
@@ -249,7 +297,7 @@ fn run_analysis(
         }),
     }?;
     add_aliases(ckt, &mut result);
-    Ok((result, stats))
+    Ok((vec![result], stats))
 }
 
 fn add_aliases(ckt: &Circuit, result: &mut spx_output::AnalysisResult) {
@@ -279,6 +327,15 @@ fn project_results(full: &mut SimResults, saves: &[String]) -> Option<Measuremen
         .analyses
         .iter()
         .map(|a| {
+            if !matches!(
+                a.kind,
+                spx_output::AnalysisKind::Op
+                    | spx_output::AnalysisKind::Tran
+                    | spx_output::AnalysisKind::Ac
+                    | spx_output::AnalysisKind::Dc
+            ) {
+                return a.clone();
+            }
             let indices: Vec<_> = a
                 .variables
                 .iter()
@@ -313,7 +370,12 @@ fn project_results(full: &mut SimResults, saves: &[String]) -> Option<Measuremen
 
 fn card_span(card: &AnalysisCard) -> spx_diag::Span {
     match card {
-        AnalysisCard::Op { span }
+        AnalysisCard::Four { span, .. }
+        | AnalysisCard::Pz { span, .. }
+        | AnalysisCard::Tf { span, .. }
+        | AnalysisCard::Sens { span, .. }
+        | AnalysisCard::Noise { span, .. }
+        | AnalysisCard::Op { span }
         | AnalysisCard::Dc { span, .. }
         | AnalysisCard::Ac { span, .. }
         | AnalysisCard::Tran { span, .. } => *span,
@@ -402,7 +464,7 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
         options: opts,
         mut warnings,
     } = checked;
-    let outcomes: Vec<_> = match nl.analyses.as_slice() {
+    let mut outcomes: Vec<_> = match nl.analyses.as_slice() {
         // A lone sweep owns the already elaborated DC circuit. Concurrent
         // analysis cards still need private mutable devices for each sweep.
         [
@@ -418,7 +480,7 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
                 analysis::dc_sweep(&mut ckt, &opts, nl, source, *start, *stop, *step).map(
                     |(mut result, stats)| {
                         add_aliases(&ckt, &mut result);
-                        (result, Some(Stats::Dc(stats)))
+                        (vec![result], Some(Stats::Dc(stats)))
                     },
                 ),
             ]
@@ -429,6 +491,24 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
             .map(|card| run_analysis(&ckt, nl, &opts, card))
             .collect(),
     };
+    for (i, card) in nl.analyses.iter().enumerate() {
+        if let AnalysisCard::Four {
+            frequency, outputs, ..
+        } = card
+        {
+            let transient = outcomes
+                .iter()
+                .filter_map(|r| r.as_ref().ok())
+                .flat_map(|(v, _)| v)
+                .find(|a| a.kind == spx_output::AnalysisKind::Tran);
+            outcomes[i] = transient
+                .ok_or_else(|| {
+                    small_signal::error("Fourier analysis requires a completed transient")
+                })
+                .and_then(|tran| fourier(tran, *frequency, outputs))
+                .map(|a| (vec![a], None));
+        }
+    }
     let mut results = SimResults {
         measures: Vec::new(),
         title: nl.title.clone(),
@@ -439,7 +519,7 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
     for (card, r) in nl.analyses.iter().zip(outcomes) {
         match r {
             Ok((a, stats)) => {
-                results.analyses.push(a);
+                results.analyses.extend(a);
                 match stats {
                     Some(Stats::Dc(s)) => dc_stats.push(s),
                     Some(Stats::Tran(s)) => tran_stats.push(s),
@@ -468,6 +548,17 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
     }
     let measurement_context = project_results(&mut results, &nl.saves);
     Ok(RunOutput {
+        noise_summary_intervals: nl
+            .analyses
+            .iter()
+            .filter_map(|c| {
+                if let AnalysisCard::Noise { summary, .. } = c {
+                    Some(*summary)
+                } else {
+                    None
+                }
+            })
+            .collect(),
         measurement_context,
         results,
         warnings,

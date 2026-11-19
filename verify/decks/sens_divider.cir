@@ -1,0 +1,7 @@
+DC divider derivatives
+* Provenance: original R2 verification circuit.
+Vsig in 0 2
+Ra in out 3k
+Rb out 0 1k
+.sens v(out)
+.end

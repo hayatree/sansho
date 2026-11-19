@@ -69,8 +69,7 @@ Crate layout (`crates/spx-va`, depends only on `spx-diag`):
   asinh acosh atanh hypot limexp`), access functions `V(n)`, `V(a,b)`, `I(...)`, `I(<a>)` port
   flows, `ddt`, `ddx`, `idt(expr, initial_condition)`, `$temperature`, `$vt`, `$vt(T)`, `$abstime`,
   `$mfactor`, `$param_given` / `$given`, `$port_connected`, `$simparam("name", default)`, `$limit`,
-  `analysis("...")`, noise functions (`white_noise`, `flicker_noise`, `noise_table`) parsed and
-  evaluated as 0 (no noise analysis yet).
+  `analysis("...")`, noise functions (`white_noise`, `flicker_noise`, `noise_table`). In noise analysis, each active call supplies an independent generator. An interpreter replay propagates its derivative through resistive and reactive residuals at the operating point. In other analyses the calls return zero.
 
 Anything else produces a structured diagnostic `E-VA-UNSUPPORTED` with a span; never a panic.
 

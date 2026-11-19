@@ -1,0 +1,9 @@
+Thermal noise of a divider with equal resistances
+* verify: atol_v=1e-18 atol_i=1e-21
+* Provenance: original R2 verification circuit.
+Vdrive in 0 dc 0 ac 1
+Rupper in out 2k
+Rlower out 0 2k
+.temp 27
+.noise v(out) Vdrive dec 4 10 100k
+.end

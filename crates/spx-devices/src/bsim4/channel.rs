@@ -7,6 +7,10 @@ use crate::dual::Dual;
 use crate::junction::safe_exp;
 
 pub(super) struct Bias<const N: usize> {
+    pub mobility: f64,
+    pub width: f64,
+    pub abulk: f64,
+    pub rds: f64,
     pub beta: Dual<N>,
     pub id_per_volt: Dual<N>,
     pub over: Dual<N>,
@@ -325,6 +329,10 @@ impl Size {
             vd * conductance,
             substrate,
             Bias {
+                mobility: mobility.v,
+                width: weff.v,
+                abulk: abulk.v,
+                rds: rds.v,
                 beta: self.nf * mobility * coxeff * weff / self.l,
                 id_per_volt: conductance,
                 over,

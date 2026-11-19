@@ -37,6 +37,8 @@ use crate::{
 pub struct BjtModel {
     /// Prepared operating temperature in kelvin.
     pub temperature: Option<f64>,
+    pub kf: f64,
+    pub af: f64,
     pub tnom: Option<f64>,
     pub eg: f64,
     pub xti: f64,
@@ -106,6 +108,8 @@ impl BjtModel {
         let nz = |v: f64| if v == 0.0 { inf } else { v };
         let m = Self {
             temperature: None,
+            kf: p.get("kf", 0.),
+            af: p.get("af", 1.),
             tnom: p.opt(&["tnom"]),
             eg: p.get("eg", 1.11),
             xti: p.get("xti", 3.0),
@@ -182,6 +186,43 @@ impl Bjts {
 const SUFFIX: [&str; 3] = ["c", "b", "e"];
 
 impl DeviceGroup for Bjts {
+    fn noise(
+        &self,
+        ctx: &EvalCtx,
+        x: &[f64],
+        slots: &Slots,
+        out: &mut Vec<crate::NoiseSource>,
+    ) -> Result<(), Diagnostic> {
+        for i in 0..self.len() {
+            let m = &self.model[i];
+            let temp = m.temperature.unwrap_or(ctx.temp);
+            let thermal = 4. * crate::BOLTZMANN * temp;
+            let mut at = self.at[i];
+            let mut emit = |p, n, power, exp| {
+                out.push(crate::NoiseSource::branch(&self.names[i], p, n, power, exp))
+            };
+            let [c, b, e, _] = self.int[i];
+            for (k, r) in [m.rc, m.rb, m.re].into_iter().enumerate() {
+                if r > 0. {
+                    emit(
+                        self.ext[i][k],
+                        self.int[i][k],
+                        thermal * self.area[i] / r,
+                        0.,
+                    );
+                    at.f += 2;
+                }
+            }
+            let bc = volt(x, b) - volt(x, c);
+            let be = volt(x, b) - volt(x, e);
+            let ic = (slots.f[at.f] + ctx.gmin * bc).abs();
+            let ib = (slots.f[at.f + 1] - ctx.gmin * (be + bc)).abs();
+            emit(c, e, 2. * crate::CHARGE * ic, 0.);
+            emit(b, e, 2. * crate::CHARGE * ib, 0.);
+            emit(b, e, m.kf * ib.powf(m.af), 1.);
+        }
+        Ok(())
+    }
     fn instance_name(&self, index: usize) -> Option<&str> {
         self.names.get(index).map(String::as_str)
     }

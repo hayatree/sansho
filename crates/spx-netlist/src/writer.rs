@@ -158,6 +158,75 @@ pub fn write_measure(m: &MeasureCard) -> String {
 pub fn write_analysis(a: &AnalysisCard) -> String {
     match a {
         AnalysisCard::Op { .. } => ".op".into(),
+        AnalysisCard::Tf { output, source, .. } => format!(".tf {output} {source}"),
+        AnalysisCard::Sens { output, ac, .. } => {
+            let mut line = format!(".sens {output}");
+            if let Some(grid) = ac {
+                let mode = match grid.sweep {
+                    AcSweep::Dec => "dec",
+                    AcSweep::Oct => "oct",
+                    AcSweep::Lin => "lin",
+                };
+                let _ = write!(
+                    line,
+                    " ac {mode} {} {} {}",
+                    grid.points,
+                    num(grid.fstart),
+                    num(grid.fstop)
+                );
+            }
+            line
+        }
+        AnalysisCard::Four {
+            frequency, outputs, ..
+        } => format!(
+            ".four {} {}",
+            num(*frequency),
+            outputs
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        AnalysisCard::Pz {
+            nodes,
+            voltage,
+            poles,
+            zeros,
+            ..
+        } => format!(
+            ".pz {} {} {}",
+            nodes.join(" "),
+            if *voltage { "vol" } else { "cur" },
+            if *poles && *zeros {
+                "pz"
+            } else if *poles {
+                "pol"
+            } else {
+                "zer"
+            }
+        ),
+        AnalysisCard::Noise {
+            output,
+            source,
+            sweep,
+            points,
+            fstart,
+            fstop,
+            summary,
+            ..
+        } => {
+            let sweep = match sweep {
+                AcSweep::Dec => "dec",
+                AcSweep::Oct => "oct",
+                AcSweep::Lin => "lin",
+            };
+            format!(
+                ".noise {output} {source} {sweep} {points} {} {} {summary}",
+                num(*fstart),
+                num(*fstop)
+            )
+        }
         AnalysisCard::Dc {
             source,
             start,

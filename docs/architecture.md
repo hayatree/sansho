@@ -65,7 +65,7 @@
                                        └──────┬──────┘
            ┌──────────────────────────────────▼───────────┐
  Engine    │ spx-engine : MNA assembly / Newton / analyses │
-           │   OP · DC sweep · AC · TRAN · (Noise · PSS/HB)│
+           │   OP · DC · AC · TRAN · noise · TF · sens · Fourier · PZ│
            └───┬──────────────┬───────────────┬───────────┘
            ┌───▼────────┐ ┌───▼──────────┐ ┌──▼──────────┐
  Kernel    │ spx-devices│ │ spx-sparse   │ │ spx-output  │
@@ -139,7 +139,7 @@ pub trait DeviceGroup: Send + Sync {
     /// Charge/flux states to be integrated, exposed for LTE estimation.
     fn charges(&self, st: &GroupState) -> &[f64];
 
-    /// Noise sources (added later).
+    /// Independent local noise generators and their residual coefficients.
     fn noise(&self, ...) {}
 }
 ```
@@ -198,6 +198,14 @@ publication. Section 16 describes two-lane native circuit evaluation and timing 
 ---
 
 ## 5. Numerical engine
+
+AC, noise, transfer, sensitivity and pole-zero analyses share the operating-point
+linearization. A device supplies a one-sided noise spectrum and signed local MNA
+coefficients. Each frequency requires one complex transpose solve. Contributions
+accumulate in stable instance order. DC parameter derivatives reuse one real
+adjoint. Small pole-zero pencils use sequential dense QZ through the existing
+faer backend. Fourier analysis consumes the completed transient before public
+signal projection. [Analysis algorithms and limits](analyses.md)
 
 ### 5.1 Nonlinear solve (Newton)
 
@@ -296,8 +304,8 @@ the accepted time grid. [BSIM4 startup and restart conventions](bsim4.md#numeric
 
 - **AC**: solve `G + jωC` at the OP with complex LU, sharing the symbolic factorization (same
   pattern).
-- **Noise**: adjoint method (later).
-- **Sensitivity**: adjoint DC/AC sensitivities (later; useful for agent-driven optimization loops).
+- **Noise** uses a complex adjoint per frequency and integrates independent output and input power spectra.
+- **Sensitivity** uses one nominal DC adjoint or a forward and adjoint AC solve at each frequency. The AC matrix derivative includes operating-point motion.
 
 ### 5.5 Periodic steady state (later)
 
@@ -646,7 +654,7 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
 | M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP (done: `spx-mcp/tests/stdio.rs`) |
 | M4 | OSDI loader and PDKs: IHP SG13G2 (PSP103, ...), SKY130 (built-in level 54), broader ngspice dialect | PDK testbenches match ngspice (dialect part done: `verify/decks/{subckt_ring,lib_include,nodeset_latch,uic_rlc}`) |
 | M5 | Performance: own KLU-style solver, bypass, parallel LU, GPU batch (G1) | ≥ 1.x× ngspice on C6288 single-core; further gains multi-core |
-| M6 | Extensions: noise, sensitivity, PSS/HB, HSPICE dialect, Python | — |
+| M6 | Extensions: PSS/HB, HSPICE dialect, Python | — |
 
 ---
 

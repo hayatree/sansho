@@ -516,7 +516,8 @@ impl Parser {
                     value = Some(v);
                 } else if matches!(k.as_str(), "m" | "mult") {
                     mult = v;
-                } else if (k == "ic" && letter != "R")
+                } else if (k == "noisy" && letter == "R")
+                    || (k == "ic" && letter != "R")
                     || matches!(k.as_str(), "tc1" | "tc2" | "temp" | "dtemp")
                 {
                     params.push((k, v));
@@ -1381,6 +1382,71 @@ impl Parser {
         }
     }
 
+    fn frequency_sweep(&mut self, t: &[Token], span: Span) -> Option<crate::FrequencySweep> {
+        if t.len() < 4 {
+            self.err("E-PARSE-ARITY", "expected dec|oct|lin n fstart fstop", span);
+            return None;
+        }
+        let sweep = match t[0].lower().as_str() {
+            "dec" => AcSweep::Dec,
+            "oct" => AcSweep::Oct,
+            "lin" => AcSweep::Lin,
+            _ => {
+                self.err(
+                    "E-PARSE-VALUE",
+                    format!(
+                        "unknown AC sweep type `{}` (use dec, oct or lin)",
+                        t[0].text
+                    ),
+                    t[0].span,
+                );
+                return None;
+            }
+        };
+        let (Some(np), Some(fstart), Some(fstop)) = (
+            self.number(&t[1], "number of points"),
+            self.number(&t[2], "fstart"),
+            self.number(&t[3], "fstop"),
+        ) else {
+            return None;
+        };
+        if !np.is_finite()
+            || np.fract() != 0.
+            || np < 1.0
+            || np > u32::MAX as f64
+            || !fstart.is_finite()
+            || !fstop.is_finite()
+            || fstart <= 0.0
+            || fstop < fstart
+        {
+            self.err(
+                "E-PARSE-VALUE",
+                "AC sweep needs n >= 1 and 0 < fstart <= fstop",
+                span,
+            );
+            return None;
+        }
+        Some(crate::FrequencySweep {
+            sweep,
+            points: np as u32,
+            fstart,
+            fstop,
+        })
+    }
+
+    fn analysis_probe(&mut self, t: &[Token], span: Span) -> Option<crate::Probe> {
+        use crate::Probe;
+        match t {
+            [k, p] if k.lower() == "v" => Some(Probe::Voltage(node_name(p), "0".into())),
+            [k, p, n] if k.lower() == "v" => Some(Probe::Voltage(node_name(p), node_name(n))),
+            [k, b] if k.lower() == "i" => Some(Probe::Current(b.lower())),
+            _ => {
+                self.err("E-PARSE-VALUE", "expected v(node[,ref]) or i(source)", span);
+                None
+            }
+        }
+    }
+
     fn dot_card(&mut self, head: &str, line: &Line) {
         let span = line.span();
         let t = &line.tokens;
@@ -1422,45 +1488,185 @@ impl Parser {
                     step,
                 });
             }
-            ".ac" => {
-                let Some(t) = self.need(line, 5, ".ac dec|oct|lin n fstart fstop") else {
+            ".tf" | ".sens" => {
+                let mut end = t.len() - usize::from(head == ".tf");
+                let mut ac = None;
+                if head == ".sens" && t.len() >= 8 && t[t.len() - 5].lower() == "ac" {
+                    end = t.len() - 5;
+                    let Some(grid) = self.frequency_sweep(&t[end + 1..], span) else {
+                        return;
+                    };
+                    ac = Some(grid);
+                }
+                let Some(output) = self.analysis_probe(t.get(1..end).unwrap_or_default(), span)
+                else {
                     return;
                 };
-                let sweep = match t[1].lower().as_str() {
-                    "dec" => AcSweep::Dec,
-                    "oct" => AcSweep::Oct,
-                    "lin" => AcSweep::Lin,
-                    _ => {
+                self.analyses.push(if head == ".tf" {
+                    AnalysisCard::Tf {
+                        span,
+                        output,
+                        source: t[end].lower(),
+                    }
+                } else {
+                    AnalysisCard::Sens { span, output, ac }
+                });
+            }
+            ".four" | ".fourier" => {
+                let Some(t) = self.need(line, 4, ".four frequency outvar ...") else {
+                    return;
+                };
+                let Some(frequency) = self.number(&t[1], "fundamental frequency") else {
+                    return;
+                };
+                if frequency <= 0. || !frequency.is_finite() {
+                    self.err("E-PARSE-VALUE", "Fourier frequency must be positive", span);
+                    return;
+                }
+                let mut outputs = Vec::new();
+                // Work back from the last probe so a parameter expression for
+                // the frequency can contain parenthesized function calls.
+                let mut end = t.len();
+                for argument in line
+                    .raw
+                    .rsplit(')')
+                    .filter_map(|s| s.rsplit_once('(').map(|(_, a)| a))
+                {
+                    if end == 2 {
+                        break;
+                    }
+                    let nodes = argument
+                        .split(|c: char| c == ',' || c.is_whitespace())
+                        .filter(|s| !s.is_empty())
+                        .count();
+                    let Some(start) = end.checked_sub(1 + nodes).filter(|&k| k >= 2) else {
+                        self.err("E-PARSE-VALUE", "malformed Fourier output probe", span);
+                        return;
+                    };
+                    let Some(probe) = self.analysis_probe(&t[start..end], span) else {
+                        return;
+                    };
+                    outputs.push(probe);
+                    end = start;
+                }
+                if end != 2 || outputs.is_empty() {
+                    self.err(
+                        "E-PARSE-VALUE",
+                        "expected Fourier output probes with parentheses",
+                        span,
+                    );
+                    return;
+                }
+                outputs.reverse();
+                self.analyses.push(AnalysisCard::Four {
+                    span,
+                    frequency,
+                    outputs,
+                });
+            }
+            ".pz" => {
+                if t.len() != 7 {
+                    self.err(
+                        "E-PARSE-ARITY",
+                        ".pz in+ in- out+ out- vol|cur pol|zer|pz",
+                        span,
+                    );
+                    return;
+                }
+                let mode = t[6].lower();
+                let input = t[5].lower();
+                if !matches!(mode.as_str(), "pol" | "zer" | "pz")
+                    || !matches!(input.as_str(), "vol" | "cur")
+                {
+                    self.err(
+                        "E-PARSE-VALUE",
+                        "expected vol or cur followed by pol, zer or pz",
+                        span,
+                    );
+                    return;
+                }
+                self.analyses.push(AnalysisCard::Pz {
+                    span,
+                    nodes: std::array::from_fn(|i| node_name(&t[i + 1])),
+                    voltage: input == "vol",
+                    poles: mode != "zer",
+                    zeros: mode != "pol",
+                });
+            }
+            ".ac" | ".noise" => {
+                let noise = if head == ".noise" {
+                    let Some(k) = (4..=5).find(|&i| {
+                        t.get(i)
+                            .is_some_and(|v| matches!(v.lower().as_str(), "lin" | "dec" | "oct"))
+                    }) else {
+                        self.err(
+                            "E-PARSE-ARITY",
+                            ".noise v(out[,ref]) source dec|oct|lin n start stop [summary]",
+                            span,
+                        );
+                        return;
+                    };
+                    let Some(output) = self.analysis_probe(&t[1..k - 1], span) else {
+                        return;
+                    };
+                    if !matches!(output, crate::Probe::Voltage(..))
+                        || !(k + 4..=k + 5).contains(&t.len())
+                    {
                         self.err(
                             "E-PARSE-VALUE",
-                            format!(
-                                "unknown AC sweep type `{}` (use dec, oct or lin)",
-                                t[1].text
-                            ),
-                            t[1].span,
+                            "expected a voltage output and a frequency sweep",
+                            span,
                         );
                         return;
                     }
+                    let summary = match t.get(k + 4) {
+                        Some(v) => match v.text.parse::<u32>() {
+                            Ok(n) => n,
+                            Err(_) => {
+                                self.err(
+                                    "E-PARSE-VALUE",
+                                    "summary interval must be a nonnegative integer",
+                                    v.span,
+                                );
+                                return;
+                            }
+                        },
+                        None => 0,
+                    };
+                    Some((output, t[k - 1].lower(), summary, k - 1))
+                } else {
+                    None
                 };
-                let (Some(np), Some(fstart), Some(fstop)) = (
-                    self.number(&t[2], "number of points"),
-                    self.number(&t[3], "fstart"),
-                    self.number(&t[4], "fstop"),
-                ) else {
+                let Some(t) = self.need(line, 5, ".ac dec|oct|lin n fstart fstop") else {
                     return;
                 };
-                if np < 1.0 || fstart <= 0.0 || fstop < fstart {
-                    self.err(
-                        "E-PARSE-VALUE",
-                        "AC sweep needs n >= 1 and 0 < fstart <= fstop",
+                let t = &t[noise.as_ref().map_or(0, |n| n.3)..];
+                let Some(crate::FrequencySweep {
+                    sweep,
+                    points,
+                    fstart,
+                    fstop,
+                }) = self.frequency_sweep(&t[1..], span)
+                else {
+                    return;
+                };
+                if let Some((output, source, summary, _)) = noise {
+                    self.analyses.push(AnalysisCard::Noise {
                         span,
-                    );
+                        output,
+                        source,
+                        summary,
+                        sweep,
+                        points,
+                        fstart,
+                        fstop,
+                    });
                     return;
                 }
                 self.analyses.push(AnalysisCard::Ac {
                     span,
                     sweep,
-                    points: np as u32,
+                    points,
                     fstart,
                     fstop,
                 });

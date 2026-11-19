@@ -435,6 +435,8 @@ pub enum Mode {
     Dc,
     /// AC small-signal linearization at the DC operating point.
     Ac,
+    /// Small-signal noise linearization.
+    Noise,
     /// Transient (including its initial operating point): sources use their waveform at `time`.
     Tran,
 }
@@ -509,6 +511,48 @@ pub const CHARGE: f64 = 1.602_176_634e-19;
 #[inline]
 pub fn thermal_voltage(temp: f64) -> f64 {
     BOLTZMANN * temp / CHARGE
+}
+
+/// An independent random source with one-sided PSD power / frequency^exponent.
+/// Each MNA row receives the same realization through its f and q coefficients.
+#[derive(Debug)]
+pub struct NoiseSource {
+    pub device: String,
+    pub power: f64,
+    pub exponent: f64,
+    pub table: Vec<(f64, f64)>,
+    pub rows: Vec<(usize, f64, f64)>,
+}
+impl NoiseSource {
+    pub fn spectral_power(&self, f: f64) -> f64 {
+        if self.table.is_empty() {
+            return self.power / f.powf(self.exponent);
+        }
+        let j = self.table.partition_point(|&(x, _)| x < f);
+        if j == 0 {
+            return self.table[0].1;
+        }
+        let (lo, a) = self.table[j - 1];
+        let Some(&(hi, b)) = self.table.get(j) else {
+            return a;
+        };
+        if a == 0. || b == 0. {
+            return a + (b - a) * (f - lo) / (hi - lo);
+        }
+        (a.ln() + (b.ln() - a.ln()) * (f / lo).ln() / (hi / lo).ln()).exp()
+    }
+    pub fn branch(device: &str, p: Node, n: Node, power: f64, exponent: f64) -> Self {
+        Self {
+            device: device.into(),
+            power,
+            exponent,
+            table: Vec::new(),
+            rows: [(p, 1.), (n, -1.)]
+                .into_iter()
+                .filter_map(|(node, w)| node.map(|i| (i, w, 0.)))
+                .collect(),
+        }
+    }
 }
 
 /// All instances of one device type.
@@ -617,7 +661,18 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
     #[cfg(feature = "jit")]
     fn prepare_newton_pairs(&mut self, _temperature: f64, _fixed_node: Node) {}
 
-    /// Write the AC excitation into the `b` slots. Default: no excitation.
+    /// Collect independent noise generators at the converged small-signal bias.
+    fn noise(
+        &self,
+        _ctx: &EvalCtx,
+        _x: &[f64],
+        _slots: &Slots,
+        _out: &mut Vec<NoiseSource>,
+    ) -> Result<(), Diagnostic> {
+        Ok(())
+    }
+
+    /// Write the AC excitation into the `b` slots.
     fn eval_ac(&self, out: &mut AcSlots) {
         out.re.iter_mut().for_each(|v| *v = 0.0);
         out.im.iter_mut().for_each(|v| *v = 0.0);

@@ -313,3 +313,38 @@ fn dialect_lint_and_failure_explanations() {
         assert!(!s.explain(code).unwrap().codes[0].remedies.is_empty());
     }
 }
+
+#[test]
+fn noise_override_reports_ranked_contributors_and_reproducible_hash() {
+    let mut hashes = vec![];
+    for threads in [1, 4] {
+        let mut s = session(threads);
+        let c = s
+            .load("divider\nV1 in 0 1\nR1 in out 1k\nR2 out 0 4k\n.op\n")
+            .unwrap();
+        let job = s
+            .simulate(
+                &c.circuit_id,
+                Some(&["noise v(out) v1 dec 8 1 10k".into(), "tf v(out) v1".into()]),
+            )
+            .unwrap();
+        assert_eq!(job.status, Status::Ok);
+        hashes.push(job.result_hash.clone());
+        let top = &job.analyses[1].noise_contributors;
+        assert_eq!((&*top[0].name, &*top[1].name), ("r1", "r2"));
+        assert!(top[0].value > top[1].value);
+        let w = s
+            .waveform(
+                &job.job_id,
+                "onoise_total",
+                Some(1),
+                Reduce::Auto,
+                None,
+                None,
+                10,
+            )
+            .unwrap();
+        assert_eq!((w.y.len(), w.unit), (1, "V"));
+    }
+    assert_eq!(hashes[0], hashes[1]);
+}

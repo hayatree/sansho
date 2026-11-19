@@ -407,6 +407,12 @@ pub const CODES: &[CodeInfo] = &[
         ],
     ),
     e(
+        "E-ANALYSIS",
+        "Invalid small-signal or Fourier analysis",
+        "An analysis requires resolvable ports, a defined transfer, finite model noise and a valid analysis range.",
+        &["Check the named source, output probe, transient duration and model parameters."],
+    ),
+    e(
         "E-DC-SOURCE",
         "Invalid DC sweep source",
         "The sweep target must be an independent voltage or current source or TEMP.",

@@ -8,6 +8,7 @@ mod charges;
 mod gate;
 mod junction;
 mod layout;
+mod noise;
 mod params;
 mod profile;
 mod terminal_stamp;
@@ -358,6 +359,15 @@ impl Size {
     }
 }
 impl Instance {
+    fn gate_conductance<const N: usize>(&self, bias: &channel::Bias<N>) -> Dual<N> {
+        let net = &self.model.network;
+        let gc = net.xrcrg1 * (bias.id_per_volt + net.xrcrg2 * bias.beta * self.model.size.vt);
+        if net.gate_mode == 2 {
+            gc / (1. + net.gate * gc)
+        } else {
+            gc
+        }
+    }
     fn body_branches(&self) -> [(Node, Node); 5] {
         let ext = self.nodes[3];
         let body = self.inner[3];
@@ -398,6 +408,18 @@ impl Instance {
     }
 }
 impl DeviceGroup for Bsim4s {
+    fn noise(
+        &self,
+        ctx: &EvalCtx,
+        x: &[f64],
+        _: &Slots,
+        out: &mut Vec<crate::NoiseSource>,
+    ) -> Result<(), Diagnostic> {
+        for d in &self.instances {
+            d.noise(x, ctx.gmin, out)?;
+        }
+        Ok(())
+    }
     fn instance_name(&self, index: usize) -> Option<&str> {
         self.instances.get(index).map(|d| d.name.as_str())
     }
@@ -658,13 +680,7 @@ impl Bsim4s {
             if mode >= 2
                 && let Some(bias) = bias
             {
-                let conductance = dev.model.network.xrcrg1
-                    * (bias.id_per_volt + dev.model.network.xrcrg2 * bias.beta * m.vt);
-                let g = if mode == 2 {
-                    conductance / (1. + dev.model.network.gate * conductance)
-                } else {
-                    conductance
-                };
+                let g = dev.gate_conductance(&bias);
                 let g = Dual::<5> {
                     v: g.v,
                     d: [g.d[0], g.d[1], g.d[2], g.d[3], 0.],

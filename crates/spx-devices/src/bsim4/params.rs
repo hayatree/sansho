@@ -133,8 +133,7 @@ pub(super) struct Size {
     pub(super) gidl_clamp: f64,
     pub(super) flat_sd: f64,
     pub(super) gate: super::gate::Gate,
-    // Retained for the future noise-analysis consumer (Appendix A.10).
-    _noise: [(&'static str, f64); 17],
+    pub(super) noise: super::noise::Parameters,
     pub(super) cv: super::ChargeModel,
 }
 
@@ -452,26 +451,7 @@ impl Size {
                 } else {
                     0.
                 }),
-            _noise: [
-                ("fnoimod", 1.),
-                ("tnoimod", 0.),
-                ("noia", if sign > 0. { 6.25e41 } else { 6.188e40 }),
-                ("noib", if sign > 0. { 3.125e26 } else { 1.5e25 }),
-                ("noic", 8.75),
-                ("em", 4.1e7),
-                ("af", 1.),
-                ("ef", 1.),
-                ("kf", 0.),
-                ("lintnoi", 0.),
-                ("ntnoi", 1.),
-                ("tnoia", 1.5),
-                ("tnoib", 3.5),
-                ("tnoic", 0.),
-                ("rnoia", 0.577),
-                ("rnoib", 0.5164),
-                ("rnoic", 0.395),
-            ]
-            .map(|(key, default)| (key, p.get(key, default))),
+            noise: super::noise::Parameters::new(p, sign),
             gidl_shape,
             gidl_clamp: p.get("gidlclamp", -1e-5).min(-1e-12),
             squares: diff.map(|d| d[2]),

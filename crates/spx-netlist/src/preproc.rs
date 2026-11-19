@@ -1149,7 +1149,7 @@ impl Flat<'_> {
     }
 
     fn push(&mut self, tokens: Vec<Token>, orig: &Line) {
-        let raw = if tokens == orig.tokens {
+        let raw = if tokens == orig.tokens || matches!(head(orig).as_str(), ".four" | ".fourier") {
             orig.raw.clone()
         } else {
             tokens

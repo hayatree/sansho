@@ -1453,7 +1453,20 @@ fn native_groups<'a>(
                         Diagnostic::error("E-ELAB-PARAM", "zero temperature-adjusted resistance")
                             .with_span(e.span),
                     ),
-                    ElementKind::Resistor { .. } => res.cur().push(&e.name, p, n, value),
+                    ElementKind::Resistor { .. } => {
+                        let get = |key: &str| {
+                            params.iter().rev().find(|(k, _)| k == key).map(|(_, v)| *v)
+                        };
+                        let kelvin =
+                            get("temp").unwrap_or(opts.temp + get("dtemp").unwrap_or(0.)) + 273.15;
+                        res.cur().push_at(
+                            &e.name,
+                            p,
+                            n,
+                            value,
+                            if get("noisy") == Some(0.) { 0. } else { kelvin },
+                        );
+                    }
                     ElementKind::Capacitor { .. } => {
                         cap.cur().push_initial(&e.name, p, n, value, ic)
                     }

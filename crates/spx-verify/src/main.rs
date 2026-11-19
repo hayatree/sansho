@@ -116,7 +116,7 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>), Proble
     {
         return Err(Problem::Missing(ref_raw.display().to_string()));
     }
-    let reference = if cli.cached {
+    let mut reference = if cli.cached {
         read_reference(&ref_raw)?
     } else {
         let path = if nl.hdl.is_empty() {
@@ -138,6 +138,41 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>), Proble
         std::fs::rename(pending, &ref_raw)?;
         fresh
     };
+    // Batch raw files contain the transient used by ngspice's Fourier report.
+    // Compare amplitudes and distortion derived from that independent trajectory.
+    if !reference
+        .analyses
+        .iter()
+        .any(|a| a.kind == spx_output::AnalysisKind::Four)
+    {
+        for card in &nl.analyses {
+            if let spx_netlist::AnalysisCard::Four {
+                frequency, outputs, ..
+            } = card
+                && let Some(tran) = reference
+                    .analyses
+                    .iter()
+                    .find(|a| a.kind == spx_output::AnalysisKind::Tran)
+            {
+                let mut harmonics = spx_engine::fourier(tran, *frequency, outputs)
+                    .map_err(|d| Problem::Failed(d.to_string()))?;
+                // Phase at a symmetry-forbidden harmonic is indeterminate.
+                if let spx_output::Data::Real { columns } = &mut harmonics.data {
+                    let mut index = 0;
+                    columns.retain(|_| {
+                        let keep =
+                            harmonics.variables[index].quantity != spx_output::Quantity::Phase;
+                        index += 1;
+                        keep
+                    });
+                    harmonics
+                        .variables
+                        .retain(|v| v.quantity != spx_output::Quantity::Phase);
+                }
+                reference.analyses.push(harmonics);
+            }
+        }
+    }
     let tol = Tolerances::from_deck(&text);
     let mut report = compare(&reference, &ours, &tol);
     if !ours.measures.is_empty() {

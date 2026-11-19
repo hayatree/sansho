@@ -76,6 +76,7 @@ pub(super) fn stress(m: &mut Size, b: &Binding<'_>, scale: f64) -> Result<(), St
 #[derive(Debug)]
 pub(super) struct Network {
     pub body: Option<[f64; 5]>,
+    pub body_noise: [f64; 5],
     pub gate: f64,
     pub gate_mode: u8,
     pub diffusion: [f64; 2],
@@ -110,6 +111,7 @@ impl Network {
         } else {
             0.
         };
+        let mut body_noise = [0.; 5];
         let body = if body_mode == 0. {
             None
         } else {
@@ -129,7 +131,7 @@ impl Network {
                 );
                 let one = p.opt(&["rbps0"]).is_none() || p.opt(&["rbpd0"]).is_none();
                 for (slot, n) in ["rbpd", "rbps"].into_iter().enumerate() {
-                    res[slot + 1] = if one { 1e-3 } else { scaled(n, n, 50.) };
+                    res[slot + 1] = if one { 0. } else { scaled(n, n, 50.) };
                 }
                 let three = ["rbdb", "rbsb"]
                     .iter()
@@ -145,6 +147,9 @@ impl Network {
                     };
                 }
             }
+            // The 1-R and 3-R reductions retain numerical ties and GBMIN in
+            // the matrix. Only the physical resistances generate thermal noise.
+            body_noise = res.map(|r| if r > 0. { 1. / r.max(1e-3) } else { 0. });
             Some(res.map(|r| gmin + 1. / r.max(1e-3)))
         };
         let mut extension = [[0.; 2]; 2];
@@ -172,6 +177,7 @@ impl Network {
         }
         Ok(Self {
             body,
+            body_noise,
             gate,
             gate_mode: gate_mode as u8,
             diffusion,

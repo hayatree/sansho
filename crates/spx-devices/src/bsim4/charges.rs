@@ -10,7 +10,7 @@ pub(super) struct ChargeModel {
     mode: u8,
     area: f64,
     pub(super) dimensions: [f64; 2],
-    bulk_scale: f64,
+    pub(super) bulk_scale: f64,
     noff: f64,
     pub(super) voff: f64,
     mstar: Option<f64>,

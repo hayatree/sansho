@@ -1,0 +1,10 @@
+Harmonics of a symmetrically clipped sinusoid
+* Provenance: original R2 verification circuit.
+Vin in 0 sin(0 2 1k)
+Rdrive in out 1k
+Dpos out 0 clip
+Dneg 0 out clip
+.model clip d(is=1e-14 n=1)
+.tran 2u 3m 0 2u
+.four 1k v(out)
+.end

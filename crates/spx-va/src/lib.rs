@@ -19,7 +19,8 @@ mod sema;
 #[cfg(feature = "jit")]
 pub use eval::CircuitPair;
 pub use eval::{
-    Analysis, BindOptions, Bound, EvalInput, EvalOutput, EvalStamp, Layout, Scratch, StateIo,
+    Analysis, BindOptions, Bound, EvalInput, EvalOutput, EvalStamp, Layout, NoiseDrive, Scratch,
+    StateIo,
 };
 pub use ir::{CompiledModule, ParamInfo};
 pub use sema::compile_module;

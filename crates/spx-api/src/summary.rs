@@ -69,6 +69,9 @@ pub struct AnalysisSummary {
     /// Sweep axis name, unit and range.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sweep: Option<SweepAxis>,
+    /// Largest device contributions to integrated output noise, in RMS volts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub noise_contributors: Vec<OpValue>,
     /// Operating-point values (`.op` only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<OpValue>,
@@ -193,14 +196,35 @@ pub(crate) fn stats(nl: &Netlist, c: &Circuit) -> CircuitStats {
 /// Estimated stored points and Newton iterations of one analysis.
 fn analysis_work(a: &AnalysisCard) -> (u64, u64) {
     match a {
-        AnalysisCard::Op { .. } => (1, 20),
+        AnalysisCard::Op { .. }
+        | AnalysisCard::Tf { .. }
+        | AnalysisCard::Sens { ac: None, .. }
+        | AnalysisCard::Pz { .. } => (1, 20),
+        AnalysisCard::Four { .. } => (10, 0),
         AnalysisCard::Dc {
             start, stop, step, ..
         } => {
             let n = ((stop - start) / step).abs().floor() as u64 + 1;
             (n, 4 * n)
         }
-        AnalysisCard::Ac {
+        AnalysisCard::Sens {
+            ac:
+                Some(spx_netlist::FrequencySweep {
+                    sweep,
+                    points,
+                    fstart,
+                    fstop,
+                }),
+            ..
+        }
+        | AnalysisCard::Noise {
+            sweep,
+            points,
+            fstart,
+            fstop,
+            ..
+        }
+        | AnalysisCard::Ac {
             sweep,
             points,
             fstart,
@@ -210,10 +234,10 @@ fn analysis_work(a: &AnalysisCard) -> (u64, u64) {
             let n = match sweep {
                 spx_netlist::AcSweep::Lin => u64::from(*points),
                 spx_netlist::AcSweep::Dec => {
-                    ((fstop / fstart).log10() * f64::from(*points)) as u64 + 1
+                    ((fstop.log10() - fstart.log10()) * f64::from(*points)).round() as u64 + 1
                 }
                 spx_netlist::AcSweep::Oct => {
-                    ((fstop / fstart).log2() * f64::from(*points)) as u64 + 1
+                    ((fstop.log2() - fstart.log2()) * f64::from(*points)).round() as u64 + 1
                 }
             };
             (n, n + 20)
@@ -283,12 +307,34 @@ fn summarize(index: usize, a: &AnalysisResult, max_signals: usize) -> AnalysisSu
         kind: a.kind,
         points: a.len(),
         sweep,
+        noise_contributors: Vec::new(),
         values: Vec::new(),
         signals: Vec::new(),
         variables: n,
         truncated: false,
     };
-    let limit = if a.kind == AnalysisKind::Op {
+    if a.kind == AnalysisKind::IntegratedNoise
+        && let Data::Real { columns } = &a.data
+    {
+        for (v, col) in a.variables.iter().zip(columns) {
+            if let Some(name) = v.name.strip_prefix("onoise_total.")
+                && let Some(&value) = col.first()
+            {
+                s.noise_contributors.push(OpValue {
+                    name: name.into(),
+                    value,
+                    unit: "V",
+                });
+            }
+        }
+        s.noise_contributors.sort_by(|a, b| {
+            b.value
+                .total_cmp(&a.value)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        s.noise_contributors.truncate(max_signals.max(1));
+    }
+    let limit = if a.scale.is_none() {
         max_signals.max(1) * 4
     } else {
         max_signals.max(1)
@@ -297,12 +343,30 @@ fn summarize(index: usize, a: &AnalysisResult, max_signals: usize) -> AnalysisSu
     for (i, v) in a.variables.iter().enumerate().take(limit) {
         let unit = v.quantity.unit();
         match (&a.data, a.kind) {
-            (Data::Real { columns }, AnalysisKind::Op) => s.values.push(OpValue {
+            (Data::Real { columns }, _) if a.scale.is_none() => s.values.push(OpValue {
                 name: v.name.clone(),
                 value: columns[i].first().copied().unwrap_or(f64::NAN),
                 unit,
             }),
             (Data::Real { columns }, _) => s.signals.push(stats_of(&v.name, unit, &columns[i])),
+            (Data::Complex { columns }, AnalysisKind::Pz) => {
+                if let Some(&(re, im)) = columns[i].first() {
+                    s.values.push(OpValue {
+                        name: format!("real({})", v.name),
+                        value: re,
+                        unit,
+                    });
+                    s.values.push(OpValue {
+                        name: format!("imag({})", v.name),
+                        value: im,
+                        unit,
+                    });
+                }
+            }
+            (Data::Complex { columns }, AnalysisKind::Sens) => {
+                let magnitude: Vec<_> = columns[i].iter().map(|(re, im)| re.hypot(*im)).collect();
+                s.signals.push(stats_of(&v.name, unit, &magnitude));
+            }
             (Data::Complex { columns }, _) => {
                 let db: Vec<f64> = columns[i]
                     .iter()

@@ -146,3 +146,86 @@ first maintainer-generated raw file. Cached verification runs spx first and
 reports SKIP when that reference is absent. Once the reference exists it is
 compared normally. Remove the marker when publishing the reference so its
 subsequent absence is an error.
+
+## R2 analysis decks
+
+| File in `verify/decks` | Check |
+|---|---|
+| `noise_divider.cir` | Two 2 kΩ resistors at 300.15 K give output density √(4 kT · 1 kΩ), a factor of two for input referral, and a flat spectrum integrated over 10 Hz–100 kHz. |
+| `noise_diode.cir` | Current-input shot and 1/f noise in a forward-biased junction with series resistance. |
+| `noise_bjt_ce.cir` | Base and collector noise through a common-emitter stage with internal and external resistances. |
+| `noise_mos1_cs.cir` | Channel thermal and KF flicker noise in a level-one common-source stage. |
+| `noise_bsim4_cs.cir` | PDK-independent level-54 common-source stage with tnoiMod 1, fnoiMod 1 and gate/body resistance. |
+| `tf_divider.cir` | DC gain 0.25, input resistance 4 kΩ and output resistance 750 Ω. |
+| `sens_divider.cir` | Output derivatives with respect to the source and the two independent resistor values. |
+| `sens_rc_ac.cir` | Complex derivatives of 1/(1 + jωRC) with respect to R and C through the RC corner. |
+| `four_clipped.cir` | Odd harmonics and THD of a sine wave clipped by antiparallel diodes. |
+| `pz_lead_lag.cir` | Voltage transfer with a pole at −1e6 and a zero at −5e5 rad/s. |
+
+The Fourier comparison derives harmonic amplitudes and THD from the reference
+transient in the batch raw file. The analytic tests independently check the DFT
+on a known two-tone signal. The noise decks use small absolute floors appropriate
+to spectral density.
+
+The verifier strips one outer voltage or current wrapper on the noise,
+integrated noise, TF, sensitivity and pole-zero plots, case-insensitively
+on both sides. Sensitivity compares the intersection of parameter names.
+ngspice exports additional instance and model-parameter derivatives. An empty
+intersection fails. Poles and zeros are compared separately as complex
+multisets, preserving multiplicity. The one-to-one pairing minimizes the
+largest normalized complex distance using the deck's existing tolerances.
+
+For `sens_rc_ac`, spx and the cached 44.2 raw agree on C1 and VIN. The raw
+contains a nonzero R1 derivative only at the first frequency. For this circuit
+the derivative is −jωC/(1+jωRC)². At 17.783 kHz it is
+−4.93896e−4 + j5.49045e−5 V/Ω. spx checks both components against that
+formula at every point in its analytic test. The separate reference vector
+`v(r1_ac)` tracks this derivative across the sweep (about 1 ppm relative).
+The comparison of the shared name R1 includes all nine samples.
+
+### R2 noise audit
+
+For `noise_bsim4_cs`, NF and M are both one, the effective geometry is
+4 µm × 0.5 µm and the operating temperature is 300.15 K. At the spx bias,
+Ids = 112.971 µA, Vds = 1.57406 V, Vdseff = 0.281767 V, Vgsteff = 0.292150 V
+and μeff = 0.0261413 m²/(V·s). The intrinsic gm, gmb and gds are 638.647,
+87.294 and 10.770 µS respectively. The low-frequency voltage gain magnitude
+is 1.25036 in spx and 1.25058 in the reference (output/input noise ratio).
+
+With the gate and body networks disabled, two parallel 4 µm devices and one
+4 µm device with M=2 give 7.627815 µV/√Hz at 10 Hz. A single 8 µm device
+with NF=2 has the same width per finger and agrees within 3 parts in 10⁹
+there and 1 part in 10⁶ at 10 MHz.
+
+| Independent spx source | Output at 10 MHz (nV/√Hz) |
+|---|---:|
+| 2 kΩ load | 5.63638 |
+| Channel current, equation 10.12 | 2.51318 |
+| Source-side voltage, equation 10.11 | 4.78916 |
+| Unified flicker | 5.64094 |
+| Gate electrode (4.8 Ω) | 0.35269 |
+| Body network, five 50 Ω branches combined in power | 0.11002 |
+| Physical source/drain diffusion and gate shot currents | 0 |
+
+The cache contains only total spectra. Independent spx generators were
+projected onto the output at fixed bias. As a cross-check, adding 1 mΩ of
+explicit source and drain resistance gives the same source-side contribution
+to six significant digits. At the low-frequency end, solving for a white
+term and a 1/f term in the first two reference power samples gives a white
+amplitude of 7.82000 nV/√Hz. The spx white sources give 7.82032 nV/√Hz.
+The corresponding 10 Hz flicker amplitudes are 6.03242 µV/√Hz in the cache
+and 5.64094 µV/√Hz in spx.
+
+Using the 4.8.2 appendix A.10 defaults, spx obtains N₀ = 2.099e16,
+Nₗ = 2.060e15 and N* = 2.070e15 m⁻². At 1 Hz the two inversion terms
+in equation 10.2 are 6.933e−17 and 3.644e−17 A²/Hz. The subthreshold
+term is 3.858e−16 A²/Hz, giving 8.301e−17 A²/Hz after blending.
+A diagnostic run with explicit NOIC=8.75e9 gives 6.02971 µV/√Hz at 10 Hz.
+The 4.8.2 manual prints 8.75 and the cached raw does not record the
+oracle's parameter value. The model retains the published default and
+the deck retains the residual failure.
+
+`noise_bsim4_cs.cir` sets NOIC explicitly and passes. `noise_bsim4_noic_default.cir`
+keeps the manual default and is a known difference (see `docs/bsim4.md`, Noise
+defaults). `sens_rc_ac.cir` is a known difference for the reference's R1 vector
+described above.

@@ -426,10 +426,67 @@ pub enum AcSweep {
     Lin,
 }
 
+/// Frequency grid for a small-signal parameter sweep.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct FrequencySweep {
+    pub sweep: AcSweep,
+    pub points: u32,
+    pub fstart: f64,
+    pub fstop: f64,
+}
+
+/// A differential voltage or the branch current of a voltage source.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub enum Probe {
+    Voltage(String, String),
+    Current(String),
+}
+impl std::fmt::Display for Probe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Voltage(p, n) if n == GROUND => write!(f, "v({p})"),
+            Self::Voltage(p, n) => write!(f, "v({p},{n})"),
+            Self::Current(v) => write!(f, "i({v})"),
+        }
+    }
+}
+
 /// Analysis requests.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "analysis", rename_all = "snake_case")]
 pub enum AnalysisCard {
+    Noise {
+        span: Span,
+        output: Probe,
+        source: String,
+        sweep: AcSweep,
+        points: u32,
+        fstart: f64,
+        fstop: f64,
+        summary: u32,
+    },
+    Tf {
+        span: Span,
+        output: Probe,
+        source: String,
+    },
+    Sens {
+        ac: Option<FrequencySweep>,
+        span: Span,
+        output: Probe,
+    },
+    Four {
+        span: Span,
+        frequency: f64,
+        outputs: Vec<Probe>,
+    },
+    Pz {
+        span: Span,
+        nodes: [String; 4],
+        voltage: bool,
+        poles: bool,
+        zeros: bool,
+    },
     /// `.op`
     Op {
         /// Card location.

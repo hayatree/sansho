@@ -406,36 +406,49 @@ pub(crate) fn dc_sweep(
     ))
 }
 
-fn ac_frequencies(sweep: AcSweep, points: u32, fstart: f64, fstop: f64) -> Vec<f64> {
-    let np = points.max(1) as f64;
-    match sweep {
-        AcSweep::Lin => {
-            if points <= 1 {
-                return vec![fstart];
-            }
-            let df = (fstop - fstart) / (np - 1.0);
-            (0..points).map(|k| fstart + k as f64 * df).collect()
-        }
-        AcSweep::Dec | AcSweep::Oct => {
-            let base: f64 = if sweep == AcSweep::Dec { 10.0 } else { 2.0 };
-            let count = ((fstop / fstart).ln() / base.ln() * np + 1e-9).floor() as usize + 1;
-            (0..count)
-                .map(|k| fstart * base.powf(k as f64 / np))
-                .collect()
-        }
-    }
-}
-
-/// `.ac`
-pub(crate) fn ac(
-    ckt: &Circuit,
-    opts: &SimOptions,
+pub(crate) fn ac_frequencies(
     sweep: AcSweep,
     points: u32,
     fstart: f64,
     fstop: f64,
-) -> Result<AnalysisResult, Diagnostic> {
-    let _phase = spx_diag::Phase::start("analysis");
+) -> Result<Vec<f64>, Diagnostic> {
+    if points == 0 || fstart <= 0. || fstop < fstart || !fstart.is_finite() || !fstop.is_finite() {
+        return Err(crate::small_signal::error("invalid frequency grid"));
+    }
+    let np = f64::from(points);
+    let ratio = fstop / fstart;
+    let log_span = if ratio.is_finite() {
+        ratio.ln()
+    } else {
+        fstop.ln() - fstart.ln()
+    };
+    let base: f64 = if sweep == AcSweep::Oct { 2. } else { 10. };
+    let count = if sweep == AcSweep::Lin {
+        points as usize
+    } else {
+        ((log_span / base.ln() * np + 1e-9).floor() as usize)
+            .checked_add(1)
+            .ok_or_else(|| crate::small_signal::error("frequency grid is too large"))?
+    };
+    let mut freq = Vec::new();
+    freq.try_reserve_exact(count)
+        .map_err(|_| crate::small_signal::error("cannot allocate frequency grid"))?;
+    if sweep == AcSweep::Lin {
+        let step = (fstop - fstart) / (np - 1.).max(1.);
+        freq.extend((0..count).map(|k| fstart + k as f64 * step));
+    } else if ratio.is_finite() {
+        freq.extend((0..count).map(|k| fstart * base.powf(k as f64 / np)));
+    } else {
+        freq.extend((0..count).map(|k| (fstart.ln() + base.ln() * (k as f64 / np)).exp()));
+    }
+    Ok(freq)
+}
+
+pub(crate) fn linearize(
+    ckt: &Circuit,
+    opts: &SimOptions,
+    mode: Mode,
+) -> Result<(Vec<f64>, Workspace, EvalCtx), Diagnostic> {
     let n = ckt.dim();
     let mut ws = Workspace::new(ckt);
     let mut x = vec![0.0; n];
@@ -447,10 +460,10 @@ pub(crate) fn ac(
         &mut ws,
         opts,
         "E-CONV-OP",
-        "AC operating point",
+        "small-signal operating point",
     )?;
     // Linearize at the operating point (no limiting, state = accepted operating point).
-    ctx.mode = Mode::Ac;
+    ctx.mode = mode;
     ctx.final_step = true;
     ctx.limit = false;
     ws.restore();
@@ -458,7 +471,11 @@ pub(crate) fn ac(
     if let Some(d) = ws.slots.iter().find_map(|s| s.error.clone()) {
         return Err(d);
     }
-    let mut b = vec![c64::new(0.0, 0.0); n];
+    Ok((x, ws, ctx))
+}
+
+pub(crate) fn ac_rhs(ckt: &Circuit) -> Vec<c64> {
+    let mut b = vec![c64::new(0.0, 0.0); ckt.dim()];
     for (gi, group) in ckt.groups.iter().enumerate() {
         let l = &ckt.layouts[gi];
         let mut s = AcSlots {
@@ -472,6 +489,22 @@ pub(crate) fn ac(
             }
         }
     }
+    b
+}
+
+/// `.ac`
+pub(crate) fn ac(
+    ckt: &Circuit,
+    opts: &SimOptions,
+    sweep: AcSweep,
+    points: u32,
+    fstart: f64,
+    fstop: f64,
+) -> Result<AnalysisResult, Diagnostic> {
+    let _phase = spx_diag::Phase::start("analysis");
+    let n = ckt.dim();
+    let (_, ws, _) = linearize(ckt, opts, Mode::Ac)?;
+    let b = ac_rhs(ckt);
     let mut lu = FaerLu::<c64>::new();
     let mut batch_lu = ckt
         .ordering
@@ -483,7 +516,7 @@ pub(crate) fn ac(
         lu.analyze(&ckt.pattern)
             .map_err(|e| Diagnostic::error("E-SOLVE-BACKEND", format!("AC: {e}")))?;
     }
-    let freqs = ac_frequencies(sweep, points, fstart, fstop);
+    let freqs = ac_frequencies(sweep, points, fstart, fstop)?;
     let mut cols = vec![Vec::with_capacity(freqs.len()); n];
     let mut vals = vec![c64::new(0.0, 0.0); ckt.pattern.nnz()];
     for &f in &freqs {
@@ -1199,12 +1232,12 @@ mod tests {
 
     #[test]
     fn ac_frequency_grids() {
-        let f = ac_frequencies(AcSweep::Dec, 10, 1.0, 1e3);
+        let f = ac_frequencies(AcSweep::Dec, 10, 1.0, 1e3).unwrap();
         assert_eq!(f.len(), 31);
         assert!((f[30] - 1e3).abs() < 1e-9);
-        let f = ac_frequencies(AcSweep::Oct, 1, 1.0, 8.0);
+        let f = ac_frequencies(AcSweep::Oct, 1, 1.0, 8.0).unwrap();
         assert_eq!(f, vec![1.0, 2.0, 4.0, 8.0]);
-        let f = ac_frequencies(AcSweep::Lin, 5, 0.0 + 1.0, 5.0);
+        let f = ac_frequencies(AcSweep::Lin, 5, 0.0 + 1.0, 5.0).unwrap();
         assert_eq!(f, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
     }
 }

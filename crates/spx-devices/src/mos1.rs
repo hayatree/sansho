@@ -40,6 +40,9 @@ const EPS_OX: f64 = 3.9 * 8.854_187_812_8e-12;
 pub struct Mos1Model {
     /// Prepared operating temperature in kelvin.
     pub temperature: Option<f64>,
+    copies: f64,
+    pub kf: f64,
+    pub af: f64,
     pub tnom: Option<f64>,
 
     /// +1 for NMOS, −1 for PMOS.
@@ -72,6 +75,7 @@ pub struct Mos1Model {
 impl Mos1Model {
     /// Combine parallel copies with identical terminal voltages and geometry.
     pub fn multiply(&mut self, copies: f64) {
+        self.copies *= copies;
         self.kp *= copies;
         self.is *= copies;
         self.js *= copies;
@@ -116,6 +120,9 @@ impl Mos1Model {
             .unwrap_or(if cox > 0.0 { u0 * 1e-4 * cox } else { 2e-5 });
         let m = Self {
             temperature: None,
+            copies: 1.,
+            kf: p.get("kf", 0.),
+            af: p.get("af", 1.),
             tnom: p.opt(&["tnom"]),
 
             polarity,
@@ -181,6 +188,7 @@ impl Default for Mos1Geometry {
 /// Per-instance derived constants.
 #[derive(Debug, Clone)]
 struct Derived {
+    noise_gate_cap: f64,
     has_storage: bool,
     sqrt_phi: f64,
     beta: f64,
@@ -243,6 +251,13 @@ impl Mos1s {
     ) {
         let leff = geom.l - 2.0 * model.ld;
         let mut d = Derived {
+            noise_gate_cap: geom.w
+                * leff
+                * if model.cox > 0. {
+                    model.cox
+                } else {
+                    model.copies * EPS_OX / 1e-7
+                },
             has_storage: false,
             sqrt_phi: model.phi.sqrt(),
             beta: model.kp * geom.w / leff,
@@ -327,6 +342,43 @@ fn meyer(vgst: f64, vds: f64, phi: f64, cox: f64) -> (f64, f64, f64) {
 }
 
 impl DeviceGroup for Mos1s {
+    fn noise(
+        &self,
+        ctx: &EvalCtx,
+        _: &[f64],
+        slots: &Slots,
+        out: &mut Vec<crate::NoiseSource>,
+    ) -> Result<(), Diagnostic> {
+        for i in 0..self.len() {
+            let m = &self.model[i];
+            let temp = m.temperature.unwrap_or(ctx.temp);
+            let thermal = 4. * crate::BOLTZMANN * temp;
+            let mut at = self.at[i];
+            let mut emit = |p, n, power, exp| {
+                out.push(crate::NoiseSource::branch(&self.names[i], p, n, power, exp))
+            };
+            let [d, _, s, _] = self.int[i];
+            for (k, r) in [(0, m.rd), (2, m.rs)] {
+                if r > 0. {
+                    emit(self.ext[i][k], self.int[i][k], thermal / r, 0.);
+                    at.g += 4;
+                }
+            }
+            let gm = slots.g[at.g + 1].abs();
+            emit(d, s, thermal * (2. / 3.) * gm, 0.);
+            if m.kf != 0. {
+                // Gate-referred KF / (Cgate f^AF) becomes drain current
+                // power via gm². gm includes all parallel copies.
+                emit(
+                    d,
+                    s,
+                    m.kf * gm.powi(2) / self.derived[i].noise_gate_cap,
+                    m.af,
+                );
+            }
+        }
+        Ok(())
+    }
     fn instance_name(&self, index: usize) -> Option<&str> {
         self.names.get(index).map(String::as_str)
     }
@@ -609,6 +661,37 @@ mod tests {
             &mut s,
         );
         s.f[0]
+    }
+
+    #[test]
+    fn flicker_current_density_in_square_amperes_per_hz() {
+        let params = ModelParams::new(&[
+            ("tox".into(), 17.26566623496e-9),
+            ("ld".into(), 0.5e-6),
+            ("kf".into(), 8e-26),
+            ("af".into(), 1.5),
+        ]);
+        let (model, _) = Mos1Model::from_params(&params, 1.);
+        let geom = Mos1Geometry {
+            w: 5e-6,
+            l: 3e-6,
+            ..Default::default()
+        };
+        let mut mos = Mos1s::default();
+        mos.push("m1", [Some(0), Some(1), None, None], model, geom, false);
+        let u = Unknowns::with_nodes(["d", "g"]);
+        let mut builder = StampBuilder::new(&u);
+        mos.setup(&mut builder).unwrap();
+        let mut slots = Slots::for_layout(&builder.finish());
+        slots.g[1] = 2e-3; // 2 mS at the operating point
+        let mut sources = Vec::new();
+        mos.noise(&EvalCtx::dc(), &[1., 1.], &slots, &mut sources)
+            .unwrap();
+        // Cox = 0.002 F/m², W Leff = 5 µm × (3 − 2 × 0.5) µm, Cg = 2e-14 F.
+        // At 100 Hz, Sg = 8e-26 / (2e-14 × 100^1.5) = 4e-15 V²/Hz.
+        // Multiplying by (2 mS)² gives 1.6e-20 A²/Hz.
+        let flicker = sources.iter().find(|n| n.exponent == 1.5).unwrap();
+        assert!((flicker.spectral_power(100.) / 1.6e-20 - 1.).abs() < 1e-12);
     }
 
     #[test]

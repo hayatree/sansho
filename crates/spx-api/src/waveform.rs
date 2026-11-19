@@ -120,6 +120,8 @@ pub(crate) fn extract(
     let reduce = match (complex, reduce) {
         (false, Reduce::Mag | Reduce::Db | Reduce::PhaseDeg | Reduce::Re | Reduce::Im) => reduce,
         (true, Reduce::Real) => Reduce::Mag,
+        (true, Reduce::Auto) if a.kind == AnalysisKind::Pz => Reduce::Re,
+        (true, Reduce::Auto) if a.kind == AnalysisKind::Sens => Reduce::Mag,
         (true, Reduce::Auto) => Reduce::Db,
         (false, Reduce::Auto) => Reduce::Real,
         _ => reduce,
@@ -134,7 +136,7 @@ pub(crate) fn extract(
             Reduce::PhaseDeg => im.atan2(re).to_degrees(),
         })
         .collect();
-    let x_all: Vec<f64> = if a.kind == AnalysisKind::Op {
+    let x_all: Vec<f64> = if a.scale.is_none() {
         vec![0.0; y_all.len()]
     } else {
         a.scale_values.clone()
@@ -155,7 +157,8 @@ pub(crate) fn extract(
     let budget = max_points.max(3);
     let (x, y, downsampled) = if x.len() > budget {
         // AC sweeps are logarithmic: choose buckets on a log axis.
-        let log = a.kind == AnalysisKind::Ac && x.iter().all(|&v| v > 0.0);
+        let log =
+            matches!(a.kind, AnalysisKind::Ac | AnalysisKind::Noise) && x.iter().all(|&v| v > 0.0);
         let keep = lttb(&x, &y, budget, log);
         (
             keep.iter().map(|&i| x[i]).collect(),

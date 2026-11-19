@@ -8,7 +8,7 @@ use faer::sparse::linalg::solvers::{Lu, SymbolicLu};
 use faer::sparse::{SparseColMatRef, SymbolicSparseColMat};
 use faer::traits::ComplexField;
 
-use crate::{CscPattern, LinearSolver, Scalar, SolverError};
+use crate::{CscPattern, LinearSolver, Scalar, SolverError, c64};
 
 /// Sparse LU solver backed by `faer`.
 #[derive(Debug)]
@@ -144,14 +144,15 @@ impl BatchOrdering {
 }
 
 impl<T: Scalar + ComplexField> SerialLu<T> {
-    pub(crate) fn new(pattern: &CscPattern) -> Result<Self, SolverError> {
+    pub fn new(pattern: &CscPattern) -> Result<Self, SolverError> {
         Self::from_ordering(BatchOrdering::new(pattern)?)
     }
     pub fn from_ordering(shared: std::sync::Arc<BatchOrdering>) -> Result<Self, SolverError> {
         let order = &shared.order;
         let req = order
             .factorize_numeric_lu_scratch::<T>(faer::Par::Seq, Default::default())
-            .or(order.solve_in_place_scratch::<T>(1, faer::Par::Seq));
+            .or(order.solve_in_place_scratch::<T>(1, faer::Par::Seq))
+            .or(order.solve_transpose_in_place_scratch::<T>(1, faer::Par::Seq));
         let scratch = faer::dyn_stack::MemBuffer::try_new(req)
             .map_err(|e| SolverError::Backend(format!("{e:?}")))?;
         Ok(Self {
@@ -194,6 +195,13 @@ impl<T: Scalar + ComplexField> SerialLu<T> {
     }
 
     pub fn solve(&mut self, rhs: &mut [T]) -> Result<(), SolverError> {
+        self.triangular(rhs, false)
+    }
+    /// Solve A-transpose x = b with the already factored real or complex matrix.
+    pub fn solve_transpose(&mut self, rhs: &mut [T]) -> Result<(), SolverError> {
+        self.triangular(rhs, true)
+    }
+    fn triangular(&mut self, rhs: &mut [T], transpose: bool) -> Result<(), SolverError> {
         use faer::sparse::linalg::lu::LuRef;
         if !self.ready {
             return Err(SolverError::NotReady);
@@ -206,16 +214,106 @@ impl<T: Scalar + ComplexField> SerialLu<T> {
             });
         }
 
-        LuRef::new_unchecked(&self.shared.order, &self.numeric).solve_in_place_with_conj(
-            faer::Conj::No,
-            faer::MatMut::from_column_major_slice_mut(rhs, rhs.len(), 1),
-            faer::Par::Seq,
-            faer::dyn_stack::MemStack::new(&mut self.scratch),
-        );
+        let factors = LuRef::new_unchecked(&self.shared.order, &self.numeric);
+        let col = faer::MatMut::from_column_major_slice_mut(rhs, expected, 1);
+        let stack = faer::dyn_stack::MemStack::new(&mut self.scratch);
+        if transpose {
+            factors.solve_transpose_in_place_with_conj(faer::Conj::No, col, faer::Par::Seq, stack);
+        } else {
+            factors.solve_in_place_with_conj(faer::Conj::No, col, faer::Par::Seq, stack);
+        }
         if rhs.iter().all(|x| x.is_finite_value()) {
             Ok(())
         } else {
             Err(SolverError::Singular { column: None })
         }
     }
+}
+
+/// Finite roots of det(G+sC), for a small row-major dense pencil.
+/// Scale the frequency unit and equilibrate the equations before QZ.
+pub fn pencil_roots(g: &[f64], c: &[f64], n: usize) -> Result<Vec<c64>, SolverError> {
+    if n == 0 || n > 258 || g.len() != n * n || c.len() != n * n {
+        return Err(SolverError::Backend(
+            "invalid dense pencil dimensions".into(),
+        ));
+    }
+    let mut scales: Vec<_> = g
+        .chunks(n)
+        .zip(c.chunks(n))
+        .filter_map(|(a, b)| {
+            let norm = |r: &[f64]| r.iter().fold(0.0f64, |s, v| s.max(v.abs()));
+            let ratio = norm(a) / norm(b);
+            (ratio.is_finite() && ratio > 0.).then_some(ratio)
+        })
+        .collect();
+    scales.sort_by(f64::total_cmp);
+    let scale = scales.get(scales.len() / 2).copied().unwrap_or(1.);
+    let mut a = faer::Mat::from_fn(n, n, |i, j| -g[i * n + j]);
+    let mut b = faer::Mat::from_fn(n, n, |i, j| c[i * n + j] * scale);
+    for i in 0..n {
+        let max = (0..n).fold(0.0f64, |v, j| v.max(a[(i, j)].abs()).max(b[(i, j)].abs()));
+        if max == 0. || !max.is_finite() {
+            return Err(SolverError::Singular { column: None });
+        }
+        for j in 0..n {
+            a[(i, j)] /= max;
+            b[(i, j)] /= max;
+        }
+    }
+    for j in 0..n {
+        let max = (0..n).fold(0.0f64, |v, i| v.max(a[(i, j)].abs()).max(b[(i, j)].abs()));
+        if max == 0. {
+            return Err(SolverError::Singular { column: Some(j) });
+        }
+        for i in 0..n {
+            a[(i, j)] /= max;
+            b[(i, j)] /= max;
+        }
+    }
+    // Only eigenvalues are needed. In particular, algebraic constraint rows
+    // need no back-substitution for their infinite-eigenvalue eigenvectors.
+    use faer::{
+        Par,
+        diag::Diag,
+        dyn_stack::{MemBuffer, MemStack},
+        linalg::{evd::ComputeEigenvectors::No, gevd},
+    };
+    let req = gevd::gevd_scratch::<f64>(n, No, No, Par::Seq, Default::default());
+    let mut buf = MemBuffer::try_new(req).map_err(|e| SolverError::Backend(e.to_string()))?;
+    let mut re = Diag::zeros(n);
+    let mut im = Diag::zeros(n);
+    let mut denominator = Diag::zeros(n);
+    gevd::gevd_real(
+        a.as_mut(),
+        b.as_mut(),
+        re.as_mut(),
+        im.as_mut(),
+        denominator.as_mut(),
+        None,
+        None,
+        Par::Seq,
+        MemStack::new(&mut buf),
+        Default::default(),
+    )
+    .map_err(|e| SolverError::Backend(format!("generalized eigenvalue iteration: {e:?}")))?;
+    let mut roots = Vec::new();
+    for i in 0..n {
+        let (alpha, beta) = (c64::new(re[i], im[i]), denominator[i]);
+        if !alpha.is_finite_value()
+            || !beta.is_finite_value()
+            || (alpha.norm() == 0. && beta.abs() == 0.)
+        {
+            return Err(SolverError::Singular { column: None });
+        }
+        if beta.abs() > 16. * f64::EPSILON * alpha.norm() {
+            let root = alpha / beta * scale;
+            if !root.is_finite_value() {
+                return Err(SolverError::Backend("non-finite root".into()));
+            }
+            roots.push(root);
+        }
+    }
+    roots.sort_by(|a, b| a.re.total_cmp(&b.re).then_with(|| a.im.total_cmp(&b.im)));
+    Ok(roots)
 }

@@ -20,6 +20,14 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Quantity {
+    VoltageDensity,
+    CurrentDensity,
+    Resistance,
+    Admittance,
+    Scalar,
+    Phase,
+    PoleZero,
+    Percent,
     /// Degrees Celsius.
     Temperature,
     /// Seconds.
@@ -35,6 +43,14 @@ pub enum Quantity {
 impl Quantity {
     fn raw_name(self) -> &'static str {
         match self {
+            Self::VoltageDensity => "voltage-density",
+            Self::CurrentDensity => "current-density",
+            Self::Resistance => "resistance",
+            Self::Admittance => "admittance",
+            Self::Scalar => "notype",
+            Self::Phase => "phase",
+            Self::PoleZero => "pole",
+            Self::Percent => "percent",
             Self::Temperature => "temperature",
             Self::Time => "time",
             Self::Frequency => "frequency",
@@ -46,6 +62,14 @@ impl Quantity {
     /// SI unit symbol.
     pub fn unit(self) -> &'static str {
         match self {
+            Self::VoltageDensity => "V/√Hz",
+            Self::CurrentDensity => "A/√Hz",
+            Self::Resistance => "Ω",
+            Self::Admittance => "S",
+            Self::Scalar => "",
+            Self::Phase => "deg",
+            Self::PoleZero => "rad/s",
+            Self::Percent => "%",
             Self::Temperature => "°C",
             Self::Time => "s",
             Self::Frequency => "Hz",
@@ -68,6 +92,12 @@ pub struct Variable {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AnalysisKind {
+    Noise,
+    IntegratedNoise,
+    Tf,
+    Sens,
+    Four,
+    Pz,
     /// DC operating point.
     Op,
     /// DC sweep.
@@ -82,6 +112,12 @@ impl AnalysisKind {
     /// ngspice plot name.
     pub fn plot_name(self) -> &'static str {
         match self {
+            Self::Noise => "Noise Spectral Density Curves",
+            Self::IntegratedNoise => "Integrated Noise",
+            Self::Tf => "Transfer Function",
+            Self::Sens => "Sensitivity Analysis",
+            Self::Four => "Fourier Analysis",
+            Self::Pz => "Pole-Zero Analysis",
             Self::Op => "Operating Point",
             Self::Dc => "DC transfer characteristic",
             Self::Ac => "AC Analysis",

@@ -58,6 +58,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-CONV-OP`](#e-conv-op) | error | Operating point did not converge |
 | [`E-CONV-DC`](#e-conv-dc) | error | DC sweep did not converge |
 | [`E-CONV-TRAN`](#e-conv-tran) | error | Timestep too small |
+| [`E-ANALYSIS`](#e-analysis) | error | Invalid small-signal or Fourier analysis |
 | [`E-DC-SOURCE`](#e-dc-source) | error | Invalid DC sweep source |
 | [`E-SOLVE-SINGULAR`](#e-solve-singular) | error | Singular matrix |
 | [`E-SOLVE-BACKEND`](#e-solve-backend) | error | Linear solver failure |
@@ -378,6 +379,12 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 - Look at the culprit nodes for discontinuities (ideal switches, very fast edges).
 - Give sources finite rise and fall times; increase `.options itl4`.
+
+## E-ANALYSIS
+
+**Invalid small-signal or Fourier analysis.** An analysis requires resolvable ports, a defined transfer, finite model noise and a valid analysis range.
+
+- Check the named source, output probe, transient duration and model parameters.
 
 ## E-DC-SOURCE
 

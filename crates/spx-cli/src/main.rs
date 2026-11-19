@@ -116,14 +116,46 @@ fn print_diags(diags: &[Diagnostic]) {
     }
 }
 
-fn summary(results: &SimResults) {
+fn summary(results: &SimResults, intervals: &[u32]) {
+    let mut intervals = intervals.iter();
     for a in &results.analyses {
         match (a.kind, &a.data) {
-            (AnalysisKind::Op, Data::Real { columns }) => {
-                println!("Operating point:");
+            (_, Data::Real { columns }) if a.scale.is_none() => {
+                println!("{}", a.kind.plot_name());
                 for (v, c) in a.variables.iter().zip(columns) {
                     let val = c.first().copied().unwrap_or(f64::NAN);
                     println!("  {:<20} {:>16.6e} {}", v.name, val, v.quantity.unit());
+                }
+            }
+            (AnalysisKind::Noise, Data::Real { columns }) => {
+                println!("{} ({} frequencies)", a.kind.plot_name(), a.len());
+                let every = intervals.next().copied().unwrap_or(0) as usize;
+                if every > 0 {
+                    for i in (0..a.len()).step_by(every) {
+                        println!("  {:.6e} Hz", a.scale_values[i]);
+                        for (v, col) in a.variables.iter().zip(columns) {
+                            println!("    {}  {:.6e} {}", v.name, col[i], v.quantity.unit())
+                        }
+                    }
+                }
+            }
+            (AnalysisKind::Four, Data::Real { columns }) => {
+                for (v, c) in a
+                    .variables
+                    .iter()
+                    .zip(columns)
+                    .filter(|(v, _)| v.name.starts_with("thd("))
+                {
+                    if let Some(value) = c.first() {
+                        println!("{} = {:.6} %", v.name, value)
+                    }
+                }
+            }
+            (AnalysisKind::Pz, Data::Complex { columns }) => {
+                for (v, c) in a.variables.iter().zip(columns) {
+                    if let Some((re, im)) = c.first() {
+                        println!("{} = {:.6e} {:+.6e}j rad/s", v.name, re, im);
+                    }
                 }
             }
             _ => println!(
@@ -362,7 +394,7 @@ fn run(
                 }));
             }
             print_diags(&out.warnings);
-            summary(&out.results);
+            summary(&out.results, &out.noise_summary_intervals);
             for t in &out.tran_stats {
                 println!(
                     "Transient: {} accepted steps, {} rejected, {} Newton iterations, {} assemblies",

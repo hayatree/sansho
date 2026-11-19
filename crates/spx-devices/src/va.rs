@@ -430,6 +430,53 @@ impl VaGroup {
 }
 
 impl DeviceGroup for VaGroup {
+    fn noise(
+        &self,
+        ctx: &EvalCtx,
+        x: &[f64],
+        _: &Slots,
+        out: &mut Vec<crate::NoiseSource>,
+    ) -> Result<(), Diagnostic> {
+        let Some(module) = &self.module else {
+            return Ok(());
+        };
+        let buffers = self
+            .buffers
+            .lock()
+            .map_err(|_| Diagnostic::error("E-VA-EVAL", "poisoned VA noise workspace"))?;
+        for (inst, buf) in self.instances.iter().zip(&buffers.instances) {
+            let local: Vec<_> = inst.nodes.iter().map(|&n| volt(x, n)).collect();
+            let input = EvalInput {
+                x: &local,
+                temperature: ctx.temp,
+                analysis: Analysis::Noise,
+                initial_step: false,
+                final_step: true,
+                abstime: 0.,
+                gmin: ctx.gmin,
+                limit: false,
+                simparams: &|_| None,
+                mfactor: 1.,
+            };
+            for drive in module.noise_drives(&inst.bound, &input, &buf.scratch)? {
+                let rows = inst
+                    .nodes
+                    .iter()
+                    .zip(drive.rows)
+                    .filter_map(|(&n, (a, b))| n.map(|k| (k, a, b)))
+                    .collect();
+                out.push(crate::NoiseSource {
+                    device: inst.name.clone(),
+                    power: drive.power,
+                    exponent: drive.exponent,
+                    table: drive.table,
+                    rows,
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn type_name(&self) -> &'static str {
         "verilog-a"
     }
@@ -604,7 +651,9 @@ impl VaGroup {
                     out.core_dyn(&mut at, &r.f, &r.q, &r.df, &r.dq);
                     continue;
                 }
-                buffer.scratch.set_jit(!self.disable_jit);
+                buffer
+                    .scratch
+                    .set_jit(!self.disable_jit && ctx.mode != Mode::Noise);
                 if !self.disable_jit
                     && ctx.mode == Mode::Tran
                     && buffer.same_bias(
@@ -634,6 +683,7 @@ impl VaGroup {
                 temperature: ctx.temp,
                 analysis: match ctx.mode {
                     Mode::Dc => Analysis::Dc,
+                    Mode::Noise => Analysis::Noise,
                     Mode::Ac => Analysis::Ac,
                     Mode::Tran => Analysis::Tran,
                 },

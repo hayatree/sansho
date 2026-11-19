@@ -153,12 +153,155 @@ fn interp(xs: &[f64], ys: &[f64], x: f64) -> f64 {
     ys[j - 1] + w * (ys[j] - ys[j - 1])
 }
 
+/// A raw writer may wrap special vector names according to the output units.
+fn vector_name(kind: AnalysisKind, name: &str) -> &str {
+    if matches!(
+        kind,
+        AnalysisKind::Noise
+            | AnalysisKind::IntegratedNoise
+            | AnalysisKind::Tf
+            | AnalysisKind::Sens
+            | AnalysisKind::Pz
+    ) && name.get(..2).is_some_and(|prefix| {
+        prefix.eq_ignore_ascii_case("v(") || prefix.eq_ignore_ascii_case("i(")
+    }) && let Some(inner) = name[2..].strip_suffix(')')
+    {
+        return inner;
+    }
+    name
+}
+
+struct Root<'a> {
+    name: &'a str,
+    re: f64,
+    im: f64,
+}
+
+fn roots<'a>(plot: &'a AnalysisResult, family: &str) -> Result<Vec<Root<'a>>, String> {
+    let Data::Complex { columns } = &plot.data else {
+        return Err("Pz: expected complex root values".into());
+    };
+    let mut roots = Vec::new();
+    for (i, variable) in plot.variables.iter().enumerate() {
+        let name = vector_name(plot.kind, &variable.name);
+        let Some((kind, index)) = name.split_once('(') else {
+            return Err(format!("Pz: unexpected root name {name}"));
+        };
+        if !kind.eq_ignore_ascii_case("pole") && !kind.eq_ignore_ascii_case("zero") {
+            return Err(format!("Pz: unexpected root name {name}"));
+        }
+        if !kind.eq_ignore_ascii_case(family) {
+            continue;
+        }
+        if index
+            .strip_suffix(')')
+            .and_then(|n| n.parse::<usize>().ok())
+            .is_none()
+        {
+            return Err(format!("Pz: invalid root index in {name}"));
+        }
+        let Some(&[(re, im)]) = columns.get(i).map(Vec::as_slice) else {
+            return Err(format!("Pz: expected one complex value for {name}"));
+        };
+        if !re.is_finite() || !im.is_finite() {
+            return Err(format!("Pz: non-finite {name}"));
+        }
+        roots.push(Root { name, re, im });
+    }
+    Ok(roots)
+}
+
+// Find a one-to-one assignment at a given worst normalized error. Reassigning
+// an earlier root matters for clusters where two roots share a nearest neighbor.
+fn assign_roots(costs: &[Vec<f64>], limit: f64) -> Option<Vec<usize>> {
+    fn augment(
+        i: usize,
+        costs: &[Vec<f64>],
+        limit: f64,
+        seen: &mut [bool],
+        owners: &mut [Option<usize>],
+    ) -> bool {
+        for (j, &cost) in costs[i].iter().enumerate() {
+            if cost <= limit && !seen[j] {
+                seen[j] = true;
+                if owners[j].is_none_or(|prev| augment(prev, costs, limit, seen, owners)) {
+                    owners[j] = Some(i);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    let mut owners = vec![None; costs.len()];
+    for i in 0..costs.len() {
+        if !augment(i, costs, limit, &mut vec![false; costs.len()], &mut owners) {
+            return None;
+        }
+    }
+    owners.into_iter().collect()
+}
+
+fn compare_roots(
+    reference: &AnalysisResult,
+    ours: &AnalysisResult,
+    tol: &Tolerances,
+    out: &mut DeckReport,
+) -> Result<(), String> {
+    for family in ["pole", "zero"] {
+        let r = roots(reference, family)?;
+        let o = roots(ours, family)?;
+        if r.len() != o.len() {
+            return Err(format!(
+                "Pz: {} reference {family}s vs {} computed",
+                r.len(),
+                o.len()
+            ));
+        }
+        if r.is_empty() {
+            continue;
+        }
+        let distance = |a: &Root, b: &Root| (a.re - b.re).hypot(a.im - b.im);
+        let costs: Vec<Vec<_>> = r
+            .iter()
+            .map(|a| {
+                let scale = tol.rtol * a.re.hypot(a.im) + tol.atol_v;
+                o.iter().map(|b| distance(a, b) / scale).collect()
+            })
+            .collect();
+        let mut limits: Vec<_> = costs.iter().flatten().copied().collect();
+        limits.sort_by(f64::total_cmp);
+        limits.dedup();
+        let best = limits.partition_point(|&limit| assign_roots(&costs, limit).is_none());
+        let owners = limits
+            .get(best)
+            .and_then(|&limit| assign_roots(&costs, limit))
+            .ok_or_else(|| format!("Pz: cannot match {family}s"))?;
+        for (j, i) in owners.into_iter().enumerate() {
+            out.vars.push(VarReport {
+                analysis: AnalysisKind::Pz,
+                name: r[i].name.to_owned(),
+                points: 1,
+                max_abs: distance(&r[i], &o[j]),
+                at: f64::NAN,
+                score: costs[i][j],
+            });
+        }
+    }
+    Ok(())
+}
+
 fn compare_analysis(
     reference: &AnalysisResult,
     ours: &AnalysisResult,
     tol: &Tolerances,
     out: &mut DeckReport,
 ) {
+    if reference.kind == AnalysisKind::Pz {
+        if let Err(error) = compare_roots(reference, ours, tol, out) {
+            out.problems.push(error);
+        }
+        return;
+    }
     let start = out.vars.len();
     let tran = reference.kind == AnalysisKind::Tran;
     for (vi, var) in reference.variables.iter().enumerate() {
@@ -167,7 +310,21 @@ fn compare_analysis(
             (true, _) => tol.rtol_tran,
             _ => tol.rtol,
         };
-        let Some(oi) = ours.index_of(&var.name) else {
+        let name = vector_name(reference.kind, &var.name);
+        let Some(oi) = ours
+            .variables
+            .iter()
+            .position(|v| vector_name(ours.kind, &v.name).eq_ignore_ascii_case(name))
+        else {
+            if reference.kind == AnalysisKind::Tf
+                || (reference.kind == AnalysisKind::IntegratedNoise
+                    && ["onoise_total", "inoise_total"]
+                        .iter()
+                        .any(|n| name.eq_ignore_ascii_case(n)))
+            {
+                out.problems
+                    .push(format!("{:?}: missing {name}", reference.kind));
+            }
             continue;
         };
         let atol = match var.quantity {
@@ -244,7 +401,7 @@ fn compare_analysis(
             );
         out.vars.push(VarReport {
             analysis: reference.kind,
-            name: var.name.clone(),
+            name: name.to_owned(),
             points: diffs.len(),
             max_abs,
             at: reference.scale_values.get(k).copied().unwrap_or(f64::NAN),
@@ -447,6 +604,46 @@ mod tests {
         let rep = compare(&r, &o, &Tolerances::default());
         assert!(!rep.pass());
         assert_eq!(rep.vars[0].at, 1.0);
+    }
+
+    #[test]
+    fn matches_complex_root_multisets_per_family() {
+        let plot = |roots: &[(&str, f64, f64)]| SimResults {
+            title: String::new(),
+            measures: vec![],
+            analyses: vec![AnalysisResult {
+                kind: AnalysisKind::Pz,
+                scale: None,
+                scale_values: vec![],
+                variables: roots
+                    .iter()
+                    .map(|&(name, _, _)| Variable {
+                        name: name.into(),
+                        quantity: Quantity::PoleZero,
+                    })
+                    .collect(),
+                data: Data::Complex {
+                    columns: roots.iter().map(|&(_, re, im)| vec![(re, im)]).collect(),
+                },
+            }],
+        };
+        let reference = plot(&[
+            ("V(Pole(1))", -2., 1.),
+            ("v(pole(2))", -2., -1.),
+            ("zero(1)", -2., 1.),
+        ]);
+        let mut values = [
+            ("pole(1)", -2., -1.),
+            ("pole(2)", -2., 1.),
+            ("V(ZERO(1))", -2., 1.),
+        ];
+        let tol = Tolerances::default();
+        assert!(compare(&reference, &plot(&values), &tol).pass());
+        assert!(!compare(&reference, &plot(&values[..2]), &tol).pass());
+        values[0].2 = 1.;
+        assert!(!compare(&reference, &plot(&values), &tol).pass());
+        values[2].2 = -1.;
+        assert!(!compare(&reference, &plot(&values), &tol).pass());
     }
 
     #[test]

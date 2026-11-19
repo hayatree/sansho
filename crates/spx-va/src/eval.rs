@@ -24,7 +24,7 @@ pub enum Analysis {
     Tran,
     /// Small-signal AC linearization.
     Ac,
-    /// Noise linearization (noise generators currently return zero).
+    /// Small-signal noise linearization.
     Noise,
 }
 /// Values and simulator context for one evaluation.
@@ -140,9 +140,28 @@ struct Slot {
     lower: i64,
     ty: Ty,
 }
+/// One independent Verilog-A noise contribution in local MNA coordinates.
+#[derive(Debug, Default)]
+pub struct NoiseDrive {
+    /// One-sided power at 1 Hz for white and power-law sources.
+    pub power: f64,
+    /// Frequency exponent (zero for white noise).
+    pub exponent: f64,
+    /// Optional frequency and PSD samples.
+    pub table: Vec<(f64, f64)>,
+    /// Resistive and reactive residual derivatives with respect to the source.
+    pub rows: Vec<(f64, f64)>,
+}
+#[derive(Debug, Default)]
+struct NoiseSeed {
+    target: usize,
+    calls: usize,
+    drive: NoiseDrive,
+}
 /// Reusable, per-instance interpreter workspace. Do not share between instances.
 #[derive(Debug, Default)]
 pub struct Scratch {
+    noise: Option<NoiseSeed>,
     slots: Vec<Slot>,
     initialized: bool,
     steps: usize,
@@ -626,6 +645,65 @@ impl CompiledModule {
             .filter(|v| v.text.is_none())
             .map(|v| v.f.v)
     }
+    /// Replay the analog block at fixed bias. One additional AD direction
+    /// follows each independent source through assignments and branch stamps.
+    pub fn noise_drives(
+        &self,
+        b: &Bound,
+        input: &EvalInput<'_>,
+        history: &Scratch,
+    ) -> Result<Vec<NoiseDrive>, Diagnostic> {
+        let n = input.x.len();
+        let mut drives = Vec::new();
+        loop {
+            let mut scratch = Scratch {
+                slots: history.slots.clone(),
+                initialized: history.initialized,
+                width: history.width,
+                binding_key: history.binding_key.clone(),
+                noise: Some(NoiseSeed {
+                    target: drives.len(),
+                    drive: NoiseDrive {
+                        rows: vec![(0., 0.); n],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let accepted = vec![0.; self.states];
+            let mut current = accepted.clone();
+            let mut out = EvalOutput::default();
+            self.eval_with_scratch(
+                b,
+                input,
+                StateIo {
+                    accepted: &accepted,
+                    current: &mut current,
+                },
+                &mut scratch,
+                &mut out,
+            );
+            if let Some(d) = out.diagnostic {
+                return Err(d);
+            }
+            if let Some(msg) = out.error {
+                return Err(Diagnostic::error("E-VA-EVAL", msg));
+            }
+            let seed = scratch
+                .noise
+                .take()
+                .ok_or_else(|| Diagnostic::error("E-VA-EVAL", "missing noise evaluation"))?;
+            if seed.calls == 0 {
+                break;
+            }
+            drives.push(seed.drive);
+            if drives.len() >= seed.calls {
+                break;
+            }
+        }
+        Ok(drives)
+    }
     /// Evaluate with the binding's convenience per-instance workspace.
     pub fn eval(&self, b: &Bound, input: &EvalInput<'_>, state: StateIo<'_>, out: &mut EvalOutput) {
         match b.scratch.try_lock() {
@@ -719,7 +797,8 @@ impl CompiledModule {
         let direct_start = self.direct_start && !scratch.disable_jit && b.circuit.is_some();
         #[cfg(not(feature = "jit"))]
         let direct_start = false;
-        if (scratch.initialized || direct_start)
+        if input.analysis != Analysis::Noise
+            && (scratch.initialized || direct_start)
             && program::evaluate(self, b, input, scratch, out, &mut state)
         {
             return;
@@ -731,7 +810,9 @@ impl CompiledModule {
                 v.q = Dual::constant(v.q.v);
             }
         }
-        scratch.gradients.reset(n);
+        scratch
+            .gradients
+            .reset(n + usize::from(scratch.noise.is_some()));
         scratch.steps = 0;
         let mut r = Runtime {
             drives: std::mem::take(&mut scratch.drives),
@@ -943,6 +1024,18 @@ impl Runtime<'_, '_, '_> {
     }
     fn stamp(&mut self, row: Option<usize>, v: &Value, sign: f64) {
         if let Some(i) = row {
+            if let Some(seed) = &mut self.scratch.noise {
+                let partial = |d| {
+                    self.scratch
+                        .gradients
+                        .row(d)
+                        .get(self.n)
+                        .copied()
+                        .unwrap_or(0.)
+                };
+                seed.drive.rows[i].0 += sign * partial(v.f);
+                seed.drive.rows[i].1 += sign * partial(v.q);
+            }
             self.out.f[i] += sign * (v.f.v + v.f.t);
             self.out.q[i] += sign * (v.q.v + v.q.t);
             for (dual, jac) in [(v.f, &mut self.out.df), (v.q, &mut self.out.dq)] {
@@ -1237,13 +1330,13 @@ impl Runtime<'_, '_, '_> {
                 });
                 state
             }
-            E::Call(name, _)
+            E::Call(name, args)
                 if matches!(
                     name.as_str(),
                     "white_noise" | "flicker_noise" | "noise_table"
                 ) =>
             {
-                self.zero()
+                self.noise_call(name, args)
             }
             E::Call(name, args) => match args.as_slice() {
                 [] => self.call(name, &[]),
@@ -1457,6 +1550,63 @@ impl Runtime<'_, '_, '_> {
         self.scratch.calls.pop();
         self.depth -= 1;
         result
+    }
+    fn noise_call(&mut self, name: &str, args: &[Expr]) -> Value {
+        let Some(seed) = &mut self.scratch.noise else {
+            return self.zero();
+        };
+        let selected = seed.calls == seed.target;
+        seed.calls += 1;
+        if !selected {
+            return self.zero();
+        }
+        let mut table = vec![];
+        let (power, exponent) = if name == "noise_table" {
+            let mut values = vec![];
+            for arg in args.iter().filter(|a| a.ty != Ty::String) {
+                if let E::Var(i) = arg.kind
+                    && self.scratch.slots[i].values.len() > 1
+                {
+                    values.extend(self.scratch.slots[i].values.iter().map(|v| v.f.v));
+                } else {
+                    values.push(self.expr(arg).f.v);
+                }
+            }
+            for pair in values.as_chunks::<2>().0 {
+                table.push((pair[0], pair[1]));
+            }
+            if values.len() % 2 != 0
+                || table.is_empty()
+                || table
+                    .iter()
+                    .any(|&(f, p)| !f.is_finite() || !p.is_finite() || f <= 0. || p < 0.)
+                || table.windows(2).any(|p| p[0].0 >= p[1].0)
+            {
+                self.fail(
+                    "noise_table needs ascending positive frequencies and nonnegative powers",
+                );
+                return self.zero();
+            }
+            (0., 0.)
+        } else {
+            let power = self.expr(&args[0]).f.v;
+            let exponent = if name == "flicker_noise" {
+                self.expr(&args[1]).f.v
+            } else {
+                0.
+            };
+            (power, exponent)
+        };
+        if !power.is_finite() || power < 0. || !exponent.is_finite() {
+            self.fail("invalid Verilog-A noise spectrum");
+            return self.zero();
+        }
+        if let Some(seed) = &mut self.scratch.noise {
+            seed.drive.power = power;
+            seed.drive.exponent = exponent;
+            seed.drive.table = table;
+        }
+        Value::dual(Dual::variable(0., self.n, &mut self.scratch.gradients))
     }
     fn call(&mut self, name: &str, a: &[Value]) -> Value {
         let x = a.first().map_or(0., |a| a.f.v);

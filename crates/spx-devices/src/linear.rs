@@ -22,11 +22,17 @@ pub struct Resistors {
     p: Vec<Node>,
     n: Vec<Node>,
     g: Vec<f64>,
+    noise_temp: Vec<f64>,
 }
 
 impl Resistors {
     /// Add an instance with resistance `r` (non-zero).
     pub fn push(&mut self, name: &str, p: Node, n: Node, r: f64) {
+        self.push_at(name, p, n, r, crate::REFTEMP);
+    }
+    /// A zero noise temperature disables the resistor noise source.
+    pub fn push_at(&mut self, name: &str, p: Node, n: Node, r: f64, noise_temp: f64) {
+        self.noise_temp.push(noise_temp);
         self.names.push(name.to_string());
         self.p.push(p);
         self.n.push(n);
@@ -35,6 +41,24 @@ impl Resistors {
 }
 
 impl DeviceGroup for Resistors {
+    fn noise(
+        &self,
+        _: &crate::EvalCtx,
+        _: &[f64],
+        _: &Slots,
+        out: &mut Vec<crate::NoiseSource>,
+    ) -> Result<(), Diagnostic> {
+        for i in 0..self.len() {
+            out.push(crate::NoiseSource::branch(
+                &self.names[i],
+                self.p[i],
+                self.n[i],
+                4. * crate::BOLTZMANN * self.noise_temp[i] * self.g[i].abs(),
+                0.,
+            ));
+        }
+        Ok(())
+    }
     fn instance_name(&self, index: usize) -> Option<&str> {
         self.names.get(index).map(String::as_str)
     }

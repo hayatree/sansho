@@ -17,6 +17,13 @@ impl SourceLoader for Models {
                 r#"module init(p,n); electrical p,n; real r;
                 analog begin @(initial_step) r=1000; I(p,n)<+V(p,n)/r; end endmodule"#
             }
+            "noise.va" => {
+                r#"module random_drive(p,n); electrical p,n; real drive;
+                analog begin
+                  drive=2*white_noise(1e-18,"thermal");
+                  I(p,n)<+drive+flicker_noise(3e-18,1,"pink")+noise_table({1,1e-18,100,1e-20},"table");
+                end endmodule"#
+            }
             "rates.va" => {
                 r#"module rates(p,u,w); electrical p,u,w; real rate;
                 analog begin rate=ddt(V(u)); V(p)<+(1+V(w))*rate+sin(ddt(V(w))); end endmodule"#
@@ -697,4 +704,19 @@ fn monte_carlo_va_binding_with_concurrent_analysis_cards() {
         plan.batch(193, 5, true, &RunConfig { threads: 3 }).unwrap(),
         serial
     );
+}
+
+#[test]
+fn va_noise_generators_propagate_through_assignments() {
+    let r = simulate(
+        "VA noise\nI1 0 p ac 1\nR1 p 0 1k noisy=0\nN1 p 0 m\n.model m random_drive\n.hdl noise.va\n.noise v(p) I1 dec 1 1 100\n",
+    );
+    let a = &r.analyses[0];
+    for (&f, &v) in a
+        .scale_values
+        .iter()
+        .zip(a.real("inoise_spectrum").unwrap())
+    {
+        close(v, (4e-18 + 4e-18 / f).sqrt(), 1e-12, 0.);
+    }
 }

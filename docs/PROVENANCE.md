@@ -274,3 +274,36 @@ The temperature translations in `temperature.rs`, `diode.rs`, `bjt.rs` and
 in Massobrio and Antognetti, *Semiconductor Device Modeling with SPICE* (1993).
 The BSIM4 equations retain their existing provenance. The R1 verification
 circuits and analytic regression tests were written for this project.
+
+### R2 small-signal and Fourier analyses
+
+The netlist syntax, analysis terminology and conventional vector names follow the
+public ngspice user manual descriptions of NOISE, TF, SENS, FOUR and PZ. The
+adjoint noise formulation follows Rohrer, Nagel, Meyer and Weber, “Computationally
+Efficient Electronic-Circuit Noise Calculations” (1971). The DC sensitivity
+contraction follows Director and Rohrer (1969). The MNA transfer and bordered
+pole-zero pencils follow the network equations in Vlach and Singhal, *Computer
+Methods for Circuit Analysis and Design*. The Fourier implementation uses the
+real-signal discrete Fourier transform. The dense QZ kernel uses the workspace's
+existing MIT-licensed faer dependency through its public API.
+
+The built-in noise sources use the Johnson–Nyquist, shot and empirical flicker
+laws, the Berkeley BSIM4 4.8.2 Technical Manual chapter 10 and Appendix A.10,
+and the Accellera Verilog-AMS 2.4 LRM small-signal noise functions. The device
+adapters, source projection, parameter perturbations, integration, tests and
+R2 verification circuits are original implementations.
+
+MOS1 oxide thickness, effective geometry and KF/AF parameters follow the
+[ngspice 44 user manual, §7.6.2.5](https://ngspice.sourceforge.io/docs/ngspice-44-manual.pdf#page=159).
+The table lists the parameters and defaults. The gate-area power law and
+conversion through gm² are also given in Bucher et al., *The EPFL-EKV MOSFET
+Model Equations for Simulation*, eq. 94. The choice of gate-referred form for
+the R2 deck was checked against the maintainer's 44.2 simulation output.
+[Gate-area noise equation](https://ngspice.sourceforge.io/external-documents/models/ekv_v262.pdf)
+
+The BSIM4 source-side partition and flicker normalization follow the
+[Berkeley BSIM4 4.8.2 Technical Manual](https://bsim.berkeley.edu/models/bsim4/),
+equations 10.2–14 and Appendix A.10. The zero-resistance reduction uses
+the device's own current and charge derivatives. The verifier matches complex
+pole and zero multisets by minimizing the largest normalized distance using
+bipartite augmenting paths.

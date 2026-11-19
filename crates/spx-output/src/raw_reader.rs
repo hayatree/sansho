@@ -31,6 +31,18 @@ fn err(line: usize, message: impl Into<String>) -> RawError {
 
 fn kind_of(plot: &str) -> Option<AnalysisKind> {
     let p = plot.to_ascii_lowercase();
+    for kind in [
+        AnalysisKind::Noise,
+        AnalysisKind::IntegratedNoise,
+        AnalysisKind::Tf,
+        AnalysisKind::Sens,
+        AnalysisKind::Four,
+        AnalysisKind::Pz,
+    ] {
+        if p.starts_with(&kind.plot_name().to_ascii_lowercase()) {
+            return Some(kind);
+        }
+    }
     if p.starts_with("operating point") {
         Some(AnalysisKind::Op)
     } else if p.starts_with("dc transfer") {
@@ -46,6 +58,14 @@ fn kind_of(plot: &str) -> Option<AnalysisKind> {
 
 fn quantity_of(t: &str) -> Quantity {
     match t.to_ascii_lowercase().as_str() {
+        "voltage-density" => Quantity::VoltageDensity,
+        "current-density" => Quantity::CurrentDensity,
+        "resistance" => Quantity::Resistance,
+        "admittance" => Quantity::Admittance,
+        "notype" => Quantity::Scalar,
+        "phase" => Quantity::Phase,
+        "pole" => Quantity::PoleZero,
+        "percent" => Quantity::Percent,
         "temperature" => Quantity::Temperature,
         "time" => Quantity::Time,
         "frequency" => Quantity::Frequency,
@@ -160,7 +180,15 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
         let Some(kind) = kind_of(&plot) else {
             continue;
         };
-        let has_scale = kind != AnalysisKind::Op;
+        let has_scale = matches!(
+            kind,
+            AnalysisKind::Ac
+                | AnalysisKind::Dc
+                | AnalysisKind::Tran
+                | AnalysisKind::Noise
+                | AnalysisKind::Four
+        ) || (kind == AnalysisKind::Sens
+            && vars.first().is_some_and(|v| v.name == "frequency"));
         let (scale, scale_values, vars) = if has_scale && !vars.is_empty() {
             let s = vars[0].clone();
             let vals = if complex {

@@ -1,0 +1,7 @@
+DC transfer and driving point resistances
+* Provenance: original R2 verification circuit.
+Vsig in 0 1
+Ra in out 3k
+Rb out 0 1k
+.tf v(out) Vsig
+.end

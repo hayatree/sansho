@@ -24,6 +24,8 @@ use crate::{
 pub struct DiodeModel {
     /// Prepared operating temperature in kelvin.
     pub temperature: Option<f64>,
+    pub kf: f64,
+    pub af: f64,
     pub tnom: Option<f64>,
     pub eg: f64,
     pub xti: f64,
@@ -64,6 +66,8 @@ impl DiodeModel {
     pub fn from_params(p: &ModelParams) -> (Self, Vec<String>) {
         let m = Self {
             temperature: None,
+            kf: p.get("kf", 0.),
+            af: p.get("af", 1.),
             tnom: p.opt(&["tnom"]),
             eg: p.get("eg", 1.11),
             xti: p.get("xti", 3.0),
@@ -111,6 +115,32 @@ impl Diodes {
 }
 
 impl DeviceGroup for Diodes {
+    fn noise(
+        &self,
+        ctx: &EvalCtx,
+        x: &[f64],
+        slots: &Slots,
+        out: &mut Vec<crate::NoiseSource>,
+    ) -> Result<(), Diagnostic> {
+        for i in 0..self.len() {
+            let m = &self.model[i];
+            let temp = m.temperature.unwrap_or(ctx.temp);
+            let thermal = 4. * crate::BOLTZMANN * temp;
+            let mut at = self.at[i];
+            let mut emit = |p, n, power, exp| {
+                out.push(crate::NoiseSource::branch(&self.names[i], p, n, power, exp))
+            };
+            let (p, n) = (self.ai[i], self.k[i]);
+            if m.rs > 0. {
+                emit(self.a[i], p, thermal * self.area[i] / m.rs, 0.);
+                at.f += 2;
+            }
+            let id = (slots.f[at.f] - ctx.gmin * (volt(x, p) - volt(x, n))).abs();
+            emit(p, n, 2. * crate::CHARGE * id, 0.);
+            emit(p, n, m.kf * id.powf(m.af), 1.);
+        }
+        Ok(())
+    }
     fn instance_name(&self, index: usize) -> Option<&str> {
         self.names.get(index).map(String::as_str)
     }
