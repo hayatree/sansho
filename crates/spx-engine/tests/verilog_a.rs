@@ -54,6 +54,17 @@ fn interp(a: &AnalysisResult, signal: &str, t: f64) -> f64 {
     v[k - 1] + (v[k] - v[k - 1]) * (t - lo) / (hi - lo)
 }
 
+/// Quadratic interpolation through the three nearest samples.
+fn interp2(a: &AnalysisResult, signal: &str, t: f64) -> f64 {
+    let v = a.real(signal).unwrap();
+    let x = &a.scale_values;
+    let k = x.partition_point(|s| *s < t).clamp(1, x.len() - 2);
+    let (x0, x1, x2) = (x[k - 1], x[k], x[k + 1]);
+    v[k - 1] * (t - x1) * (t - x2) / ((x0 - x1) * (x0 - x2))
+        + v[k] * (t - x0) * (t - x2) / ((x1 - x0) * (x1 - x2))
+        + v[k + 1] * (t - x0) * (t - x1) / ((x2 - x0) * (x2 - x1))
+}
+
 #[test]
 fn resistor_op_dc_subcircuit_and_overrides() {
     let va = simulate(
@@ -204,9 +215,9 @@ D1 out 0 dm
         .zip(va.analyses[0].real("v(out)").unwrap())
     {
         // The two runs may take different time grids (a 1-ulp difference in libm `exp`
-        // can flip a step decision), so the built-in waveform is linearly interpolated.
-        // Interpolation error is about h^2 |v''| / 8 = (0.1 ns)^2 (2 pi 1 MHz)^2 / 8 = 5e-8 V.
-        close(v, interp(&builtin.analyses[0], "v(out)", t), 1e-6, 1e-7);
+        // can flip a step decision). Linear interpolation would add up to ~1e-7 V, so the
+        // built-in waveform is interpolated quadratically.
+        close(v, interp2(&builtin.analyses[0], "v(out)", t), 1e-6, 1e-9);
     }
 }
 
