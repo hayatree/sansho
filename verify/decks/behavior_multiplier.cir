@@ -1,5 +1,5 @@
 Four quadrant multiplier with differential control
-* Provenance: original circuit for rs-spice release-prep verification.
+* Provenance: original circuit for Sansho release-prep verification.
 .param gain=0.5
 .func product(a,b) {gain*a*b}
 Va a 0 DC 0 SIN(0 1 1k)

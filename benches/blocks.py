@@ -19,13 +19,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def stack_accesses(binary, deck, directory, names):
     """Count static SIMD stack reads and writes in the selected x86-64 blocks."""
-    env = dict(os.environ, SPX_PROFILE_VA_BLOCKS="1", SPX_CACHE_DIR=directory, SPX_VA_JIT="1")
+    env = dict(os.environ, SANSHO_PROFILE_VA_BLOCKS="1", SANSHO_CACHE_DIR=directory, SANSHO_VA_JIT="1")
     images = {}
     with subprocess.Popen([binary, "run", "-j1", deck], env=env, stdout=subprocess.DEVNULL,
                           stderr=subprocess.PIPE, text=True) as process:
         with open(f"/proc/{process.pid}/mem", "rb", buffering=0) as memory:
             for line in process.stderr:
-                if line.startswith("spx-va-block "):
+                if line.startswith("sansho-va-block "):
                     _, address, size, name = line.split()
                     if name in names:
                         length = int(size, 16)
@@ -53,7 +53,7 @@ def stack_accesses(binary, deck, directory, names):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("deck", type=Path)
-    parser.add_argument("--binary", type=Path, default=ROOT / "target/release/spx")
+    parser.add_argument("--binary", type=Path, default=ROOT / "target/release/sansho")
     parser.add_argument("--runs", type=int, default=12)
     parser.add_argument("--spills", action="store_true",
                         help="disassemble hot packed blocks and count SIMD stack operands (Linux x86-64)")
@@ -68,14 +68,14 @@ def main():
         for _ in range(args.runs):
             with TemporaryFile() as stream:
                 fd = stream.fileno()
-                env = dict(os.environ, SPX_PROFILE_VA_BLOCKS="1", SPX_SAMPLE_FD=str(fd),
-                           LD_PRELOAD=str(library), SPX_CACHE_DIR=tmp, SPX_VA_JIT="1")
+                env = dict(os.environ, SANSHO_PROFILE_VA_BLOCKS="1", SANSHO_SAMPLE_FD=str(fd),
+                           LD_PRELOAD=str(library), SANSHO_CACHE_DIR=tmp, SANSHO_VA_JIT="1")
                 run = subprocess.run([args.binary, "run", "-j1", args.deck], env=env,
                                      pass_fds=(fd,), check=True, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.PIPE, text=True)
                 regions = []
                 for line in run.stderr.splitlines():
-                    if line.startswith("spx-va-block "):
+                    if line.startswith("sansho-va-block "):
                         _, address, size, name = line.split()
                         regions.append((int(address, 16), int(size, 16), name))
                 regions.sort()

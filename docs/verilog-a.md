@@ -1,11 +1,11 @@
-# Verilog-A compact-model compiler (`spx-va`)
+# Verilog-A compact-model compiler (`sansho-va`)
 
 VA-5 specializes compact-model equations to register instructions. Section 11 describes the reference circuits, §12 measures the register interpreter and §13 measures the optional Cranelift backend.
 
 ## 1. Purpose and constraints
 
 PDK transistor models (BSIM4 for SKY130, PSP103 for IHP SG13G2, ...) are distributed as Verilog-A
-source. spx compiles that source itself instead of loading OSDI shared objects, so that no
+source. Sansho compiles that source itself instead of loading OSDI shared objects, so that no
 copyleft or all-rights-reserved interface code is involved.
 
 **Clean-room rules (binding):**
@@ -29,7 +29,7 @@ copyleft or all-rights-reserved interface code is involved.
              `ifdef)                             analog block)    contributions)       + control flow) JIT later)
 ```
 
-Crate layout (`crates/spx-va`, depends only on `spx-diag`):
+Crate layout (`crates/sansho-va`, depends only on `sansho-diag`):
 
 | Module | Content |
 |---|---|
@@ -41,7 +41,7 @@ Crate layout (`crates/spx-va`, depends only on `spx-diag`):
 | `ir.rs`, `eval.rs`, `dual.rs`, `math.rs`, `limit.rs` | Resolved typed tree, general interpreter, scratch-backed gradients, shared math, binding and limiting |
 | `eval/program.rs`, `eval/program/` | Binding specialization, register lowering, liveness, constant folding and execution |
 | `eval/topology.rs` | Binding-time constant propagation, node equivalence and compact unknown numbering |
-| `spx-devices/src/va.rs` | `DeviceGroup` adapter for compiled modules |
+| `sansho-devices/src/va.rs` | `DeviceGroup` adapter for compiled modules |
 
 ## 3. Supported language subset (target: BSIM4, PSP103, BSIM-CMG, HICUM/L2 sources)
 
@@ -88,7 +88,7 @@ pub enum Expr { Int(i64), Real(f64), Str(String), Ident(Ident), Index(..), Unary
                 Access{nature, a, b} }
 ```
 
-All nodes carry `spx_diag::Span` (line, column, file index into the preprocessor's file list).
+All nodes carry `sansho_diag::Span` (line, column, file index into the preprocessor's file list).
 
 ## 4. Evaluation model
 
@@ -97,7 +97,7 @@ All nodes carry `spx_diag::Span` (line, column, file index into the preprocessor
 - The analog block is lowered once per module to an IR whose values carry a value and a gradient
   with respect to the instance's unknowns (dynamic-length forward-mode AD). Each evaluation
   produces, per node, the resistive current `f` and the reactive charge `q` (arguments of `ddt`)
-  with exact Jacobians, which map directly onto spx's `G`, `C`, `f`, `q` slots (dense core stamp
+  with exact Jacobians, which map directly onto Sansho's `G`, `C`, `f`, `q` slots (dense core stamp
   over the instance's nodes).
 - Parameter defaults are evaluated at binding. See §8 for the initialization event contract.
 - `$limit(V(a,b), "pnjlim", vt, vcrit)` uses an independently written logarithmic limiter based
@@ -116,7 +116,7 @@ N1 a k dmod                           * ngspice OSDI-style instance letter `N`
 ## 6. Verification
 
 1. Unit tests per stage (preprocessor, lexer, parser, sema, AD against finite differences).
-2. Verilog-A re-implementations of spx built-ins (resistor, capacitor, diode with the same
+2. Verilog-A re-implementations of Sansho built-ins (resistor, capacitor, diode with the same
    equations) must match the built-in devices to rounding.
 3. Black-box comparison against ngspice + OpenVAF in Docker on models written in this repository,
    then on user-supplied PDK models (not committed).
@@ -241,7 +241,7 @@ flow/functions, environment queries, initialization, runtime failure paths and s
 
 ## 9. VA-3 simulator integration
 
-Load a deck with `spx run examples/va_diode.cir` or `Session::load_file`. Both quoted
+Load a deck with `sansho run examples/va_diode.cir` or `Session::load_file`. Both quoted
 and unquoted `.hdl path.va` cards use the existing netlist source loader, relative to the
 including deck. Text-only parsing with `NoFiles` rejects them with `E-PARSE-INCLUDE`.
 The netlist retains the resolved HDL path and text. External Verilog-A includes resolve
@@ -301,8 +301,8 @@ different layouts even within one device group. Circuit elaboration merges exter
 before stamping other devices and reports their voltages under each original net name.
 An instance targeted by an in-place DC parameter sweep retains its full possible layout.
 
-Run `cargo test -p spx-va --test production -- --nocapture` for the local model suite.
-The default root is `va-models/ihp` relative to the checkout. Set `SPX_VA_MODELS` to an
+Run `cargo test -p sansho-va --test production -- --nocapture` for the local model suite.
+The default root is `va-models/ihp` relative to the checkout. Set `SANSHO_VA_MODELS` to an
 alternative directory containing the model subdirectories. Each test prints a skip note
 when its entry file is absent. The suite covers PSP103, its thermal and NQS variants,
 JUNCAP200, VBIC 1.3, r3_cmc and mosvar. It checks every entry of both dense Jacobians by
@@ -326,7 +326,7 @@ libraries. The bundled inputs in this directory are original test circuits and
 a two-directive wrapper selecting the five-terminal configuration of VBIC.
 
 The IHP HBT library selects ngspice's native VBIC through a five-terminal
-`Q` instance and an NPN level-9 model card. For this form spx binds the
+`Q` instance and an NPN level-9 model card. For this form Sansho binds the
 loaded `vbic13_5t` module, sets the transistor polarity, and connects the
 substrate and thermal terminals. The three ngspice safe-operating-area voltage
 limits are advisory and have no effect on the equations. The reference deck
@@ -353,10 +353,10 @@ alias. An explicit N-line value overrides the corresponding default.
 From the checkout root, with the files listed in each deck header installed locally:
 
 ```sh
-cargo run -p spx-cli -- run verify/va-decks/psp_nmos_idvg.cir
-cargo test -p spx-engine --test verilog_a ihp_corner_transfer_and_inverter_switching
-cargo run --release -p spx-verify -- verify/va-decks
-cargo run --release -p spx-verify -- --cached verify/va-decks
+cargo run -p sansho-cli -- run verify/va-decks/psp_nmos_idvg.cir
+cargo test -p sansho-engine --test verilog_a ihp_corner_transfer_and_inverter_switching
+cargo run --release -p sansho-verify -- verify/va-decks
+cargo run --release -p sansho-verify -- --cached verify/va-decks
 ```
 
 The local NMOS reaches 401 µA at 1.2 V on both gate and drain. The loaded
@@ -370,7 +370,7 @@ The typical-corner results above use nominal netlist parameters. Statistical bat
 
 ### 11.x Reference comparison results (2026-11-18)
 
-`cargo run --release -p spx-verify -- verify/va-decks` passes 10/10 decks against ngspice 44.2 with
+`cargo run --release -p sansho-verify -- verify/va-decks` passes 10/10 decks against ngspice 44.2 with
 models compiled by OpenVAF-Reloaded v24.0.2mob (both run as black boxes in Docker). At the default
 tolerances (`reltol=1e-3`) the median relative drain-current difference of the PSP103 sweeps is
 below 1e-11; isolated points differ by up to 1e-3 because the two simulators stop Newton at
@@ -408,7 +408,7 @@ calls. It can reclaim temporary rows during long loops.
 
 Build with `--features jit` to select Cranelift. The feature defaults off.
 In a JIT build, `.option va_jit=0`, `SimOptions::va_jit = false` or the process
-environment setting `SPX_VA_JIT=0` selects the interpreter. Library clients can
+environment setting `SANSHO_VA_JIT=0` selects the interpreter. Library clients can
 choose the interpreter independently for each workspace with
 `Scratch::set_jit(false)`.
 
@@ -464,13 +464,13 @@ inputs installed as described in §11.
 
 ```sh
 cargo test --offline
-cargo test --offline --features jit -p spx-va
-cargo test --offline --features jit -p spx-engine
+cargo test --offline --features jit -p sansho-va
+cargo test --offline --features jit -p sansho-engine
 cargo clippy --offline --all-targets --all-features -- -D warnings
-cargo run --offline --release --features jit -p spx-verify -- --cached
-cargo run --offline --release --features jit -p spx-verify -- --cached verify/va-decks
-cargo test --offline --release --features jit -p spx-va --test production -- --nocapture --test-threads=1
-SPX_VA_JIT=0 cargo test --offline --release --features jit -p spx-va --test production -- --nocapture --test-threads=1
+cargo run --offline --release --features jit -p sansho-verify -- --cached
+cargo run --offline --release --features jit -p sansho-verify -- --cached verify/va-decks
+cargo test --offline --release --features jit -p sansho-va --test production -- --nocapture --test-threads=1
+SANSHO_VA_JIT=0 cargo test --offline --release --features jit -p sansho-va --test production -- --nocapture --test-threads=1
 ```
 
 The model comparison uses six evaluations at each of three bindings and compares
@@ -490,7 +490,7 @@ The compiler fingerprint, binding, circuit wiring and backend settings identify
 the native image. Each entry binds its SHA-256 checksum to its key. The Unix reader pins the
 owner-controlled cache directory and checks the opened file's owner, type,
 permissions and size. Concurrent writers publish complete files by atomic rename.
-Set `SPX_CACHE_DIR` to choose a private directory or `SPX_CACHE=0` to disable it.
+Set `SANSHO_CACHE_DIR` to choose a private directory or `SANSHO_CACHE=0` to disable it.
 
 Eligible stateless straight-line programs of at least 8,192 instructions split
 into two functions. Live values pass through per-instance scratch, and the cache

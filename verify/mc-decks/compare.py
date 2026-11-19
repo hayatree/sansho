@@ -1,4 +1,4 @@
-"""Compare independent spx and ngspice Monte Carlo measurement samples.
+"""Compare independent Sansho and ngspice Monte Carlo measurement samples.
 
 Provenance: original implementation of the two-sample mean and F variance
 checks, using the regularized incomplete beta continued fraction.

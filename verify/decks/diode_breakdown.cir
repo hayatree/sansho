@@ -1,6 +1,6 @@
 Diode reverse breakdown with recombination, area and sidewall scaling
 * Provenance: original R4 verification circuit.
-* spx-verify: known-difference breakdown current near BV: spx scales IBV by AREA per the manual (2 mA at -BV); ngspice 44.2 gives about 1.05 mA at -BV for this card
+* sansho-verify: known-difference breakdown current near BV: Sansho scales IBV by AREA per the manual (2 mA at -BV); ngspice 44.2 gives about 1.05 mA at -BV for this card
 Vbias in 0 DC 0.6 AC 1
 Rs in d 50
 D1 d 0 junction area=2 pj=10u

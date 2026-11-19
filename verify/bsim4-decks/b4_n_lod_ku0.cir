@@ -1,6 +1,6 @@
 * BSIM4 LOD stress, KU0 only, one finger
-* spx-verify: known-difference ngspice 44.2 ignores KU0 (LOD mobility stress); spx follows BSIM4 manual eq. 14.5
-* Provenance: original BSIM4 test circuit; generic parameter values chosen for spx.
+* sansho-verify: known-difference ngspice 44.2 ignores KU0 (LOD mobility stress); Sansho follows BSIM4 manual eq. 14.5
+* Provenance: original BSIM4 test circuit; generic parameter values chosen for Sansho.
 .model n1 nmos
 + level=54 version=4.8 binunit=1 paramchk=1 mobmod=0 capmod=2
 + igcmod=0 igbmod=0 geomod=0 diomod=1 rdsmod=0 rbodymod=0

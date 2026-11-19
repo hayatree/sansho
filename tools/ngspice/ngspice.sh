@@ -3,7 +3,7 @@
 # Provenance: original verification wrapper.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
-image="${SPX_NGSPICE_IMAGE:-spx-ngspice:latest}"
+image="${SANSHO_NGSPICE_IMAGE:-sansho-ngspice:latest}"
 if [[ "${1:-}" != --compile-va ]] && ! docker image inspect "$image" >/dev/null 2>&1; then
   docker build -q -t "$image" "$root/tools/ngspice" >/dev/null
 fi
@@ -19,8 +19,8 @@ for arg in "$@"; do
 done
 args=(--rm --network none -e SPICE_ASCIIRAWFILE=1 -u "$(id -u):$(id -g)"
       -v "$root:$root" -w "$workdir")
-if [[ -n "${SPX_VERIFY_OUT:-}" && "$SPX_VERIFY_OUT" != "$root/"* ]]; then
-  args+=(-v "$SPX_VERIFY_OUT:$SPX_VERIFY_OUT")
+if [[ -n "${SANSHO_VERIFY_OUT:-}" && "$SANSHO_VERIFY_OUT" != "$root/"* ]]; then
+  args+=(-v "$SANSHO_VERIFY_OUT:$SANSHO_VERIFY_OUT")
 fi
 if [[ "${1:-}" == --compile-va ]]; then
   shift

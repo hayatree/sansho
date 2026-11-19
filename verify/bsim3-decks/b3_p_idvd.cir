@@ -1,5 +1,5 @@
 BSIM3 PMOS short and long channel current versus Vd
-* Provenance: original spx circuit and parameter choices from the BSIM3v3.3 parameter list.
+* Provenance: original Sansho circuit and parameter choices from the BSIM3v3.3 parameter list.
 .model pch pmos level=49 version=3.3.0
 + tox=8n xj=0.13u nch=2.1e17 vth0=-0.58 k1=0.52 k2=-0.023
 + u0=185 vsat=76000 rdsw=130 pclm=1.15

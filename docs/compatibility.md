@@ -8,10 +8,10 @@ The scope below applies to the built-in parser and engine used by the CLI, sessi
 |---|---|---|
 | R, C, L | Partial | Explicit values, passive model temperature coefficients, instance temperature, multiplicity and C/L initial conditions. Geometry-derived passives and arbitrary nonlinear charge or flux expressions are outside this syntax. |
 | K | Supported | Mutual flux of two named positive inductors, signed coupling from −1 through +1. |
-| V, I | Partial | DC, AC magnitude/phase, PULSE, SIN, EXP, PWL, SFFM and delayed AM. TRNOISE and TRRANDOM remain unsupported. The source cards have no per-instance seed and spx does not execute Nutmeg seed commands. |
+| V, I | Partial | DC, AC magnitude/phase, PULSE, SIN, EXP, PWL, SFFM and delayed AM. TRNOISE and TRRANDOM remain unsupported. The source cards have no per-instance seed and Sansho does not execute Nutmeg seed commands. |
 | E, F, G, H | Supported | Linear gains and SPICE2 POLY(n). E/G use differential node pairs. F/H use branch currents. A single coefficient for one input denotes linear gain. Otherwise coefficients start with the constant term and advance by total degree, with the first variable varying first in the list of degree-one terms. |
 | B and nonlinear E/G | Partial | Voltage and current expressions, branch probes, time, temperature, conditionals and math functions. E/G VALUE and endpoint-clamped TABLE are supported. |
-| S, W | Partial | SW and CSW resistance states, threshold, hysteresis and initial on/off. spx uses the magnitude of the hysteresis width. |
+| S, W | Partial | SW and CSW resistance states, threshold, hysteresis and initial on/off. Sansho uses the magnitude of the hysteresis width. |
 | T | Partial | Four terminals, Z0 and TD, or F and optional NL (default ¼ wavelength). DC, AC and transient propagation are supported. Line IC tuples and distributed pole-zero extraction are unsupported. |
 | O, U, Y and coupled lossy lines | Not supported | LTRA, uniform distributed RC and multiconductor models. |
 | D | Partial | Level-one junction current, series resistance, transit and depletion charge, temperature and noise. BV and IBV set the avalanche operating point, and NBV sets its slope (defaults to N). ISR/NR, IKF, and PJ-scaled JSW/NS and CJP/PHP/MJSW/FCS are supported. Temperature-dependent breakdown coefficients are outside coverage. |
@@ -39,13 +39,13 @@ SFFM adds `MDI sin(modulator phase)` to the carrier phase in radians.
 
 Omitted FC and FM are 500/TSTOP and 5/TSTOP, respectively. TD and both
 phases default to zero, VMA to one and MDI to 90. Section 4.1.5 limits MDI
-to the range from zero to FC/FM for positive frequencies. spx places a
+to the range from zero to FC/FM for positive frequencies. Sansho places a
 breakpoint at TD and limits the active timestep to resolve the modulation.
 [ngspice user manual, §§4.1.5–4.1.6](https://ngspice.sourceforge.io/docs/ngspice-manual.pdf#page=99)
 
 The cached ngspice 44.2 SFFM waveform is consistent with interpreting argument
 three as FM and argument five as FC, including the resulting limit on MDI.
-spx uses the manual's order. The dedicated SFFM deck records this known difference.
+Sansho uses the manual's order. The dedicated SFFM deck records this known difference.
 
 ## Analyses, commands and options
 
@@ -77,7 +77,7 @@ spx uses the manual's order. The dedicated SFFM deck records this known differen
 
 - With AREA=2 and IBV=1 mA, the manual scales the breakdown target to 2 mA. The cached R4 diode curve gives the specified NBV slope and extrapolates to 1.05 mA at the nominal breakdown voltage. [Extended diode comparison](../verify/README.md#extended-diode-comparison-with-ngspice-442)
 - E TABLE uses straight segments and the right-hand slope at an interior knot. ngspice 44 smooths the corners. This affects values and incremental gains near a breakpoint.
-- BSIM4 KU0 mobility stress follows manual equation 14.5. The cached 44.2 control gave the same drain current with and without KU0. For unified flicker noise, spx uses the appendix NOIC default of 8.75. The reference spectrum behaves like an explicit 8.75e9. Explicit NOIC removes that discrepancy. [BSIM4 comparisons](bsim4.md)
-- A switch changes state after the continuous solution crosses a threshold. spx interpolates a bracketed crossing, retries the step and restarts integration history. Different accepted grids can shift switching time. A small TMAX resolves narrow pulses. [Switch verification](../verify/README.md#r1-device-and-temperature-decks)
-- In the cached RC AC sensitivity deck the ngspice R1 vector is zero above the first frequency. spx reports the complex derivative of the RC transfer at every frequency. The SKY130 free-running ring also shows phase drift in the body-node traces. [Reference comparisons](../verify/README.md)
-- Geometry binning also applies to classical MOS models. The classical MOS noise implementation uses the existing MOS1 gate-referred flicker convention. Differential-equation integration and waveform interpolation use the spx solver tolerances. [Analysis conventions](analyses.md)
+- BSIM4 KU0 mobility stress follows manual equation 14.5. The cached 44.2 control gave the same drain current with and without KU0. For unified flicker noise, Sansho uses the appendix NOIC default of 8.75. The reference spectrum behaves like an explicit 8.75e9. Explicit NOIC removes that discrepancy. [BSIM4 comparisons](bsim4.md)
+- A switch changes state after the continuous solution crosses a threshold. Sansho interpolates a bracketed crossing, retries the step and restarts integration history. Different accepted grids can shift switching time. A small TMAX resolves narrow pulses. [Switch verification](../verify/README.md#r1-device-and-temperature-decks)
+- In the cached RC AC sensitivity deck the ngspice R1 vector is zero above the first frequency. Sansho reports the complex derivative of the RC transfer at every frequency. The SKY130 free-running ring also shows phase drift in the body-node traces. [Reference comparisons](../verify/README.md)
+- Geometry binning also applies to classical MOS models. The classical MOS noise implementation uses the existing MOS1 gate-referred flicker convention. Differential-equation integration and waveform interpolation use the Sansho solver tolerances. [Analysis conventions](analyses.md)

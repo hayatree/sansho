@@ -3,7 +3,7 @@
 A netlist can contain several analysis cards. CLI JSON includes each plot, its scale,
 the variable names and units, and the real or complex data columns. The session API and
 MCP `simulate` accept the same cards as overrides. Use the plot index and vector name
-with `get_waveform`. The CLI writes all plots to one raw file with `spx run deck.cir -r out.raw`. ASCII is the default. Add `--raw-format binary` for a text header followed by `Binary:` and native-endian f64 samples in point order. A complex plot stores a real/imaginary pair for every variable, including its frequency scale.
+with `get_waveform`. The CLI writes all plots to one raw file with `sansho run deck.cir -r out.raw`. ASCII is the default. Add `--raw-format binary` for a text header followed by `Binary:` and native-endian f64 samples in point order. A complex plot stores a real/imaginary pair for every variable, including its frequency scale.
 
 | Card | Result |
 |---|---|
@@ -35,7 +35,7 @@ a fixed AT value. MIN, MAX, MIN_AT, MAX_AT, PP, AVG, RMS and INTEG clip to FROM 
 with interpolated endpoints. MIN_AT and MAX_AT choose the first extremum in sweep order.
 For extrema the ngspice manual specifies the FROM/TO interval and leaves endpoint
 interpolation unspecified. On the R4 linear ramp, ngspice 44.2 took the largest
-interior sample (0.7928 V), while spx included the interpolated upper edge
+interior sample (0.7928 V), while Sansho included the interpolated upper edge
 (0.8 V). A window bounded by PWL breakpoints gives both simulators the same
 endpoint samples. Measurements on a repeated DC scale report an ambiguous curve.
 
@@ -61,7 +61,7 @@ Measurements operate on TRAN, AC or DC results.
 
 With positive TF and PTF the forward transport delay is TF × PTF × π/180 seconds.
 In AC and noise the forward transport gain acquires the factor exp(−jωτ). In transient
-analysis spx advances the second-order Weil–McNamee approximation using accepted
+analysis Sansho advances the second-order Weil–McNamee approximation using accepted
 timesteps. PZ diagnoses the exponential delay. XCJC divides the collector depletion
 charge between the internal and external base. Reverse diffusion charge stays on the
 internal junction. The base spreading resistance uses the operating base current and
@@ -71,7 +71,7 @@ normalized base charge. Its bias conductance also sets the base resistor thermal
 
 `onoise_spectrum` is output voltage amplitude density in V/√Hz. `inoise_spectrum`
 divides that density by the magnitude of the transfer from the named independent
-source. Its unit is V/√Hz for a voltage source or A/√Hz for a current source. spx
+source. Its unit is V/√Hz for a voltage source or A/√Hz for a current source. Sansho
 uses a unit perturbation of that source, independent of other sources' AC settings.
 A zero gain makes input referral undefined and produces `E-ANALYSIS`.
 
@@ -84,8 +84,8 @@ actual frequency grid by fitting a power law between adjacent positive samples.
 Intervals adjoining a zero use a trapezoid. Square roots give `onoise_total`
 and `inoise_total` in V or A RMS. A single frequency has zero bandwidth.
 
-spx exposes `onoise.<instance>` spectra and `onoise_total.<instance>` RMS values on
-every run. These names are spx extensions. The session/MCP summary ranks contributors
+Sansho exposes `onoise.<instance>` spectra and `onoise_total.<instance>` RMS values on
+every run. These names are Sansho extensions. The session/MCP summary ranks contributors
 by integrated output noise. A positive summary interval prints device densities
 on the CLI at the first point and every interval thereafter. Zero suppresses this
 point-by-point listing. The interval has no effect on integration.
@@ -115,7 +115,7 @@ reverse operation. With finite diffusion resistance it has a Norton equivalent.
 At zero resistance its transfer follows from the source-terminal derivatives
 of the device currents and charges. NTNOI applies to mode 0. RNOIC and TNOIC
 apply to mode 2. The 4.8.2 appendix A.10 default for RNOIB is 0.5164, while
-the prose below equation 10.14 gives 0.37. spx uses the appendix value.
+the prose below equation 10.14 gives 0.37. Sansho uses the appendix value.
 
 fnoiMod defaults to 1. Equations 10.2–8 combine inversion and subthreshold
 trap noise using NOIA/B/C, EF, EM, the local depletion capacitance and effective
@@ -128,7 +128,7 @@ currents (both selectors default off). Chapter 10 specifies no separate
 source/body or drain/body diode shot generator. The R2 source measurements
 and the outstanding flicker discrepancy are in the [verification notes](../verify/README.md#r2-noise-audit).
 
-BSIM4 uses the existing spx channel, leakage, charge and network equations, including
+BSIM4 uses the existing Sansho channel, leakage, charge and network equations, including
 their documented approximations. tnoiMod 2 correlated induced gate/channel noise
 is unsupported. Behavioral sources and ideal switches have no intrinsic generators.
 Verilog-A file-backed noise tables and transient random-noise waveforms are outside
@@ -147,7 +147,7 @@ perturbations evaluate the change in each individual residual stamp before
 contraction with the adjoint. Each figure is an absolute derivative in output units
 per parameter unit. R, C, L and independent source values use their instance names.
 Ideal C and L values have zero DC derivative. At a zero GAMMA, KP, BETA or IS, the perturbation uses the positive side of the physical domain. A shared model perturbation affects
-all its instances together and uses the spx name `model:parameter`.
+all its instances together and uses the Sansho name `model:parameter`.
 
 Supported continuous model-card entries include IS, N, BF, BR, NF, NR, VAF, IKF,
 ISE, VTO/VT0, KP, GAMMA, LAMBDA, PHI, U0/UO, VTH0, K1, K2, VSAT, TOX, TOXE,
@@ -167,7 +167,7 @@ parameter can make this analysis expensive for large models.
 
 ## Fourier
 
-The period ends at the final stored time. spx linearly interpolates 200 equally
+The period ends at the final stored time. Sansho linearly interpolates 200 equally
 spaced samples, including the start and excluding the duplicated endpoint.
 `magnitude(outvar)` reports signed DC and peak harmonic amplitudes,
 `phase(outvar)` reports sine-reference degrees from the start of that period,
@@ -176,7 +176,7 @@ divided by the fundamental. The scalar percentage repeats along the frequency
 axis. A fundamental at numerical roundoff leaves THD undefined and omits that
 column. The full report is available as a Fourier plot, including for a card
 preceding `.tran`. The engine requires at least one complete recorded period.
-spx uses fixed harmonic count, grid and interpolation order. Use a standalone
+Sansho uses fixed harmonic count, grid and interpolation order. Use a standalone
 `.four` card alongside transient `.meas` cards.
 
 ## Pole-zero

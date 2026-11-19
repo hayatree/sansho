@@ -4,9 +4,7 @@
 - Status: Draft
 - Background: private OSS landscape survey (not included in the repository)
 
-> **Working name:** The survey found `JaimeHW/RSpice` (non-commercial license). To avoid a name
-> collision, this document uses the provisional crate prefix `spx-`. The final name will be chosen
-> after trademark and crates.io checks.
+> Sansho (山椒) uses the crate prefix `sansho-`.
 
 ---
 
@@ -52,51 +50,51 @@
 
 ```
            ┌─────────────┐  ┌────────────┐  ┌────────────┐
- Front     │  spx-cli    │  │  spx-mcp   │  │  spx-py    │  (thin shells)
+ Front     │ sansho-cli  │  │ sansho-mcp │  │ sansho-py  │  (thin shells)
            └──────┬──────┘  └─────┬──────┘  └─────┬──────┘
                   └───────────────┼───────────────┘
-           ┌──────────────────────▼───────────────────────┐
- API       │ spx-api : Session / Job / Result / Diagnostic │
-           └──────┬───────────────────────────┬───────────┘
-           ┌──────▼──────┐             ┌──────▼──────┐
- Input     │ spx-netlist │  ───AST───▶ │ spx-elab    │ ──▶ Circuit IR
-           │ (parse)     │             │ (flatten,   │
-           └─────────────┘             │  params)    │
+           ┌──────────────────────▼──────────────────────────────────┐
+ API       │ sansho-api : Session / Job / Result / Diagnostic        │
+           └──────┬───────────────────────────┬──────────────────────┘
+           ┌──────▼─────────┐          ┌──────▼──────┐
+ Input     │ sansho-netlist │ ───AST──▶│ sansho-elab │ ──▶ Circuit IR
+           │ (parse)        │          │ (flatten,   │
+           └────────────────┘          │  params)    │
                                        └──────┬──────┘
-           ┌──────────────────────────────────▼───────────┐
- Engine    │ spx-engine : MNA assembly / Newton / analyses │
+           ┌──────────────────────────────────▼──────────────────────┐
+ Engine    │ sansho-engine : MNA assembly / Newton / analyses        │
            │   OP · DC · AC · TRAN · noise · TF · sens · Fourier · PZ│
-           └───┬──────────────┬───────────────┬───────────┘
-           ┌───▼────────┐ ┌───▼──────────┐ ┌──▼──────────┐
- Kernel    │ spx-devices│ │ spx-sparse   │ │ spx-output  │
-           │ builtin +  │ │ LU / order / │ │ waveform,   │
-           │ spx-osdi   │ │ solve        │ │ raw, .meas  │
-           └───┬────────┘ └──────────────┘ └─────────────┘
-           ┌───▼────────┐
- Accel     │ spx-gpu    │ (batched device eval, optional feature)
-           └────────────┘
-           spx-verify : regression / accuracy harness (runs ngspice/Xyce externally as oracles)
+           └───┬────────────────┬────────────────┬───────────────────┘
+           ┌───▼────────────┐ ┌─▼────────────┐ ┌─▼─────────────┐
+ Kernel    │ sansho-devices │ │ sansho-sparse│ │ sansho-output │
+           │ builtin +      │ │ LU / order / │ │ waveform,     │
+           │ sansho-osdi    │ │ solve        │ │ raw, .meas    │
+           └───┬────────────┘ └──────────────┘ └───────────────┘
+           ┌───▼────────────┐
+ Accel     │ sansho-gpu     │ (batched device eval, optional feature)
+           └────────────────┘
+           sansho-verify : regression / accuracy harness (runs ngspice/Xyce externally as oracles)
 ```
 
 ### 3.1 Crates
 
 | Crate | Responsibility | Main external deps (all permissive) |
 |---|---|---|
-| `spx-netlist` | Lexing / parsing. Lossless AST with line/column spans. `.include/.lib/.param/.func/.subckt/.model`, expression evaluation | none (hand-written parser) |
-| `spx-elab` | Subcircuit flattening, parameter resolution, model binning, node numbering, topology checks (floating nodes, V loops, I cutsets) | — |
-| `spx-ir` | Post-elaboration circuit IR. JSON schema via serde (also accepted as agent input) | serde, schemars |
-| `spx-sparse` | CSC pattern, AMD/COLAMD, BTF, LU (real & complex), refactor, triangular solves, `LinearSolver` trait | faer (initial backend) |
-| `spx-devices` | `DeviceGroup` trait. Built-ins (R/L/C/K/V/I/E/F/G/H/switches/T/JFET/diode/BJT (GP)/MOS1–3/BSIM4) | — |
-| `spx-va` | Clean-room Verilog-A analog subset, binding specialization, register interpretation and optional native evaluation | Cranelift (optional) |
-| `spx-osdi` | OSDI 0.3/0.4 loader (independently implemented from the spec); exposes `.osdi` models as `DeviceGroup` | libloading |
-| `spx-engine` | MNA assembly, Newton, homotopy, time integration, analyses | rayon |
-| `spx-output` | Columnar waveform store, ngspice raw writer (ASCII/binary), `.meas` evaluation | — |
-| `spx-api` | Session / Job API, structured results, diagnostics, determinism hash | rayon |
-| `spx-cli` | `spx run deck.cir`, `--json`, ngspice-like batch mode | clap |
-| `spx-mcp` | MCP server (stdio; HTTP later) | serde_json (no SDK) |
-| `spx-py` | Python bindings | pyo3 |
-| `spx-gpu` | Batched device evaluation (feature flag) | wgpu / cudarc (dynamic loading) |
-| `spx-verify` | Regression suites, oracle comparison, report generation | — |
+| `sansho-netlist` | Lexing / parsing. Lossless AST with line/column spans. `.include/.lib/.param/.func/.subckt/.model`, expression evaluation | none (hand-written parser) |
+| `sansho-elab` | Subcircuit flattening, parameter resolution, model binning, node numbering, topology checks (floating nodes, V loops, I cutsets) | — |
+| `sansho-ir` | Post-elaboration circuit IR. JSON schema via serde (also accepted as agent input) | serde, schemars |
+| `sansho-sparse` | CSC pattern, AMD/COLAMD, BTF, LU (real & complex), refactor, triangular solves, `LinearSolver` trait | faer (initial backend) |
+| `sansho-devices` | `DeviceGroup` trait. Built-ins (R/L/C/K/V/I/E/F/G/H/switches/T/JFET/diode/BJT (GP)/MOS1–3/BSIM4) | — |
+| `sansho-va` | Clean-room Verilog-A analog subset, binding specialization, register interpretation and optional native evaluation | Cranelift (optional) |
+| `sansho-osdi` | OSDI 0.3/0.4 loader (independently implemented from the spec); exposes `.osdi` models as `DeviceGroup` | libloading |
+| `sansho-engine` | MNA assembly, Newton, homotopy, time integration, analyses | rayon |
+| `sansho-output` | Columnar waveform store, ngspice raw writer (ASCII/binary), `.meas` evaluation | — |
+| `sansho-api` | Session / Job API, structured results, diagnostics, determinism hash | rayon |
+| `sansho-cli` | `sansho run deck.cir`, `--json`, ngspice-like batch mode | clap |
+| `sansho-mcp` | MCP server (stdio; HTTP later) | serde_json (no SDK) |
+| `sansho-py` | Python bindings | pyo3 |
+| `sansho-gpu` | Batched device evaluation (feature flag) | wgpu / cudarc (dynamic loading) |
+| `sansho-verify` | Regression suites, oracle comparison, report generation | — |
 
 ---
 
@@ -177,8 +175,8 @@ time point and signal on one, two and five threads.
 
 ### 4.4 Native Verilog-A evaluation (VA-5b)
 
-The optional `jit` feature on spx-cli, spx-verify, spx-engine and spx-devices
-forwards to spx-va. The scalar specializer lowers into the same register program
+The optional `jit` feature on sansho-cli, sansho-verify, sansho-engine and sansho-devices
+forwards to sansho-va. The scalar specializer lowers into the same register program
 used by the interpreter. Cranelift compiles the bias-dependent equations into a
 host function with one scalar SSA value per live partial. A compiled module owns
 its finalized code and specialization cache. The device adapter prepares kernels
@@ -219,7 +217,7 @@ signal projection. [Analysis algorithms and limits](analyses.md)
   `f(x̃) + G·(x − x̃)` so the Newton step stays consistent; limiting marks the iteration as not
   converged (`Slots::noncon`). Junctions use Nagel's logarithmic limiting; FET control voltages use
   an original step clamp.
-- Device Jacobians come from forward-mode dual numbers (`spx-devices/src/dual.rs`): model
+- Device Jacobians come from forward-mode dual numbers (`sansho-devices/src/dual.rs`): model
   equations are written once and their derivatives are exact.
 - Device state (`StateRef`): an `accepted` copy (last accepted solution, read-only during a solve)
   and a `current` copy (per iteration). Used for limiting history and incremental charge models
@@ -313,7 +311,7 @@ Shooting-method PSS and HB. Thanks to the DAE form (D1), devices need no additio
 
 ---
 
-## 6. Linear solver (`spx-sparse`)
+## 6. Linear solver (`sansho-sparse`)
 
 ```rust
 pub trait LinearSolver<T> {
@@ -367,7 +365,7 @@ After declining BTF, automatic selection keeps the existing simplicial
 refactorization where applicable below 16,384 unknowns. The general real
 fallback uses faer's sequential numeric and solve kernels and reusable
 scratch at every size. A large linear job reuses valid factors when all assembled Jacobian
-bits match the previous successful factorization. Set `SPX_REAL_SOLVER` to
+bits match the previous successful factorization. Set `SANSHO_REAL_SOLVER` to
 `auto`, `newton` (previous selection), `faer` (general backend), or `btf`
 (attempt BTF regardless of size and partition quality). All real backend
 selections use sequential kernels for general LU so worker-count changes
@@ -377,7 +375,7 @@ preserve the single-worker arithmetic.
 
 ## 7. Agent-native design
 
-### 7.1 API (`spx-api`)
+### 7.1 API (`sansho-api`)
 
 ```rust
 let mut s = Session::new(SessionOptions::default());
@@ -424,12 +422,12 @@ alterations is planned with the own sparse solver (M5).
   (e.g. `1M` vs `1Meg`), implausible values, default MOSFET geometry, `.meas` signals that do not
   exist (with "did you mean" suggestions), suspicious `.tran` steps.
 - Error codes are stable IDs, each with documentation: the registry in
-  `spx-diag/src/codes.rs` generates [`diagnostics.md`](diagnostics.md), and a test fails when a code
+  `sansho-diag/src/codes.rs` generates [`diagnostics.md`](diagnostics.md), and a test fails when a code
   is used without being registered.
 - Convergence failures report the non-converged unknowns with their last value and update ratio,
   the devices attached to the worst node, the strategies tried, and suggestions (implemented in M3).
 
-### 7.4 MCP server (`spx-mcp`)
+### 7.4 MCP server (`sansho-mcp`)
 
 | Tool | Purpose |
 |---|---|
@@ -453,7 +451,7 @@ arguments) are tool results with `isError: true` and structured diagnostics; onl
 use JSON-RPC errors. An HTTP transport is planned.
 
 Guarantees fast startup (single static binary) and determinism (same input → same hash → same
-result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/stdio.rs`.
+result). The M3 exit criterion is tested end to end in `crates/sansho-mcp/tests/stdio.rs`.
 
 ---
 
@@ -519,7 +517,7 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
 
 ---
 
-## 9. Accuracy assurance and verification (`spx-verify`)
+## 9. Accuracy assurance and verification (`sansho-verify`)
 
 - **Oracles**: ngspice (BSD; installed and run in CI) as primary, Xyce as secondary — invoked only as
   external processes, no code imported. Circuits with analytic solutions (RC, RLC, linear networks)
@@ -529,7 +527,7 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
   interpolated onto the reference time points, AC compares complex values, `.meas` scalars are
   compared relatively. Tolerances can be overridden per deck with `* verify:` comments. An
   RMS-based variant (`xyce_verify` style) can be added for long waveforms.
-- **Running**: `cargo run -p spx-verify` runs every deck in `verify/decks` with spx and with
+- **Running**: `cargo run -p sansho-verify` runs every deck in `verify/decks` with Sansho and with
   ngspice in Docker (`tools/ngspice`); `--cached` reuses reference results.
 - **Tiers**:
   1. Device level (I-V / C-V curves; Jacobian checked against finite differences)
@@ -548,7 +546,7 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
 - **Netlists**: ngspice dialect first (PDKs depend on it), then the main parts of the HSPICE dialect;
   Spectre dialect later. The dialect is chosen via `LoadOpts`; after elaboration everything is the
   common IR.
-- **Implemented ngspice dialect (M4, part 1)** — `spx-netlist/src/preproc.rs`, `expr.rs`:
+- **Implemented ngspice dialect (M4, part 1)** — `sansho-netlist/src/preproc.rs`, `expr.rs`:
   - `.include` / `.inc`, `.lib file section` with `.lib name` … `.endl` sections, resolved
     relative to the including file through a `SourceLoader` (`FsLoader` for files; `NoFiles` for
     text-only input such as MCP `netlist`, where includes are rejected with `E-PARSE-INCLUDE`).
@@ -582,7 +580,7 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
     and `i(Vsense)` after flattening. Directional dual numbers differentiate
     against each distinct input for Newton and AC. `time` is in seconds and
     `temper` in °C. Comparisons and `u(x)` have zero small-signal gain.
-    A conditional differentiates its selected arm. The spx expression dialect
+    A conditional differentiates its selected arm. The Sansho expression dialect
     uses natural `ln` and `log`, decimal `log10`, and signed-magnitude `pwr`.
     `E/G value={expr}` share these stamps. `E/G table={expr} (x,y)...`
     and expression lookups `pwl(x,x0,y0,...)` interpolate linearly between
@@ -595,7 +593,7 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
     state. An optional `on` or `off` sets the initial state there (default off).
     Each continuous Newton solve holds conductances fixed. An outer loop
     tests the converged controls and re-solves any changed configuration.
-    Repeated configurations fail the trial. During a transient, spx estimates
+    Repeated configurations fail the trial. During a transient, Sansho estimates
     a bracketed crossing by linear interpolation, retries with a shorter step,
     and restarts integration history at an accepted transition. Rejected steps
     discard trial switch states. Crossings between two samples on the same
@@ -637,7 +635,7 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
   evaluation. Its optional resistance networks allocate internal unknowns during setup.
   The parser binds selected geometry bins in the lexical scope of each instance.
   The coverage and SKY130 dialect rules are in [the BSIM4 model notes](bsim4.md).
-  Production Verilog-A models are compiled by spx-va.
+  Production Verilog-A models are compiled by sansho-va.
 
 ### Not yet supported
 
@@ -667,7 +665,7 @@ implementation. [Compatibility and numerical differences](compatibility.md)
 | M0 | Repository foundation: workspace, licenses, CI, cargo-deny, PROVENANCE | CI green |
 | M1 | Linear circuits: basic parser, elaboration, MNA, OP/DC/AC/TRAN (trapezoidal), faer LU, raw output | RC/RLC match analytic solutions and ngspice |
 | M2 | Nonlinear: diode, BJT (GP), MOS1, Newton + limiting, gmin/source stepping, BDF2, LTE step control, `.meas`, L0 parallelism, JSON output | Small-circuit benchmarks within RMS error ≤ 1 vs ngspice (done: `verify/decks`) |
-| M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP (done: `spx-mcp/tests/stdio.rs`) |
+| M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP (done: `sansho-mcp/tests/stdio.rs`) |
 | M4 | OSDI loader and PDKs: IHP SG13G2 (PSP103, ...), SKY130 (built-in level 54), broader ngspice dialect | PDK testbenches match ngspice (dialect part done: `verify/decks/{subckt_ring,lib_include,nodeset_latch,uic_rlc}`) |
 | M5 | Performance: own KLU-style solver, bypass, parallel LU, GPU batch (G1) | ≥ 1.x× ngspice on C6288 single-core; further gains multi-core |
 | M6 | Extensions: PSS/HB, HSPICE dialect, Python | — |
@@ -676,9 +674,9 @@ implementation. [Compatibility and numerical differences](compatibility.md)
 
 ## 13. Open questions
 
-1. Final project name (trademark and crates.io checks)
+1. ~~Final project name~~ — Sansho (山椒).
 2. MSRV (proposal: latest stable − 2)
 3. ~~Choice of Rust MCP SDK~~ — resolved in M3: own implementation of the stdio transport (see §7.4)
-4. ~~SKY130 BSIM4 delivery~~ — level 54 is a clean-room built-in in `spx-devices`.
+4. ~~SKY130 BSIM4 delivery~~ — level 54 is a clean-room built-in in `sansho-devices`.
 5. First GPU backend: wgpu (portability) or CUDA (performance)
 6. Spilling the waveform store to disk for large transients (Arrow / Parquet?)

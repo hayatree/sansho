@@ -1,5 +1,5 @@
 Forward drops and gain over a temperature sweep
-* Provenance: original circuit for rs-spice release-prep verification.
+* Provenance: original circuit for Sansho release-prep verification.
 Id 0 d 100u
 D1 d 0 dd
 .model dd D(is=2e-14 n=1.1 eg=1.11 xti=3 tnom=20)

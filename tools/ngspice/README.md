@@ -9,8 +9,8 @@ tools/ngspice/ngspice.sh -b deck.cir -r out.raw   # builds the image on first us
 
 - The image is Debian `trixie-slim` with the distribution `ngspice` package.
 - The wrapper mounts the repository root at its host path and preserves the working directory.
-  spx-verify also mounts its output directory when that directory is outside the checkout.
+  sansho-verify also mounts its output directory when that directory is outside the checkout.
   The `--compile-va` invocation selects `/usr/local/bin/openvaf-r` as the image entry point.
 - The container has no network access, runs as your UID, and writes ASCII raw files
   (`SPICE_ASCIIRAWFILE=1`).
-- Override the image tag with `SPX_NGSPICE_IMAGE`.
+- Override the image tag with `SANSHO_NGSPICE_IMAGE`.

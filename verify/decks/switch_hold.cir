@@ -1,5 +1,5 @@
 Voltage and current controlled sampling of a ramp
-* Provenance: original circuit for rs-spice release-prep verification.
+* Provenance: original circuit for Sansho release-prep verification.
 Vin in 0 PWL(0 0 20u 1)
 Vgate drive 0 PULSE(0 2 2u 1u 1u 4u 10u)
 Vsense drive gate 0

@@ -14,7 +14,7 @@ for each executable over seven or more pairs. Analysis is measured inside a
 single-worker process. Wall time comes from separate launches with profiling
 disabled and includes process startup, reading the deck, preparation, output
 and exit. Each executable and each timing mode has its own private cache.
-Cold means an empty spx cache. The OS file cache can be warm on both launches.
+Cold means an empty Sansho cache. The OS file cache can be warm on both launches.
 
 The reference timings come from the maintainer's simultaneous measurements of
 ngspice and the baseline. For each deck and worker setting, the estimated ratio
@@ -230,18 +230,18 @@ In a clean baseline checkout, build and save the executable. Run the remaining
 commands in the candidate checkout, using the same Rust toolchain. Use `63b70bd` for round 6 and `c49c242` for round 5.
 
 ```sh
-cargo build --offline --release -p spx-cli --features jit
-cp target/release/spx /tmp/spx-baseline
+cargo build --offline --release -p sansho-cli --features jit
+cp target/release/sansho /tmp/sansho-baseline
 # In the candidate checkout
-cargo build --offline --release -p spx-cli --features jit
-python3 benches/run.py --baseline /tmp/spx-baseline --runs 9
-python3 benches/run.py --warm-analysis --baseline /tmp/spx-baseline --runs 41
-taskset -c 2 python3 benches/run.py --warm-analysis --baseline /tmp/spx-baseline --runs 31 --deck benches/psp_ring21.cir --deck verify/va-decks/psp_ring5.cir
-python3 benches/run.py --warm-wall --baseline /tmp/spx-baseline --runs 41
-python3 benches/run.py --warm-wall --baseline /tmp/spx-baseline --runs 41 --jobs default
-python3 benches/run.py --devices --baseline /tmp/spx-baseline --runs 9 --deck benches/psp_ring21.cir
+cargo build --offline --release -p sansho-cli --features jit
+python3 benches/run.py --baseline /tmp/sansho-baseline --runs 9
+python3 benches/run.py --warm-analysis --baseline /tmp/sansho-baseline --runs 41
+taskset -c 2 python3 benches/run.py --warm-analysis --baseline /tmp/sansho-baseline --runs 31 --deck benches/psp_ring21.cir --deck verify/va-decks/psp_ring5.cir
+python3 benches/run.py --warm-wall --baseline /tmp/sansho-baseline --runs 41
+python3 benches/run.py --warm-wall --baseline /tmp/sansho-baseline --runs 41 --jobs default
+python3 benches/run.py --devices --baseline /tmp/sansho-baseline --runs 9 --deck benches/psp_ring21.cir
 python3 benches/run.py --profile --runs 5
-python3 benches/compare.py /tmp/spx-baseline target/release/spx
+python3 benches/compare.py /tmp/sansho-baseline target/release/sansho
 python3 benches/blocks.py --runs 15 --spills benches/psp_ring21.cir
 python3 benches/ordering.py
 ```
@@ -290,8 +290,8 @@ general input loads.
 
 Release build on an AMD Ryzen AI Max+ 395, one worker, warm disk cache.
 Each number is the median of five runs after one warm-up. Analysis time
-comes from `SPX_PROFILE=1` with device profiling disabled. Per-evaluation
-cost comes from separate runs with `SPX_PROFILE_DEVICES=1`. It includes
+comes from `SANSHO_PROFILE=1` with device profiling disabled. Per-evaluation
+cost comes from separate runs with `SANSHO_PROFILE_DEVICES=1`. It includes
 native and interpreted evaluator time, divided by executed instance
 evaluations. Exact stamp reuse is excluded from that denominator.
 
@@ -305,11 +305,11 @@ evaluations plus 5,662 exact reuses. The ring recorded 23,620 native
 evaluations and 6,060 reuses. All five CMG decks agree between backends on
 the binary64 values of every scale and output vector.
 
-To reproduce, build `spx-cli` with `--offline --release --features jit` and
-run `target/release/spx run -j1 verify/va-decks/cmg_ring5.cir` or the inverter
-deck. Set `SPX_VA_JIT=0` for the interpreter. In the device profile,
-`spx-device` reports native, interpreted and reused counts followed by native
-nanoseconds. `spx-interpreted-ns` reports the interpreted nanoseconds per group.
+To reproduce, build `sansho-cli` with `--offline --release --features jit` and
+run `target/release/sansho run -j1 verify/va-decks/cmg_ring5.cir` or the inverter
+deck. Set `SANSHO_VA_JIT=0` for the interpreter. In the device profile,
+`sansho-device` reports native, interpreted and reused counts followed by native
+nanoseconds. `sansho-interpreted-ns` reports the interpreted nanoseconds per group.
 
 ## Large circuits
 
@@ -332,14 +332,14 @@ vertical resistors, a feed resistor and three pulsed loads.
 
 ```sh
 python3 benches/large/gen.py
-cargo build --offline --release -p spx-cli
+cargo build --offline --release -p sansho-cli
 python3 benches/large/run.py --runs 3
 python3 benches/large/run.py --check-bits
 ```
 
 The driver launches a fresh release CLI for each repetition and reports
 median milliseconds. It times from process launch to exit with
-`SPX_PROFILE=1` and includes writing the projected ASCII raw file. Product
+`SANSHO_PROFILE=1` and includes writing the projected ASCII raw file. Product
 checks run outside that interval. The optional `--wall-binary` obtains wall
 time from a second executable with profiling disabled. The phase columns are
 independent medians. Setup includes file reading, preprocessing, flattening,
@@ -490,10 +490,10 @@ equality as high. Sum the absolute count difference for each bit. This counts
 a missed pulse on one bit even if another bit has an extra pulse.
 
 ```sh
-cargo build --offline --release --features jit -p spx-cli -p spx-verify
-target/release/spx run benches/large/mult16_mos1.cir -r /tmp/mos1.raw
+cargo build --offline --release --features jit -p sansho-cli -p sansho-verify
+target/release/sansho run benches/large/mult16_mos1.cir -r /tmp/mos1.raw
 python3 benches/large/accuracy.py mult16_mos1 /tmp/mos1.raw
-target/release/spx run benches/large/mult16_bsim4.cir -r /tmp/bsim4.raw
+target/release/sansho run benches/large/mult16_bsim4.cir -r /tmp/bsim4.raw
 python3 benches/large/accuracy.py mult16_bsim4 /tmp/bsim4.raw
 python3 benches/large/run.py --runs 1
 python3 benches/large/run.py --check-bits
@@ -503,26 +503,26 @@ Generate a tighter candidate from a temporary copy of either deck. For example,
 
 ```sh
 sed 's/^\.options /.options reltol=1e-4 /' benches/large/mult16_mos1.cir > /tmp/mos1-tight.cir
-target/release/spx run /tmp/mos1-tight.cir -r /tmp/mos1-tight.raw
+target/release/sansho run /tmp/mos1-tight.cir -r /tmp/mos1-tight.raw
 python3 benches/large/accuracy.py mult16_mos1 /tmp/mos1.raw /tmp/mos1-tight.raw
 ```
 
 The comparison reads gold and ngspice-default data from `verify/out/large`.
-It accepts additional candidate paths or uses the cached spx raw when invoked
-with just the deck name. The `reltol=1e-4` spx runs change only that option.
+It accepts additional candidate paths or uses the cached Sansho raw when invoked
+with just the deck name. The `reltol=1e-4` Sansho runs change only that option.
 
 | Deck | Run | Points | Mean absolute error (mV) | Crossings | Crossing difference |
 |---|---|---:|---:|---:|---:|
 | MOS1 | ngspice gold | 9,301 | 0 | 502 | 0 |
 | MOS1 | ngspice default | 657 | 15.628 | 490 | 36 |
-| MOS1 | spx at `6ef1df7` | 206 | 63.113 | 278 | 224 |
-| MOS1 | spx M5-2 default | 1,560 | 4.338 | 486 | 24 |
-| MOS1 | spx M5-2 `reltol=1e-4` | 3,682 | 0.772 | 502 | 4 |
+| MOS1 | Sansho at `6ef1df7` | 206 | 63.113 | 278 | 224 |
+| MOS1 | Sansho M5-2 default | 1,560 | 4.338 | 486 | 24 |
+| MOS1 | Sansho M5-2 `reltol=1e-4` | 3,682 | 0.772 | 502 | 4 |
 | BSIM4 | ngspice gold | 21,414 | 0 | 556 | 0 |
 | BSIM4 | ngspice default | 934 | 36.771 | 554 | 30 |
-| BSIM4 | spx at `6ef1df7` | 222 | 95.089 | 302 | 254 |
-| BSIM4 | spx M5-2 default | 2,750 | 4.834 | 558 | 6 |
-| BSIM4 | spx M5-2 `reltol=1e-4` | 7,624 | 0.191 | 556 | 0 |
+| BSIM4 | Sansho at `6ef1df7` | 222 | 95.089 | 302 | 254 |
+| BSIM4 | Sansho M5-2 default | 2,750 | 4.834 | 558 | 6 |
+| BSIM4 | Sansho M5-2 `reltol=1e-4` | 7,624 | 0.191 | 556 | 0 |
 
 At the old defaults the charge-error allowance was at least 70 fC. A full
 1.8 V transition on a 3 fF load moves only 5.4 fC. The controller now applies
@@ -540,7 +540,7 @@ projections. The runs include profiling and ASCII raw output. Large decks ran
 one at a time for this table. Times are seconds. The maintainer measured the
 ngspice 44.2 comparison times separately.
 
-| Deck | spx one worker | spx default | Default workers | ngspice default |
+| Deck | Sansho one worker | Sansho default | Default workers | ngspice default |
 |---|---:|---:|---:|---:|
 | ring1001_mos1 | 0.098 | 0.092 | 2 | OP failed |
 | inv_chain1000_bsim4 | 0.600 | 0.349 | 3 | 0.33 |
@@ -571,7 +571,7 @@ have been removed. Multiplier assembly took 2.32 s on one worker and 1.20 s
 on five workers for MOS1, and 13.75 s on one worker and 7.46 s on twelve for BSIM4.
 At the BSIM4 default, device evaluation still took 13.27 s and numeric
 factorization took 12.59 s. On one worker BSIM4 remains slower than the
-maintainer's ngspice default. The spx run takes nearly three times as many
+maintainer's ngspice default. The Sansho run takes nearly three times as many
 points and resolves more of the gold waveform's glitches.
 
 The release JIT-enabled cached verifier preserved all four suites' verdicts.
@@ -747,8 +747,8 @@ library still take about 0.13 s per process.
 Run the release binary as follows to reproduce the counters and inspect the matrix shape.
 
 ```sh
-SPX_PROFILE=1 SPX_PROFILE_BSIM4=1 target/release/spx run -j1 benches/large/mult16_bsim4.cir -r /tmp/mult16.raw
-SPX_PROFILE=1 SPX_PROFILE_MATRIX=shape target/release/spx run -j1 benches/large/mult16_bsim4.cir -r /tmp/mult16-shape.raw
+SANSHO_PROFILE=1 SANSHO_PROFILE_BSIM4=1 target/release/sansho run -j1 benches/large/mult16_bsim4.cir -r /tmp/mult16.raw
+SANSHO_PROFILE=1 SANSHO_PROFILE_MATRIX=shape target/release/sansho run -j1 benches/large/mult16_bsim4.cir -r /tmp/mult16-shape.raw
 python3 benches/large/accuracy.py mult16_bsim4 /tmp/mult16.raw
 python3 benches/large/run.py --check-bits --deck mult16_mos1 --deck mult16_bsim4
 ```
@@ -924,7 +924,7 @@ The checked-in runner accepts repeated worker limits. From the repository
 root the following runs reproduce the normal CLI sweep and full-vector checks.
 
 ```sh
-cargo build --release -p spx-cli
+cargo build --release -p sansho-cli
 python3 benches/large/gen.py
 python3 benches/large/run.py --deck mult16_bsim4 --jobs 1 --jobs 4 --jobs 8 --jobs 12
 python3 benches/large/run.py --check-bits --deck mult16_bsim4 --deck mult16_mos1

@@ -1,5 +1,5 @@
 Loaded transformer, dotted winding voltage and reflected impedance
-* Provenance: original circuit for rs-spice release-prep verification.
+* Provenance: original circuit for Sansho release-prep verification.
 Vin in 0 DC 0 AC 1 SIN(0 1 10k)
 Rp in p 20
 Lp p 0 2m

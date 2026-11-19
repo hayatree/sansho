@@ -1,18 +1,18 @@
 # Monte Carlo analysis
 
-A batch runs the deck's analyses for each of N statistical instances. Indices run from 0 through N−1. Index 0 is a draw. Use an ordinary `spx run` for the nominal circuit.
+A batch runs the deck's analyses for each of N statistical instances. Indices run from 0 through N−1. Index 0 is a draw. Use an ordinary `sansho run` for the nominal circuit.
 
 ## CLI and API
 
 ```sh
-spx mc -n 200 --seed 1 -j 2 verify/mc-decks/rc_delay.cir --json
-spx run --mc-seed 1 --mc-run 37 verify/mc-decks/rc_delay.cir --json
-spx run --mc-seed 1 --mc-run 37 verify/mc-decks/rc_delay.cir -r replay.raw
+sansho mc -n 200 --seed 1 -j 2 verify/mc-decks/rc_delay.cir --json
+sansho run --mc-seed 1 --mc-run 37 verify/mc-decks/rc_delay.cir --json
+sansho run --mc-seed 1 --mc-run 37 verify/mc-decks/rc_delay.cir -r replay.raw
 ```
 
 The master seed defaults to 1 for a batch. Replay accepts any unsigned 64-bit seed and index. It prepares the same circuit and runs only the requested index. The CLI count supplies the repetition count for the whole deck, including decks with multiple analysis cards. `--save-waves --json` includes the analysis results projected by the deck's `.save` cards. With no `.save` it includes every circuit signal. The default batch output discards each run's traces after measuring them.
 
-Rust callers can prepare a reusable `spx_api::MonteCarlo` with netlist text and a `spx_netlist::SourceLoader`. Its `batch(seed, n, save_waves, &config)` and `run_with(seed, index, &config)` methods share the prepared topology. `Session::monte_carlo(text, base_directory, seed, n, save_waves)` runs a batch on the session's pool. A base directory enables relative includes. Use `None` for a self-contained deck.
+Rust callers can prepare a reusable `sansho_api::MonteCarlo` with netlist text and a `sansho_netlist::SourceLoader`. Its `batch(seed, n, save_waves, &config)` and `run_with(seed, index, &config)` methods share the prepared topology. `Session::monte_carlo(text, base_directory, seed, n, save_waves)` runs a batch on the session's pool. A base directory enables relative includes. Use `None` for a self-contained deck.
 
 The MCP `monte_carlo` tool accepts exactly one of `path` and `netlist`. Paths resolve on the server. For example, the following arguments run the SKY130 mirror.
 

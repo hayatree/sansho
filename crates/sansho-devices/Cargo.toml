@@ -1,0 +1,20 @@
+[package]
+name = "sansho-devices"
+description = "Device model interface and built-in device models"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+
+[dependencies]
+sansho-diag = { path = "../sansho-diag" }
+sansho-netlist = { path = "../sansho-netlist" }
+sansho-va = { path = "../sansho-va" }
+
+[features]
+jit = ["sansho-va/jit"]

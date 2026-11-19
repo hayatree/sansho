@@ -1,0 +1,27 @@
+[package]
+name = "sansho-cli"
+description = "Command-line interface"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "sansho"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.8", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sansho-netlist = { path = "../sansho-netlist" }
+sansho-engine = { path = "../sansho-engine" }
+sansho-output = { path = "../sansho-output" }
+sansho-diag = { path = "../sansho-diag" }
+
+[features]
+jit = ["sansho-engine/jit"]

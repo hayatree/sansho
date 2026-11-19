@@ -61,22 +61,22 @@ if (( !quick )); then
     skip "cargo-deny" "run 'cargo install cargo-deny'"
   fi
 
-  if [[ "${1:-}" == --cached ]] || docker image inspect spx-ngspice:latest >/dev/null 2>&1; then
-    step "verify vs ngspice" cargo run -q --release -p spx-verify --features jit -- "${verify_args[@]}"
-    step "verify BSIM3 decks" cargo run -q --release -p spx-verify -- "${verify_args[@]}" verify/bsim3-decks
-    step "verify BSIM4 decks" cargo run -q --release -p spx-verify -- "${verify_args[@]}" verify/bsim4-decks
+  if [[ "${1:-}" == --cached ]] || docker image inspect sansho-ngspice:latest >/dev/null 2>&1; then
+    step "verify vs ngspice" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}"
+    step "verify BSIM3 decks" cargo run -q --release -p sansho-verify -- "${verify_args[@]}" verify/bsim3-decks
+    step "verify BSIM4 decks" cargo run -q --release -p sansho-verify -- "${verify_args[@]}" verify/bsim4-decks
     if [[ -d va-models/volare-sky130 ]]; then
-      step "verify SKY130 decks" cargo run -q --release -p spx-verify -- "${verify_args[@]}" verify/sky130-decks
+      step "verify SKY130 decks" cargo run -q --release -p sansho-verify -- "${verify_args[@]}" verify/sky130-decks
     else
       skip "verify SKY130 decks" "va-models/volare-sky130 is missing"
     fi
     if [[ -d va-models ]]; then
-      step "verify Verilog-A decks" cargo run -q --release -p spx-verify --features jit -- "${verify_args[@]}" verify/va-decks
+      step "verify Verilog-A decks" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" verify/va-decks
     else
       skip "verify Verilog-A decks" "va-models/ is missing"
     fi
   else
-    skip "verify vs ngspice" "run 'docker build -t spx-ngspice:latest tools/ngspice'"
+    skip "verify vs ngspice" "run 'docker build -t sansho-ngspice:latest tools/ngspice'"
   fi
 fi
 

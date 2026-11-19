@@ -1,0 +1,26 @@
+//! Standard constants for analog models.
+//! Provenance: Accellera Verilog-AMS LRM 2.4, mathematical identities, SI 2019 and CODATA 2022.
+`ifndef SANSHO_CONSTANTS_VAMS
+`define SANSHO_CONSTANTS_VAMS
+`define M_E        2.71828182845904523536  // exp(1)
+`define M_LOG2E    1.44269504088896340736  // 1 / ln(2)
+`define M_LOG10E   0.43429448190325182765  // 1 / ln(10)
+`define M_LN2      0.69314718055994530942  // natural logarithm of 2
+`define M_LN10     2.30258509299404568402  // natural logarithm of 10
+`define M_PI       3.14159265358979323846  // circumference / diameter
+`define M_TWO_PI   6.28318530717958647693  // 2 pi
+`define M_PI_2     1.57079632679489661923  // pi / 2
+`define M_PI_4     0.78539816339744830962  // pi / 4
+`define M_1_PI     0.31830988618379067154  // reciprocal of pi
+`define M_2_PI     0.63661977236758134308  // 2 / pi
+`define M_2_SQRTPI 1.12837916709551257390  // 2 / sqrt(pi)
+`define M_SQRT2    1.41421356237309504880  // square root of 2
+`define M_SQRT1_2  0.70710678118654752440  // square root of 1/2
+`define P_Q        1.602176634e-19  // SI defining elementary charge, C (exact)
+`define P_C        299792458.0      // SI defining speed of light, m/s (exact)
+`define P_K        1.380649e-23     // SI defining Boltzmann constant, J/K (exact)
+`define P_H        6.62607015e-34   // SI defining Planck constant, J s (exact)
+`define P_EPS0     8.8541878188e-12 // CODATA 2022 vacuum permittivity, F/m
+`define P_U0       1.25663706127e-6 // CODATA 2022 vacuum permeability, H/m
+`define P_CELSIUS0 273.15           // SI temperature of zero degrees Celsius, K (exact)
+`endif

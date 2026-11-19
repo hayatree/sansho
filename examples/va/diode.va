@@ -1,4 +1,4 @@
-// Provenance: original model using spx-devices diode/junction textbook equations;
+// Provenance: original model using sansho-devices diode/junction textbook equations;
 // Accellera Verilog-AMS LRM 2.4, Nagel (1975), Antognetti & Massobrio (1993).
 `include "disciplines.vams"
 module vadiode(a,k);

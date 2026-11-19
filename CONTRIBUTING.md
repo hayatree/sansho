@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest. This project is dual-licensed under Apache-2.0 OR MIT, and keeping
+Thank you for your interest. Sansho is dual-licensed under Apache-2.0 OR MIT, and keeping
 that promise requires some rules that are stricter than usual.
 
 ## 1. Clean-room policy

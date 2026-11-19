@@ -1,6 +1,6 @@
-# rs-spice (working name)
+# Sansho
 
-A fast, agent-native SPICE circuit simulator written in Rust.
+Sansho (山椒) is a fast, agent-native SPICE circuit simulator written in Rust.
 
 > **Status:** pre-alpha. R, C, L, coupled windings (K), independent and controlled sources
 > (V/I/E/F/G/H/B, including POLY), lossless T lines, SW/CSW switches, diodes,
@@ -14,22 +14,22 @@ A fast, agent-native SPICE circuit simulator written in Rust.
 > bit-deterministic multithreading. [ngspice compatibility](docs/compatibility.md) · [Analysis cards and outputs](docs/analyses.md) · [Architecture](docs/architecture.md).
 
 ```sh
-cargo run -p spx-cli -- run examples/rc_lowpass.cir            # summary
-cargo run -p spx-cli -- run examples/rc_lowpass.cir -r out.raw  # ngspice-compatible raw file
-cargo run -p spx-cli -- run examples/rc_lowpass.cir -r out.raw --raw-format binary
-cargo run -p spx-cli -- run examples/rc_lowpass.cir --json      # machine-readable output
-cargo run -p spx-cli -- check examples/rc_lowpass.cir           # parse + elaborate + lint
-cargo run -p spx-cli -- batch a.cir b.cir -j 8                   # parallel runs, JSON lines
-cargo run -p spx-cli -- mc -n 200 --seed 1 verify/mc-decks/rc_delay.cir --json
-cargo run -p spx-cli -- run --mc-seed 1 --mc-run 37 verify/mc-decks/rc_delay.cir
-cargo run -p spx-verify                                          # compare with ngspice (Docker)
+cargo run -p sansho-cli -- run examples/rc_lowpass.cir            # summary
+cargo run -p sansho-cli -- run examples/rc_lowpass.cir -r out.raw  # ngspice-compatible raw file
+cargo run -p sansho-cli -- run examples/rc_lowpass.cir -r out.raw --raw-format binary
+cargo run -p sansho-cli -- run examples/rc_lowpass.cir --json      # machine-readable output
+cargo run -p sansho-cli -- check examples/rc_lowpass.cir           # parse + elaborate + lint
+cargo run -p sansho-cli -- batch a.cir b.cir -j 8                   # parallel runs, JSON lines
+cargo run -p sansho-cli -- mc -n 200 --seed 1 verify/mc-decks/rc_delay.cir --json
+cargo run -p sansho-cli -- run --mc-seed 1 --mc-run 37 verify/mc-decks/rc_delay.cir
+cargo run -p sansho-verify                                          # compare with ngspice (Docker)
 ```
 
 ### Use from an AI agent (MCP)
 
 ```sh
-cargo build --release -p spx-mcp
-claude mcp add spx -- "$PWD/target/release/spx-mcp"   # or any MCP client, stdio transport
+cargo build --release -p sansho-mcp
+claude mcp add sansho -- "$PWD/target/release/sansho-mcp"   # or any MCP client, stdio transport
 ```
 
 Tools: `validate_netlist`, `load_netlist`, `estimate_cost`, `simulate`, `get_waveform`, `measure`,
@@ -50,16 +50,16 @@ units, and include input/result hashes for simulation jobs. Statistical batches 
 
 | Path | Contents |
 |---|---|
-| `crates/spx-diag` | Structured diagnostics |
-| `crates/spx-netlist` | Netlist lexer and parser |
-| `crates/spx-sparse` | Sparse linear solvers |
-| `crates/spx-devices` | Device model interface and built-in models |
-| `crates/spx-engine` | MNA assembly, Newton, analyses |
-| `crates/spx-output` | Result types, raw writer |
-| `crates/spx-api` | Session / job API for embedding and agents |
-| `crates/spx-mcp` | MCP server (`spx-mcp`, stdio) |
-| `crates/spx-cli` | `spx` command-line tool |
-| `crates/spx-verify` | Comparison against a reference simulator |
+| `crates/sansho-diag` | Structured diagnostics |
+| `crates/sansho-netlist` | Netlist lexer and parser |
+| `crates/sansho-sparse` | Sparse linear solvers |
+| `crates/sansho-devices` | Device model interface and built-in models |
+| `crates/sansho-engine` | MNA assembly, Newton, analyses |
+| `crates/sansho-output` | Result types, raw writer |
+| `crates/sansho-api` | Session / job API for embedding and agents |
+| `crates/sansho-mcp` | MCP server (`sansho-mcp`, stdio) |
+| `crates/sansho-cli` | `sansho` command-line tool |
+| `crates/sansho-verify` | Comparison against a reference simulator |
 | `tools/ngspice` | ngspice in Docker, used as a black-box reference |
 | `verify/decks` | Verification circuits |
 | `examples/` | Example netlists |

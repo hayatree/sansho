@@ -1,5 +1,5 @@
 Body-biased MOS1 temperature sweep
-* Provenance: original circuit for rs-spice release-prep verification.
+* Provenance: original circuit for Sansho release-prep verification.
 Vd d 0 1.5
 Vg g 0 1.2
 Vb b 0 -0.3

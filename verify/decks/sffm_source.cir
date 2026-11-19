@@ -1,6 +1,6 @@
 Single-frequency FM voltage across a resistive load
 * Provenance: original R4 verification circuit.
-* spx-verify: known-difference Manual 4.1.5 places FC third and FM fifth. The ngspice 44.2 waveform is consistent with FM third and FC fifth.
+* sansho-verify: known-difference Manual 4.1.5 places FC third and FM fifth. The ngspice 44.2 waveform is consistent with FM third and FC fifth.
 Vfm fm 0 SFFM(0.1 0.7 4k 1.4 500)
 Rload fm 0 1k
 .tran 2u 2m 0 2u

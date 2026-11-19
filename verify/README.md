@@ -1,11 +1,11 @@
 # Verification decks
 
-Every `.cir` file here is simulated by spx and by ngspice (run in Docker as a black-box
+Every `.cir` file here is simulated by Sansho and by ngspice (run in Docker as a black-box
 reference, see `tools/ngspice`), and the results are compared:
 
 ```sh
-cargo run -p spx-verify            # all decks
-cargo run -p spx-verify -- --cached -v verify/decks/bjt_dc.cir
+cargo run -p sansho-verify            # all decks
+cargo run -p sansho-verify -- --cached -v verify/decks/bjt_dc.cir
 ```
 
 The score of a variable is `max|ours − ref| / (rtol·max|ref| + atol)`; it passes when ≤ 1.
@@ -16,7 +16,7 @@ comment line such as `* verify: rtol_tran=3e-2`.
 To declare an accepted reference difference, add a full-line comment to the deck.
 
 ```spice
-* spx-verify: known-difference <reason>
+* sansho-verify: known-difference <reason>
 ```
 
 The verifier still runs the simulation, compares the waveforms and measurements,
@@ -29,7 +29,7 @@ Missing inputs retain their `SKIP` status. Simulation errors, unreadable cached
 references and problems that prevent comparison produce `FAIL`.
 
 The three marked BSIM4 layout decks cover KU0 mobility stress. ngspice 44.2
-returned identical Id with and without KU0 in the black-box control. spx uses
+returned identical Id with and without KU0 in the black-box control. Sansho uses
 BSIM4 manual equation 14.5 by maintainer decision.
 
 All decks are original circuits written for this project. Raw files go to `verify/out/`
@@ -43,8 +43,8 @@ All decks are original circuits written for this project. Raw files go to `verif
 The deck-local `.spiceinit` applies to the reference simulator.
 
 ```sh
-cargo run --offline --release -p spx-verify -- --cached verify/bsim4-decks
-cargo run --offline --release -p spx-verify -- --cached verify/sky130-decks
+cargo run --offline --release -p sansho-verify -- --cached verify/bsim4-decks
+cargo run --offline --release -p sansho-verify -- --cached verify/sky130-decks
 ```
 
 Omit `--cached` when generating fresh black-box references. Scores use the same tolerances
@@ -68,16 +68,16 @@ The five `cmg_*.cir` decks use the external BSIM-CMG 111.2.1 entry point
 root, generate references and compare the ten IHP and five CMG decks:
 
 ```sh
-cargo run --release -p spx-verify -- verify/va-decks
+cargo run --release -p sansho-verify -- verify/va-decks
 ```
 
 A directory, `--dir verify/va-decks`, an individual deck, and a shell-expanded
 `verify/va-decks/*.cir` are accepted. Passing `verify/decks` runs the original
 suite. Use `-v` to display all waveform and measurement scores. The VA decks use
-`.save` to select the ngspice reference signals. spx records all circuit unknowns.
+`.save` to select the ngspice reference signals. Sansho records all circuit unknowns.
 
-spx reads the original deck. For the reference run, the harness invokes
-`openvaf-r` from `spx-ngspice:latest` and writes an OSDI file in `verify/out/`
+Sansho reads the original deck. For the reference run, the harness invokes
+`openvaf-r` from `sansho-ngspice:latest` and writes an OSDI file in `verify/out/`
 (or `--out DIR`). Its cache key includes the HDL entry point, the contents and
 paths of its resolved local includes, and the configured image tag. The reference
 deck loads these objects with `pre_osdi` in a control block. The container sees
@@ -90,11 +90,11 @@ produce `FAIL`. A run with only skips exits successfully with zero passes.
 JSON entries include `status` and a skipped entry includes `missing`.
 
 ```sh
-cargo run --release -p spx-verify -- --cached verify/va-decks
+cargo run --release -p sansho-verify -- --cached verify/va-decks
 ```
 
 Cached mode uses the local circuit inputs, `*.ref.raw` waveforms and, for measured
-decks, `*.ref.meas` logs. It runs spx locally and requires no Docker process or
+decks, `*.ref.meas` logs. It runs Sansho locally and requires no Docker process or
 OSDI artifact. A missing reference for a locally runnable deck is a failure.
 
 ## Monte Carlo distributions
@@ -102,14 +102,14 @@ OSDI artifact. A missing reference for a locally runnable deck is a failure.
 Run these commands from the repository root. The black-box wrapper uses the local ngspice Docker image. The SKY130 mirror requires the Volare `sky130A` tree at the path used by the other SKY130 tests. Its two includes select the TT 1.8 V NFET and the corresponding mismatch coefficients, with `mc_mm_switch=1`, `mc_pr_switch=0` and a 1 µm geometry scale. This limits the library text ngspice reads inside the loop.
 
 ```sh
-cargo build --offline --release -p spx-cli
+cargo build --offline --release -p sansho-cli
 mkdir -p verify/out
 (
   set -e
-  docker image inspect "${SPX_NGSPICE_IMAGE:-spx-ngspice:latest}" >/dev/null
+  docker image inspect "${SANSHO_NGSPICE_IMAGE:-sansho-ngspice:latest}" >/dev/null
   cd verify/mc-decks
   for deck in rc_delay mos_delay sky_mirror; do
-    ../../target/release/spx mc -j 2 -n 200 --seed 1 --json "$deck.cir" > "../out/$deck.mc.json"
+    ../../target/release/sansho mc -j 2 -n 200 --seed 1 --json "$deck.cir" > "../out/$deck.mc.json"
     ../../tools/ngspice/ngspice.sh -b "${deck}_ngspice.cir" > "../out/$deck.mc.log" 2>&1
     python3 compare.py "../out/$deck.mc.json" "../out/$deck.mc.txt"
   done
@@ -133,7 +133,7 @@ The two simulators use independent streams. The mean tolerance is four estimated
 | `transformer_load.cir` | Loaded winding voltages and currents in AC and transient analysis |
 | `behavior_multiplier.cir` | Parameterized two-input multiplication under a DC sweep and two sinusoidal inputs |
 | `behavior_limiter.cir` | DC soft clipping, its incremental AC transconductance, and an E table/G value load away from table breakpoints |
-| `behavior_table_corners.cir` | KNOWN: E table with interior breakpoints; ngspice smooths the corners, spx interpolates linearly |
+| `behavior_table_corners.cir` | KNOWN: E table with interior breakpoints; ngspice smooths the corners, Sansho interpolates linearly |
 | `switch_hold.cir` | With a 10 ns maximum step, two hold capacitors sampled by voltage and current controls with corresponding hysteresis thresholds |
 | `junction_temperature.cir` | Diode forward drop and BJT gain over a −20 to 100 °C sweep with model TNOM |
 | `temperature_instances.cir` | Diode and BJT branch currents with absolute instance temperatures and offsets from a 55 °C ambient |
@@ -141,8 +141,8 @@ The two simulators use independent streams. The mean tolerance is four estimated
 | `passive_ic.cir` | RC discharge and RL decay from capacitor-voltage and inductor-current initial conditions under UIC |
 | `mos_geometry_scale.cir` | AC gain and junction loading with lengths, perimeters and areas specified in scaled layout units |
 
-A new deck can carry `* spx-verify: pending-reference` while awaiting its
-first maintainer-generated raw file. Cached verification runs spx first and
+A new deck can carry `* sansho-verify: pending-reference` while awaiting its
+first maintainer-generated raw file. Cached verification runs Sansho first and
 reports SKIP when that reference is absent. Once the reference exists it is
 compared normally. Remove the marker when publishing the reference so its
 subsequent absence is an error.
@@ -175,10 +175,10 @@ intersection fails. Poles and zeros are compared separately as complex
 multisets, preserving multiplicity. The one-to-one pairing minimizes the
 largest normalized complex distance using the deck's existing tolerances.
 
-For `sens_rc_ac`, spx and the cached 44.2 raw agree on C1 and VIN. The raw
+For `sens_rc_ac`, Sansho and the cached 44.2 raw agree on C1 and VIN. The raw
 contains a nonzero R1 derivative only at the first frequency. For this circuit
 the derivative is −jωC/(1+jωRC)². At 17.783 kHz it is
-−4.93896e−4 + j5.49045e−5 V/Ω. spx checks both components against that
+−4.93896e−4 + j5.49045e−5 V/Ω. Sansho checks both components against that
 formula at every point in its analytic test. The separate reference vector
 `v(r1_ac)` tracks this derivative across the sweep (about 1 ppm relative).
 The comparison of the shared name R1 includes all nine samples.
@@ -186,18 +186,18 @@ The comparison of the shared name R1 includes all nine samples.
 ### R2 noise audit
 
 For `noise_bsim4_cs`, NF and M are both one, the effective geometry is
-4 µm × 0.5 µm and the operating temperature is 300.15 K. At the spx bias,
+4 µm × 0.5 µm and the operating temperature is 300.15 K. At the Sansho bias,
 Ids = 112.971 µA, Vds = 1.57406 V, Vdseff = 0.281767 V, Vgsteff = 0.292150 V
 and μeff = 0.0261413 m²/(V·s). The intrinsic gm, gmb and gds are 638.647,
 87.294 and 10.770 µS respectively. The low-frequency voltage gain magnitude
-is 1.25036 in spx and 1.25058 in the reference (output/input noise ratio).
+is 1.25036 in Sansho and 1.25058 in the reference (output/input noise ratio).
 
 With the gate and body networks disabled, two parallel 4 µm devices and one
 4 µm device with M=2 give 7.627815 µV/√Hz at 10 Hz. A single 8 µm device
 with NF=2 has the same width per finger and agrees within 3 parts in 10⁹
 there and 1 part in 10⁶ at 10 MHz.
 
-| Independent spx source | Output at 10 MHz (nV/√Hz) |
+| Independent Sansho source | Output at 10 MHz (nV/√Hz) |
 |---|---:|
 | 2 kΩ load | 5.63638 |
 | Channel current, equation 10.12 | 2.51318 |
@@ -207,16 +207,16 @@ there and 1 part in 10⁶ at 10 MHz.
 | Body network, five 50 Ω branches combined in power | 0.11002 |
 | Physical source/drain diffusion and gate shot currents | 0 |
 
-The cache contains only total spectra. Independent spx generators were
+The cache contains only total spectra. Independent Sansho generators were
 projected onto the output at fixed bias. As a cross-check, adding 1 mΩ of
 explicit source and drain resistance gives the same source-side contribution
 to six significant digits. At the low-frequency end, solving for a white
 term and a 1/f term in the first two reference power samples gives a white
-amplitude of 7.82000 nV/√Hz. The spx white sources give 7.82032 nV/√Hz.
+amplitude of 7.82000 nV/√Hz. The Sansho white sources give 7.82032 nV/√Hz.
 The corresponding 10 Hz flicker amplitudes are 6.03242 µV/√Hz in the cache
-and 5.64094 µV/√Hz in spx.
+and 5.64094 µV/√Hz in Sansho.
 
-Using the 4.8.2 appendix A.10 defaults, spx obtains N₀ = 2.099e16,
+Using the 4.8.2 appendix A.10 defaults, Sansho obtains N₀ = 2.099e16,
 Nₗ = 2.060e15 and N* = 2.070e15 m⁻². At 1 Hz the two inversion terms
 in equation 10.2 are 6.933e−17 and 3.644e−17 A²/Hz. The subthreshold
 term is 3.858e−16 A²/Hz, giving 8.301e−17 A²/Hz after blending.
@@ -241,7 +241,7 @@ described above.
 | `mos2_inverter.cir`, `mos3_inverter.cir` | Complementary devices switching a capacitive load on both edges. Compare output transitions and supply current. |
 | `poly_sources.cir` | POLY(2) differential voltage multiplier and POLY(1) current-controlled cubic. DC checks signs and AC checks the local slopes. |
 
-The nine decks run locally through spx and have cached ngspice 44 waveforms. Analytic tests independently cover port common
+The nine decks run locally through Sansho and have cached ngspice 44 waveforms. Analytic tests independently cover port common
 mode, reflection amplitudes, phase and delay sensitivity, JFET polarity, noise and
 capacitance, MOS channel integrals and derivatives, and all four POLY source types.
 
@@ -328,7 +328,7 @@ knee toward zero by `NBV × Vt × ln(IBVeff / Ileak)` when the target exceeds
 the leakage at −BV. NBV defaults to N. When the target lies below the leakage,
 the knee stays at −BV and the leakage sets the minimum current.
 
-| Source bias | spx reverse current | Cached reverse current | Cached junction voltage |
+| Source bias | Sansho reverse current | Cached reverse current | Cached junction voltage |
 |---|---:|---:|---:|
 | −3.10 V | 2.0000 mA | 1.70066 mA | −3.014967 V |
 | −2.85 V | 15.535 µA | 8.25196 µA | −2.849587 V |
@@ -340,7 +340,7 @@ card. The combined cache cannot establish an alternative geometry rule.
 The deck retains its DC failure and its original tolerances.
 
 `diode_extended.cir` stops the sweep at −2.5 V and passes. The breakdown region moved to
-`diode_breakdown.cir`, a known difference: spx follows the manual's area scaling of IBV,
+`diode_breakdown.cir`, a known difference: Sansho follows the manual's area scaling of IBV,
 while ngspice 44.2 produces about half that current at −BV for this card. The textbook
 treatment of BV adjustment (Massobrio & Antognetti) is a follow-up item.
 
@@ -358,23 +358,23 @@ The thirteen decks in `verify/bsim3-decks/` contain original, self-contained mod
 | `b3_noise1`, `b3_noise2` | Common-source output and input spectral densities and integrated noise with multiplicity and diffusion resistance. |
 | `b3_inverter`, `b3_ring5` | Loaded complementary inverter transitions and a five-stage autonomous ring with asymmetric initial voltages. |
 
-The cached ngspice 44.2 comparison has **7 passes, 5 failures and 1 missing reference**. The passing decks are the four DC I–V families, `b3_gm_gds`, `b3_inverter` and `b3_noise1`. The scores below use the original deck tolerances. Diagnostic controls changed one effect at a time on spx copies and used the original raw files for comparison. [Terminal values, noise normalization and temperature calculations](../docs/bsim3.md#verification-status)
+The cached ngspice 44.2 comparison has **7 passes, 5 failures and 1 missing reference**. The passing decks are the four DC I–V families, `b3_gm_gds`, `b3_inverter` and `b3_noise1`. The scores below use the original deck tolerances. Diagnostic controls changed one effect at a time on Sansho copies and used the original raw files for comparison. [Terminal values, noise normalization and temperature calculations](../docs/bsim3.md#verification-status)
 
 | Deck | Worst score | What the controls isolate |
 |---|---:|---|
 | `b3_cap2` | 5.402 | All three gates show a 0.0753–0.0754 fF offset. An explicit overlap equal to the oxide capacitance of the two excluded width edges brings the worst score to 0.002. Appendix A.3 specifies zero for omitted CGBO. |
 | `b3_cap3` | 5.783 | The same overlap accounts for the depletion and inversion offsets. At −1.3 V the accumulation thickness is sensitive to the doping in equation 4.4.2. Setting NSUB equal to the card's NCH in addition to the overlap control gives a worst score of 0.010. |
-| `b3_noise2` | 102.619 | At 1 Hz spx gives 16.839 µV/√Hz output versus 21.188 in the reference. The independently evaluated Chapter 8 strong-inversion expression reproduces the spx result under the documented R5 conventions. The input thermal floors agree within 0.02%. |
-| `b3_temp` | 132.815 | At 125 °C, the two-junction sidewall contribution is 1.737 mA. An area-only spx run gives a score of 0.401. Chapter 9 includes both contributions. The channel-current score is 0.004. |
+| `b3_noise2` | 102.619 | At 1 Hz Sansho gives 16.839 µV/√Hz output versus 21.188 in the reference. The independently evaluated Chapter 8 strong-inversion expression reproduces the Sansho result under the documented R5 conventions. The input thermal floors agree within 0.02%. |
+| `b3_temp` | 132.815 | At 125 °C, the two-junction sidewall contribution is 1.737 mA. An area-only Sansho run gives a score of 0.401. Chapter 9 includes both contributions. The channel-current score is 0.004. |
 | `b3_ring5` | 4.576 | Node A has a 3.40552 ns period versus 3.41698 ns. The overlap-only control gives 3.41689 ns and a worst waveform score of 0.036. |
 
-**Only `verify/out/b3_bins.ref.raw` needs generation.** Both numbered cards now give all four drawn-geometry bounds. Length ranges in µm are [0.3, 0.7) and [0.7, 5), both with widths [1, 3). The original 0.52 and 0.82 µm instances exercise their respective L/W/cross coefficients. In spx controls the 0.699 µm trace matched an explicit `cell.1` selection point for point, and 0.700 and 0.701 µm matched `cell.2`. The 1 µm lower width was accepted and the 3 µm upper width was excluded. The corrected deck retains its pending marker until its first 44.2 raw is available.
+**Only `verify/out/b3_bins.ref.raw` needs generation.** Both numbered cards now give all four drawn-geometry bounds. Length ranges in µm are [0.3, 0.7) and [0.7, 5), both with widths [1, 3). The original 0.52 and 0.82 µm instances exercise their respective L/W/cross coefficients. In Sansho controls the 0.699 µm trace matched an explicit `cell.1` selection point for point, and 0.700 and 0.701 µm matched `cell.2`. The 1 µm lower width was accepted and the 3 µm upper width was excluded. The corrected deck retains its pending marker until its first 44.2 raw is available.
 
 Generate just the missing reference with the repository's reference image. Replay the full suite with the second command.
 
 ```sh
-cargo run --release -p spx-verify --features jit -- verify/bsim3-decks/b3_bins.cir
-cargo run --release -p spx-verify --features jit -- --cached -v verify/bsim3-decks
+cargo run --release -p sansho-verify --features jit -- verify/bsim3-decks/b3_bins.cir
+cargo run --release -p sansho-verify --features jit -- --cached -v verify/bsim3-decks
 ```
 
-`tools/ci.sh --cached` exits at the five BSIM3 failures. Formatting, workspace Clippy and tests with default and all features, cargo-deny and the main cached deck suite passed. The remaining cached suites also passed when run individually, including their existing known differences. The 1.98 MSRV toolchain was unavailable. All thirteen BSIM3 decks produced byte-identical binary raw output with one and two spx workers.
+`tools/ci.sh --cached` exits at the five BSIM3 failures. Formatting, workspace Clippy and tests with default and all features, cargo-deny and the main cached deck suite passed. The remaining cached suites also passed when run individually, including their existing known differences. The 1.98 MSRV toolchain was unavailable. All thirteen BSIM3 decks produced byte-identical binary raw output with one and two Sansho workers.

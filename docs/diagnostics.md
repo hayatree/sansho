@@ -1,7 +1,7 @@
 # Diagnostic codes
 
-<!-- Generated from crates/spx-diag/src/codes.rs; do not edit by hand.
-     Regenerate with `SPX_BLESS=1 cargo test -p spx-diag`. -->
+<!-- Generated from crates/sansho-diag/src/codes.rs; do not edit by hand.
+     Regenerate with `SANSHO_BLESS=1 cargo test -p sansho-diag`. -->
 
 Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (the input cannot be simulated); `W-` codes are warnings and `I-` codes are informational. Diagnostics may also carry `culprits` (implicated nodes, branches and devices), `attempts` (strategies that were tried) and `suggestions` (specific remedies).
 
@@ -233,7 +233,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## W-PARSE-CONTROL
 
-**`.control` block skipped.** ngspice `.control` scripts are not executed by spx.
+**`.control` block skipped.** ngspice `.control` scripts are not executed by Sansho.
 
 - Use analysis cards and `.meas` instead of control scripts.
 
@@ -269,7 +269,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## E-ELAB-INTERNAL
 
-**Internal elaboration error.** An internal consistency check failed. This is a bug in spx.
+**Internal elaboration error.** An internal consistency check failed. This is a bug in Sansho.
 
 - Please report the netlist that triggers it.
 
@@ -341,7 +341,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## W-MODEL-TEMP
 
-**Temperature not applied.** Older spx releases reported this warning when they left nominal semiconductor parameters unscaled.
+**Temperature not applied.** Older Sansho releases reported this warning when they left nominal semiconductor parameters unscaled.
 
 - Use a release with temperature scaling for the selected model.
 

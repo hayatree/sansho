@@ -1,6 +1,6 @@
 Complex parameter sensitivities of an RC low pass
 * Provenance: original R2 verification circuit.
-* spx-verify: known-difference ngspice 44 v(r1) AC sensitivity is zero above the first frequency; spx matches the analytic derivative and ngspice v(r1_ac)
+* sansho-verify: known-difference ngspice 44 v(r1) AC sensitivity is zero above the first frequency; Sansho matches the analytic derivative and ngspice v(r1_ac)
 Vin in 0 dc 0 ac 1
 R1 in out 1k
 C1 out 0 10n

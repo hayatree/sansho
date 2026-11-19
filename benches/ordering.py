@@ -60,21 +60,21 @@ def markowitz(columns, rhs, threshold):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", type=Path, default=ROOT / "target/release/spx")
+    parser.add_argument("--binary", type=Path, default=ROOT / "target/release/sansho")
     parser.add_argument("decks", nargs="*", type=Path, default=[
         ROOT / "verify/va-decks/psp_ring5.cir", ROOT / "benches/psp_ring21.cir"])
     args = parser.parse_args()
     for deck in args.decks:
         proc = subprocess.run([args.binary, "run", "-j1", deck], check=True,
-                              env=dict(os.environ, SPX_PROFILE_MATRIX="entries"),
+                              env=dict(os.environ, SANSHO_PROFILE_MATRIX="entries"),
                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         lines = proc.stderr.splitlines()
         def first(prefix):
             return next(line.removeprefix(prefix) for line in lines if line.startswith(prefix))
-        ptr, indices, values = map(ast.literal_eval, re.findall(r"\[[^\]]*\]", first("spx-csc ")))
-        rhs = ast.literal_eval(first("spx-first-rhs "))
-        baseline = ast.literal_eval(first("spx-first-solution "))
-        print(deck.stem, first("spx-matrix "))
+        ptr, indices, values = map(ast.literal_eval, re.findall(r"\[[^\]]*\]", first("sansho-csc ")))
+        rhs = ast.literal_eval(first("sansho-first-rhs "))
+        baseline = ast.literal_eval(first("sansho-first-solution "))
+        print(deck.stem, first("sansho-matrix "))
         for active in (False, True):
             cols = [{indices[k]: values[k] for k in range(begin, end)
                      if not active or values[k] != 0.} for begin, end in zip(ptr, ptr[1:])]
