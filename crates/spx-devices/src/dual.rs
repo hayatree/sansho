@@ -69,7 +69,17 @@ impl<const N: usize> Dual<N> {
     #[inline]
     pub fn powf(self, p: f64) -> Self {
         let r = self.v.powf(p);
-        self.chain(r, p * self.v.powf(p - 1.0))
+        let slope = if self.v > 0. && self.v.is_normal() && r.is_normal() {
+            let ratio = r / self.v;
+            if ratio.is_normal() {
+                p * ratio
+            } else {
+                p * self.v.powf(p - 1.)
+            }
+        } else {
+            p * self.v.powf(p - 1.)
+        };
+        self.chain(r, slope)
     }
 
     /// Square.

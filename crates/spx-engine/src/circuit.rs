@@ -67,6 +67,30 @@ pub struct Circuit {
 /// A source of one assembled value: `(group, slot)`.
 pub(crate) type Src = (u32, u32);
 
+/// Circuit and group indices fit in sixteen bits for many transistor blocks.
+#[derive(Debug)]
+pub(crate) enum GroupScatter {
+    Small(Vec<(u16, u16)>),
+    Wide(Vec<(usize, usize)>),
+}
+
+impl GroupScatter {
+    pub(crate) fn sum(&self, values: &[f64], dst: &mut [f64]) {
+        match self {
+            Self::Small(entries) => {
+                for &(slot, row) in entries {
+                    dst[usize::from(row)] += values[usize::from(slot)];
+                }
+            }
+            Self::Wide(entries) => {
+                for &(slot, row) in entries {
+                    dst[row] += values[slot];
+                }
+            }
+        }
+    }
+}
+
 /// For every destination index, the contributing slots in a fixed order (CSR layout).
 ///
 /// Every destination is the sum of its sources, accumulated left to right starting from zero.
@@ -74,7 +98,8 @@ pub(crate) type Src = (u32, u32);
 /// destinations are distributed over threads (architecture D4).
 #[derive(Debug)]
 pub(crate) struct Gather {
-    pub(crate) by_group: Vec<Vec<(usize, usize)>>,
+    pub(crate) by_group: Vec<GroupScatter>,
+    pub(crate) contributions: u64,
     pub(crate) by_destination: Option<(Vec<usize>, Vec<Src>)>,
 }
 
@@ -93,6 +118,25 @@ impl Gather {
             }
             by_group[g].push((k, d));
         }
+        let contributions = by_group.iter().map(|g| g.len() as u64).sum();
+        let by_group = by_group
+            .into_iter()
+            .map(|entries| {
+                if entries
+                    .iter()
+                    .all(|&(k, d)| k.max(d) <= usize::from(u16::MAX))
+                {
+                    GroupScatter::Small(
+                        entries
+                            .into_iter()
+                            .map(|(k, d)| (k as u16, d as u16))
+                            .collect(),
+                    )
+                } else {
+                    GroupScatter::Wide(entries)
+                }
+            })
+            .collect();
         let by_destination = (split_rows && len > crate::solve::GATHER_CHUNK).then(|| {
             let mut ptr = vec![0usize; len + 1];
             for (_, _, d) in entries.clone() {
@@ -111,6 +155,7 @@ impl Gather {
         });
         Self {
             by_group,
+            contributions,
             by_destination,
         }
     }

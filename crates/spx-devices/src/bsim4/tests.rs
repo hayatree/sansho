@@ -13,7 +13,7 @@ fn params(entries: &[(&str, f64)]) -> ModelParams {
     )
 }
 
-fn transistor(entries: &[(&str, f64)], sign: f64, t: f64) -> Size {
+pub(super) fn transistor(entries: &[(&str, f64)], sign: f64, t: f64) -> Size {
     let mut group = Bsim4s::default();
     let model = params(entries);
     group
@@ -315,8 +315,22 @@ fn resistance_and_junction_network_jacobians() {
                             },
                             &mut slots,
                         );
-                        for (slot, &q) in slots.q.iter().enumerate() {
-                            assert!(q == 0. || layout.lte_q.contains(&slot));
+                        if group.compact.is_some() {
+                            assert_eq!(layout.lte_q, (4..16).collect::<Vec<_>>());
+                            let q = &slots.q;
+                            assert_eq!(
+                                q[..4],
+                                [
+                                    q[4] + q[8] + q[13],
+                                    q[5] + q[9],
+                                    q[6] + q[10] + q[15],
+                                    q[7] + q[11] + q[12] + q[14],
+                                ]
+                            );
+                        } else {
+                            for (slot, &q) in slots.q.iter().enumerate() {
+                                assert!(q == 0. || layout.lte_q.contains(&slot));
+                            }
                         }
                         let matrix = |keys: &[(Node, Node)], data: &[f64]| {
                             let mut mat = vec![0.; n * n];

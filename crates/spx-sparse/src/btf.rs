@@ -8,7 +8,7 @@ use crate::{CscPattern, SolverError};
 use faer::sparse::SymbolicSparseColMat;
 use faer::sparse::linalg::lu::factorize_symbolic_lu;
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BTreeSet, BinaryHeap};
 use std::ops::Range;
 
 const EMPTY: usize = usize::MAX;
@@ -296,11 +296,50 @@ struct Gp {
     candidates: Vec<usize>,
 }
 
+/// Minimum degree on the symmetric structure of a sparse circuit block.
+/// Cap clique work for dense fronts and fall back to the backend ordering.
+fn minimum_degree(input: &[Vec<(usize, usize)>]) -> Option<Vec<usize>> {
+    let n = input.len();
+    let mut edges = vec![BTreeSet::new(); n];
+    for (col, entries) in input.iter().enumerate() {
+        for &(row, _) in entries {
+            if row != col {
+                edges[col].insert(row);
+                edges[row].insert(col);
+            }
+        }
+    }
+    let mut queue: BTreeSet<_> = edges
+        .iter()
+        .enumerate()
+        .map(|(v, e)| (e.len(), v))
+        .collect();
+    let mut order = Vec::with_capacity(n);
+    let mut budget = 256usize.saturating_mul(input.iter().map(Vec::len).sum());
+    while let Some((degree, v)) = queue.pop_first() {
+        budget = budget.checked_sub(degree.checked_mul(degree)?)?;
+        let neighbors = std::mem::take(&mut edges[v]);
+        for &i in &neighbors {
+            let row = &mut edges[i];
+            queue.remove(&(row.len(), i));
+            row.remove(&v);
+            row.extend(neighbors.iter().copied().filter(|&k| k != i));
+            queue.insert((row.len(), i));
+        }
+        order.push(v);
+    }
+    Some(order)
+}
+
 impl Gp {
     fn new(input: Vec<Vec<(usize, usize)>>) -> Result<Self, SolverError> {
         let n = input.len();
         let order = if n < 4 {
             (0..n).collect()
+        } else if n >= 256
+            && let Some(order) = minimum_degree(&input)
+        {
+            order
         } else {
             let mut ptr = vec![0];
             let mut idx = Vec::new();
@@ -338,6 +377,7 @@ impl Gp {
     fn factor_from(&mut self, valid: usize, values: &[f64]) -> Result<(), usize> {
         // A rejected pivot invalidates its own column and its successors.
         // Earlier accepted pivots and updates already factor the new matrix.
+        let first = self.columns.is_empty() && self.order.len() >= 256;
         self.columns.truncate(valid);
         self.lower
             .truncate(self.columns.last().map_or(0, |c| c.lower.end));
@@ -418,6 +458,28 @@ impl Gp {
                 upper: u..self.upper.len(),
             });
         }
+        if first && std::env::var("SPX_PROFILE_MATRIX").as_deref() == Ok("shape") {
+            let n = self.columns.len();
+            let tail = 64;
+            let start = n - tail;
+            let mut nz = tail;
+            for c in &self.columns[start..] {
+                nz += self.lower[c.lower.clone()]
+                    .iter()
+                    .filter(|(r, _)| self.pivot_at[*r] >= start)
+                    .count();
+                nz += self.upper[c.upper.clone()]
+                    .iter()
+                    .filter(|(r, _)| *r >= start)
+                    .count();
+            }
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "spx-block-shape n={n} factors={} tail={tail} tail_entries={nz}",
+                n + self.lower.len() + self.upper.len()
+            );
+        }
         Ok(())
     }
 
@@ -436,6 +498,9 @@ impl Gp {
                 *u = std::mem::take(&mut self.work[prev.pivot]);
                 if !u.is_finite() {
                     return j;
+                }
+                if *u == 0. {
+                    continue;
                 }
                 for &(r, l) in &self.lower[prev.lower.clone()] {
                     self.work[r] -= l * *u;
@@ -460,6 +525,9 @@ impl Gp {
     fn solve(&mut self, rhs: &mut [f64]) {
         for c in &self.columns {
             let x = rhs[c.pivot];
+            if x == 0. {
+                continue;
+            }
             for &(r, l) in &self.lower[c.lower.clone()] {
                 rhs[r] -= l * x;
             }

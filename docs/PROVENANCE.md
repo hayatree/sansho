@@ -226,3 +226,13 @@ modified nodal equations and the forward-mode chain rule. BSIM-CMG 111.2.1
 (ECL-2.0) served as external compiler input. The known-difference directive and
 the SKY130 terminal-waveform replay are original verification work using local
 black-box results. The KU0 decision follows the BSIM4 4.8.2 manual, equation 14.5.
+
+### M5-3 single-worker BSIM4
+
+The terminal stamp and charge sampler use the BSIM4 4.8.2 manual equations
+already implemented in this repository. The derivative reduction follows
+translation invariance and the forward chain rule. Unequally spaced Newton
+divided differences supply the transient predictor. The block ordering
+implements minimum-degree elimination on a symmetric graph as described in
+Davis, *Direct Methods for Sparse Linear Systems* (2006). The implementations
+and performance probes are original.

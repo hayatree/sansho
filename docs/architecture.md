@@ -160,7 +160,7 @@ pub trait DeviceGroup: Send + Sync {
    is fixed).
 
 Results are therefore bit-identical regardless of thread count or scheduling.
-On a 64-bit host the scatter table uses 16 bytes per retained contribution.
+The scatter table uses four bytes per contribution when both the source slot and destination fit in 16 bits. Groups with larger indices use two native words per contribution.
 The CSR form adds eight bytes per contribution and one word per destination
 boundary, plus vector headers and allocation capacity.
 
@@ -215,19 +215,22 @@ publication. Section 16 describes two-lane native circuit evaluation and timing 
 - Device state (`StateRef`): an `accepted` copy (last accepted solution, read-only during a solve)
   and a `current` copy (per iteration). Used for limiting history and incremental charge models
   (MOS1 Meyer capacitances).
-- For BSIM4 at 256 unknowns and above, reuse intrinsic current and charge
-  linearizations for bit-identical terminal biases. The optional
-  `.options bypass=1` also allows changes up to `vntol` on each terminal in
-  a limited Newton iteration. Residuals use the saved derivatives at the
-  current iterate. Overlap, junctions and limiting histories are evaluated
-  normally. Gate resistance modes 2 and 3 use the full evaluation. Exact
-  charge sampling resumes before time-step acceptance. Within one elaboration,
-  instances with the same selected BSIM4 card and bit-identical ordered
-  instance parameters share validated geometry, network and temperature data.
-  Limiters and the last Newton linearization remain per instance. A 32-entry
-  cache per device chunk also reuses intrinsic results across instances with
-  the same model binding and bit-identical terminal voltages. Bindings that emit
-  warnings are evaluated individually to preserve their source diagnostics.
+- BSIM4 instances with identical validated bindings share geometry, temperature
+  and model coefficients. Bindings with warnings retain their source diagnostics.
+  Each chunk holds its own caches. Newton limiting history belongs to the instance.
+  The default `.options bypass=1` permits a first-order expansion only within
+  `vntol` of the saved bias on **each** terminal. Displacements are measured from
+  the anchor where derivatives were computed. `.options bypass=0` requires
+  bit-identical biases. Shared lookups across instances always require an exact
+  match, including the model and derivative layout.
+- A BSIM4 chunk without internal resistive nodes combines intrinsic, overlap and
+  junction contributions into a four-terminal MNA stamp. It checks the limiters
+  before reuse, and compares the junction `gmin` with the anchor. The chunk
+  preserves all twelve component charges for LTE. Exact scalar charge sampling
+  at the converged voltages also updates the five limiter histories before commit.
+  Chunks with internal nodes keep their separate network stamps and evaluate
+  overlap and junctions on every visit. Gate resistance modes 2 and 3 evaluate
+  the full intrinsic model.
 
 ### 5.2 DC operating point fallback chain
 
@@ -275,6 +278,12 @@ storage, diode and BJT terminal charges, and the individual BSIM4 intrinsic,
 overlap and junction stamps. Voltage and branch-current Newton convergence
 use `vntol` and `abstol` respectively. Every converged trial with sufficient
 history undergoes the LTE test, including one-iteration linear solves.
+
+For circuits containing BSIM4, the transient Newton starting guess extrapolates
+node voltages from the two or three newest accepted solutions on their actual
+time grid. Branch currents start at the accepted values. Clearing history at
+a source corner restarts prediction. A singular or nonconvergent extrapolated
+solve retries from the accepted solution before reducing the step.
 
 History advances on acceptance. Growth is capped at 2× and excess error at
 the step floor produces a diagnostic. A positive explicit `TMAX` sets the
@@ -331,8 +340,13 @@ the complete pattern. BTF is used for multiple blocks when the largest holds
 at most half the unknowns or at least 2% of structural entries lie in columns
 outside that block.
 
-Each diagonal block uses faer's public column ordering (natural order below
-four columns) and an original left-looking real LU. A priority queue visits
+Each diagonal block uses an original left-looking real LU. Blocks with at
+least 256 columns first try minimum degree on the union of the matched
+pattern and its transpose. Eliminating a vertex completes its neighbor clique.
+Degree ties use the lower original column. A budget of 256 times the block
+input count bounds the sum of squared elimination degrees. Exhausting the
+budget falls back to faer's public column ordering, which also handles blocks
+of four to 255 columns. Smaller blocks use natural order. A priority queue visits
 reachable earlier pivots in order. Fresh pivoting prefers the matched diagonal
 when it is at least 0.1 times the column maximum. Subsequent assemblies replay
 the same lower-column updates and check the same relative threshold. On a

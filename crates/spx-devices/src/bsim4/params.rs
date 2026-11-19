@@ -74,6 +74,13 @@ channel_parameters! {
 #[derive(Debug)]
 pub(super) struct Size {
     pub(super) p: Channel,
+    pub(super) zero_body: Option<super::channel::Body<1>>,
+    pub(super) sqrt_phi: f64,
+    pub(super) pocket: f64,
+    pub(super) pocket_shift: f64,
+    pub(super) width_shift: f64,
+    pub(super) litl: f64,
+    pub(super) short_zero: f64,
     pub(super) sign: f64,
     pub(super) l: f64,
     pub(super) w: f64,
@@ -96,8 +103,8 @@ pub(super) struct Size {
     pub(super) vbi: f64,
     pub(super) xdep0: f64,
     pub(super) poly: f64,
-    pub(super) dibl_factor: super::D,
-    pub(super) rout_factor: super::D,
+    pub(super) dibl_factor: f64,
+    pub(super) rout_factor: f64,
     pub(super) resistance_width: f64,
     pub(super) mstar: f64,
     pub(super) centroid_field: f64,
@@ -106,6 +113,7 @@ pub(super) struct Size {
     pub(super) vth_temp: f64,
     pub(super) body_temp: f64,
     pub(super) mobmod: u8,
+    pub(super) basic_transport: bool,
     pub(super) ua: f64,
     pub(super) ub: f64,
     pub(super) uc: f64,
@@ -381,9 +389,17 @@ impl Size {
         let mut cv = super::ChargeModel::new(p, &bin, lcv, wcv, nf);
         cv.voff = (cv.voff + bin.get("voffcvl", 0.) / l) * (1. + bin.get("tvoffcv", 0.) * dt);
         let zero_scale = (EPS_SI / coxe * xdep0).sqrt();
-        let theta0 = |exponent| super::theta(super::D::cst(exponent * l / zero_scale));
+        let theta0 = |exponent| super::theta(super::D::cst(exponent * l / zero_scale)).v;
         let density = 2. * EPS_SI * phi / (crate::CHARGE * xdep0.powi(2)) / 1e6;
         Ok(Self {
+            zero_body: None,
+            sqrt_phi: phi.sqrt(),
+            pocket: (1. + ch.lpeb / l).sqrt(),
+            pocket_shift: k1 * toxe / toxm * ((1. + ch.lpe0 / l).sqrt() - 1.) * phi.sqrt(),
+            width_shift: toxe * phi / (w + ch.w0),
+            litl: (EPS_SI / coxe * ch.xj).sqrt(),
+            short_zero: theta0(ch.dvt1),
+            basic_transport: false,
             dibl_factor: theta0(dsub),
             rout_factor: ch.pdiblc1 * theta0(ch.drout) + ch.pdiblc2,
             resistance_width: (1e6 * wj).powf(ch.wr),

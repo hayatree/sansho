@@ -700,6 +700,9 @@ pub(crate) fn tran(
     let mut h = 0.01 * hmax.min(bps.first().copied().unwrap_or(tstop));
     let mut integ = Integration::dc(charges.len());
     let mut x_new = x.clone();
+    let predict = ckt.groups.iter().any(|g| g.type_name() == "bsim4");
+    let mut previous_x = if predict { x.clone() } else { Vec::new() };
+    let mut older_x = previous_x.clone();
     let profile = spx_diag::profile_enabled();
     let mut control = std::time::Duration::ZERO;
     while t < tstop - eps {
@@ -728,10 +731,49 @@ pub(crate) fn tran(
         ctx.time = t + h;
         ctx.final_step = ctx.time >= tstop - eps;
         x_new.copy_from_slice(&x);
+        let extrapolated = predict && hist.len() >= 2;
+        if extrapolated {
+            // Newton divided differences on the accepted grid. Clearing the
+            // charge history at a source corner also restarts this polynomial.
+            let previous_step = hist.t[0] - hist.t[1];
+            let ratio = h / previous_step;
+            let curvature = hist.t.get(2).map(|&t2| {
+                (
+                    previous_step / (hist.t[1] - t2),
+                    h * (h + previous_step) / (previous_step * (hist.t[0] - t2)),
+                )
+            });
+            for (i, next) in x_new.iter_mut().enumerate() {
+                if ckt.unknowns.kinds()[i] == spx_devices::UnknownKind::Voltage {
+                    let diff = x[i] - previous_x[i];
+                    *next += ratio * diff;
+                    if let Some((ratio_old, weight)) = curvature {
+                        *next += weight * (diff - ratio_old * (previous_x[i] - older_x[i]));
+                    }
+                    if !next.is_finite() {
+                        *next = x[i];
+                    }
+                }
+            }
+        }
         if let Some(t) = begin {
             control += t.elapsed();
         }
-        if let Err(e) = newton(ckt, &ctx, &integ, &mut x_new, &mut ws, opts, opts.itl4, 0.0) {
+        let solve = |seed: &mut [f64], ws: &mut Workspace| {
+            newton(ckt, &ctx, &integ, seed, ws, opts, opts.itl4, 0.)
+        };
+        let mut result = solve(&mut x_new, &mut ws);
+        if extrapolated
+            && matches!(
+                result,
+                Err(crate::solve::NewtonError::NoConvergence { .. }
+                    | crate::solve::NewtonError::Singular)
+            )
+        {
+            x_new.copy_from_slice(&x);
+            result = solve(&mut x_new, &mut ws);
+        }
+        if let Err(e) = result {
             h /= 8.0;
             if h < hmin {
                 let mut d = newton_diagnostic(ckt, &e, "E-CONV-TRAN", "transient")
@@ -842,6 +884,10 @@ pub(crate) fn tran(
         hist.push(t, charges);
         ws.commit();
         std::mem::swap(&mut qdot, &mut qdot_new);
+        if predict {
+            std::mem::swap(&mut previous_x, &mut older_x);
+            std::mem::swap(&mut previous_x, &mut x);
+        }
         std::mem::swap(&mut x, &mut x_new);
         if let Some(t) = begin {
             control += t.elapsed();
@@ -856,6 +902,13 @@ pub(crate) fn tran(
 
     if profile {
         use std::io::Write;
+        if accepted_steps > 0 {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "spx-newton-per-step {:.4}",
+                ws.newton_iterations as f64 / accepted_steps as f64
+            );
+        }
         let _ = writeln!(
             std::io::stderr().lock(),
             "spx-phase control {:.6}",

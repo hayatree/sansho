@@ -581,3 +581,188 @@ difference. All 128 settled product checks passed on each multiplier at both
 worker settings.
 With save projections removed, every time point and internal waveform in
 the full-precision JSON matched across one and default workers on all five decks.
+
+### M5-3 single-worker BSIM4
+
+On the BSIM4 multiplier the single-worker release run took 41.87 s, including
+setup and raw output. With 2,750 points the cost fell from 46.93 to 15.22 ms
+per point. The maintainer's ngspice 44.2 reference took 51 s and produced
+934 points, with 36.771 mV mean error and a crossing difference of 30.
+A separate run with all profiling disabled took 41.95 s and produced the
+same projected waveform and work counts as the 41.87 s aggregate profile.
+
+The following runs used the same 32-logical-CPU Ryzen AI Max+ 395, the
+release JIT-enabled CLI and the original save projections. Large simulations ran sequentially. Each multiplier cell is one process, and
+each shorter-deck cell is the median of three processes. Wall includes startup
+and ASCII output. The denominator for wall per point includes the initial
+point. Newton iterations per accepted step below exclude that point from the
+denominator and include work on rejected attempts in the numerator.
+
+| Deck | Revision | Points | Mean error (mV) | Crossing difference | Wall -j1 (s) | Wall default (s) | Default workers | -j1 ms/point |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| BSIM4 multiplier | 2366370 | 2,750 | 4.834 | 6 | 129.06 | 37.52 | 12 | 46.931 |
+| BSIM4 multiplier | M5-3 | 2,750 | 4.834 | 6 | 41.87 | 14.79 | 12 | 15.224 |
+| BSIM4 chain | 2366370 | 221 | 6.5e-08 | 0 | 0.581 | 0.297 | 3 | 2.629 |
+| BSIM4 chain | M5-3 | 221 | 6.5e-08 | 0 | 0.152 | 0.133 | 3 | 0.690 |
+| SKY ring | 2366370 | 1,508 | 0.673 | 0 | 0.232 | 0.238 | 1 | 0.154 |
+| SKY ring | M5-3 | 1,508 | 0.673 | 0 | 0.235 | 0.249 | 1 | 0.156 |
+| MOS1 multiplier | 2366370 | 1,560 | 4.338 | 24 | 14.19 | 8.31 | 5 | 9.097 |
+| MOS1 multiplier | M5-3 | 1,560 | 4.338 | 24 | 10.14 | 5.10 | 5 | 6.503 |
+
+Multiplier errors use the M5-2 tight gold files and the original 4,000-sample
+comparison. For the short decks the reference is the cached ngspice-default
+waveform. The same interpolation and 0.9 V crossing rule use the reference
+time interval, chain nodes n0, n500 and n1000, and ring nodes a through e.
+The cached verifier separately compares the SKY internal nodes.
+
+**Phase times in seconds.** Setup includes parsing and elaboration. Control
+covers the integration and step controller. The process wall also includes
+unattributed work. Each phase median for the short decks is independent.
+
+| Deck | Revision | Workers | Setup | Device | Assembly | Symbolic | Numeric LU | Solve | Control | Output |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| BSIM4 multiplier | 2366370 | 1 | 0.0704 | 96.5867 | 13.8507 | 0.0066 | 13.5586 | 1.8682 | 2.7146 | 0.0153 |
+| BSIM4 multiplier | 2366370 | 12 | 0.0574 | 12.7142 | 7.3174 | 0.0046 | 12.7245 | 1.5750 | 2.7048 | 0.0184 |
+| BSIM4 multiplier | M5-3 | 1 | 0.0591 | 29.5385 | 2.3864 | 0.0122 | 5.7371 | 0.8379 | 2.9699 | 0.0148 |
+| BSIM4 multiplier | M5-3 | 12 | 0.0519 | 3.5455 | 1.5640 | 0.0134 | 5.4133 | 0.8422 | 3.0106 | 0.0195 |
+| BSIM4 chain | 2366370 | 1 | 0.0129 | 0.4375 | 0.0748 | 0.0002 | 0.0102 | 0.0062 | 0.0304 | 0.0005 |
+| BSIM4 chain | 2366370 | 3 | 0.0122 | 0.1767 | 0.0516 | 0.0002 | 0.0102 | 0.0062 | 0.0319 | 0.0007 |
+| BSIM4 chain | M5-3 | 1 | 0.0105 | 0.0608 | 0.0230 | 0.0001 | 0.0082 | 0.0050 | 0.0355 | 0.0006 |
+| BSIM4 chain | M5-3 | 3 | 0.0096 | 0.0397 | 0.0225 | 0.0001 | 0.0083 | 0.0050 | 0.0380 | 0.0006 |
+| SKY ring | 2366370 | 1 | 0.1287 | 0.0395 | 0.0027 | 0.0000 | 0.0024 | 0.0012 | 0.0015 | 0.0092 |
+| SKY ring | M5-3 | 1 | 0.1301 | 0.0339 | 0.0021 | 0.0000 | 0.0020 | 0.0009 | 0.0018 | 0.0095 |
+| MOS1 multiplier | 2366370 | 1 | 0.0509 | 6.0158 | 2.3859 | 0.0046 | 4.7684 | 0.5992 | 0.1540 | 0.0128 |
+| MOS1 multiplier | 2366370 | 5 | 0.0536 | 1.5031 | 1.2065 | 0.0068 | 4.5674 | 0.5946 | 0.1615 | 0.0133 |
+| MOS1 multiplier | M5-3 | 1 | 0.0511 | 5.8165 | 1.3553 | 0.0122 | 2.0030 | 0.5624 | 0.1491 | 0.0130 |
+| MOS1 multiplier | M5-3 | 5 | 0.0511 | 1.3811 | 0.8871 | 0.0129 | 1.8783 | 0.5395 | 0.1571 | 0.0153 |
+
+**Work counts and LU cost on one worker.** Fresh includes the first
+factorization and factorizations requiring pivot search. Reuse includes
+successful fixed-pivot numeric refactors. The nanosecond counters accumulate
+the entire factor call, including a failed fixed-pivot attempt when a fresh
+search follows. The table divides these totals by calls of that type.
+Assembly counts one gathered contribution to an MNA entry. The baseline
+counters come from a separately instrumented build of 2366370.
+
+| Deck | Revision | Rejected | Newton iterations | Newton/accepted | Fresh LU | Fixed LU | µs/fresh | µs/fixed | Gathered contributions | ns/contribution |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| BSIM4 multiplier | 2366370 | 527 | 12,860 | 4.678 | 3,047 | 9,813 | 1756.9 | 892.1 | 8,013,353,068 | 1.813 |
+| BSIM4 multiplier | M5-3 | 527 | 10,257 | 3.731 | 2,122 | 8,135 | 1079.2 | 423.7 | 3,241,436,741 | 0.736 |
+| BSIM4 chain | 2366370 | 19 | 793 | 3.605 | 1 | 792 | 151.3 | 13.0 | 89,971,930 | 0.838 |
+| BSIM4 chain | M5-3 | 19 | 659 | 2.995 | 1 | 658 | 177.4 | 12.2 | 37,272,590 | 0.618 |
+| SKY ring | 2366370 | 0 | 4,540 | 3.013 | 3 | 4,537 | 16.9 | 0.6 | 4,355,740 | 0.718 |
+| SKY ring | M5-3 | 0 | 3,051 | 2.025 | 3 | 3,048 | 16.1 | 0.8 | 2,978,415 | 0.854 |
+
+**Device evaluation on one worker.** 2366370 visits include the converged
+charge sample. The combined terminal stamp has a separate exact scalar charge
+path for that sample. Devices with internal resistances, including those in
+the SKY ring, retain the general evaluation path. A shared hit takes an exact
+model-and-bias match. Bypass hits below count changed biases reused within
+the configured voltage tolerance. The remaining hits used an unchanged bias
+at the same instance.
+
+| Deck | Revision | Newton/general visits | Full intrinsic evaluations | Shared hits | Bypass hits | Charge-only visits | Scalar evaluations |
+|---|---|---:|---:|---:|---:|---:|---:|
+| BSIM4 multiplier | 2366370 | 162,660,960 | 127,491,240 | — | — | — | — |
+| BSIM4 multiplier | M5-3 | 103,390,560 | 33,838,783 | 473,930 | 69,077,735 | 33,032,160 | 32,310,902 |
+| BSIM4 multiplier | M5-3 bypass=0 | 103,410,720 | 99,946,284 | 2,285,593 | 0 | 33,032,160 | 32,274,856 |
+| BSIM4 chain | 2366370 | 2,066,000 | 364,603 | — | — | — | — |
+| BSIM4 chain | M5-3 | 1,318,000 | 23,168 | 1,872 | 1,292,960 | 480,000 | 156,199 |
+| SKY ring | 2366370 | 60,480 | 60,480 | — | — | — | — |
+| SKY ring | M5-3 | 45,590 | 45,562 | 0 | 18 | 0 | 0 |
+
+The detailed probe samples every 1,024th full evaluation in each group.
+The final intrinsic column times all four terminal currents and charges,
+including enabled gate terms. AD overhead is the difference from replaying
+the same intrinsic equations with zero derivative lanes. Overlap/junction
+and gate columns are separate probes, so the columns do not sum to device
+wall time. Charge-only measures the actual scalar charge calculation on
+sampled cache misses. Zero gate cost denotes disabled tunneling. The 2366370 auxiliary probe timed the original branch evaluation.
+A dash marks a measurement unavailable in that build or a path unused by the deck.
+
+| Deck | Revision | Intrinsic ns | AD overhead ns | Overlap/junction ns | Enabled gate ns | Charge-only ns |
+|---|---|---:|---:|---:|---:|---:|
+| BSIM4 multiplier | 2366370 | 558.7 | — | 180.4 | — | — |
+| BSIM4 multiplier | M5-3 | 356.9 | 145.8 | 82.0 | 0.0 | 149.0 |
+| BSIM4 chain | 2366370 | 587.3 | — | 115.6 | — | — |
+| BSIM4 chain | M5-3 | 301.6 | 111.3 | 61.6 | 0.0 | 138.2 |
+| SKY ring | 2366370 | 711.0 | — | 223.7 | — | — |
+| SKY ring | M5-3 | 584.9 | 268.0 | 141.1 | 0.0 | — |
+
+The matched probes measured 80.83 s with exact-bias reuse and
+42.35 s with default bypass. Exact-bias reuse produced
+4.834 mV mean error and a crossing difference of 6. The default avoids
+66,107,501 full evaluations in these runs. All four
+terminals must stay within the existing `vntol` of the original linearization.
+The converged LTE charge sample uses the actual voltage. Solver and charge
+tolerances are the M5-2 defaults.
+
+**Measured changes.** To compare intermediate builds, the BSIM4 multiplier
+was also run to 8.15 ns with the original 320 ps maximum step, one worker
+and 70 output points. The following builds all rejected 11 steps. Each row
+is a single timing, so small differences include timing variation.
+
+| Change included | Wall (s) | Device (ms) | Assembly (ms) | Numeric LU (ms) | Newton |
+|---|---:|---:|---:|---:|---:|
+| 2366370 | 2.77 | 1982 | 287 | 301 | 315 |
+| Voltage-bounded bypass | 2.28 | 1537 | 268 | 285 | 312 |
+| Linear accepted-voltage predictor | 2.24 | 1531 | 250 | 267 | 285 |
+| Minimum-degree ordering of the large block | 2.14 | 1510 | 238 | 210 | 285 |
+| Combined stamp, three AD lanes and scalar charge sampling | 1.61 | 1091 | 157 | 185 | 279 |
+| Quadratic accepted-voltage predictor | 1.55 | 1043 | 144 | 178 | 276 |
+| Detailed probes implemented, inactive | 1.69 | 1182 | 152 | 180 | 276 |
+| Prepared zero-body electrostatics | 1.59 | 1082 | 148 | 185 | 276 |
+| Two AD lanes for wired source and body | 1.58 | 1076 | 141 | 184 | 276 |
+| Electrostatics-only charge path, with experimental shared bypass | 1.44 | 938 | 139 | 180 | 275 |
+| Mobility-0 specialization, shared powers and compact instance data | 1.39 | 908 | 130 | 173 | 275 |
+
+Both multiplier cards select mobmod=0, capmod=2, igcmod=igbmod=0 and
+rbodymod=0. Preparing bias-independent quantities and sharing repeated
+powers reduces the cost of the IV evaluation. Compact batches store terminal
+indices, model bindings and off flags in separate arrays. The MNA receives
+one 4×4 stamp per device, and the LTE test retains all 12 component charges.
+
+On the complete multiplier an ordering-only comparison kept 10,455 Newton
+iterations in both builds. Numeric LU fell from 12.19 to 7.60 s and solve
+from 1.70 to 0.93 s. Fresh factorizations fell from 2,555 to 2,479. A later
+build using two 16-bit indices for each representable gather entry reduced
+assembly from 6.47 to 3.11 s. Contiguous derivative copies and sparse
+zero-update skips brought the next complete run to 42.25 s, including
+2.38 s of assembly.
+
+The 5,034-column block had 206,151 factor entries and 4,042 occupied positions
+in its trailing 64×64 square. A dense trailing kernel increased median numeric
+time on the prefix from 171.0 to 181.0 ms across three interleaved runs. A
+previous-LU predictor correction required 2,987 additional solves to avoid
+1,151 Newton factorizations. Approximate sharing between instances saved
+about 1% of full evaluations. All three experiments were removed. Exact
+cross-instance sharing and the existing pivot stability threshold are retained.
+
+A worker sweep on an intermediate multiplier build took 19.11, 18.64, 15.89
+and 14.91 s at 4, 6, 8 and 12 workers. The chain took 0.16, 0.12 and 0.12 s
+at 1, 2 and 3 workers. The existing default selects 12 for the multiplier,
+3 for the chain and 1 for the ring. Parsing and elaborating the SKY model
+library still take about 0.13 s per process.
+
+Run the release binary as follows to reproduce the counters and inspect the matrix shape.
+
+```sh
+SPX_PROFILE=1 SPX_PROFILE_BSIM4=1 target/release/spx run -j1 benches/large/mult16_bsim4.cir -r /tmp/mult16.raw
+SPX_PROFILE=1 SPX_PROFILE_MATRIX=shape target/release/spx run -j1 benches/large/mult16_bsim4.cir -r /tmp/mult16-shape.raw
+python3 benches/large/accuracy.py mult16_bsim4 /tmp/mult16.raw
+python3 benches/large/run.py --check-bits --deck mult16_mos1 --deck mult16_bsim4
+```
+
+The cached release JIT verifier reported 55 passing decks, four known
+differences and zero skipped. The SKY ring retained its known internal body
+node difference (10.57 µV maximum).
+Both multipliers passed all 128 settled product checks at each worker setting.
+With the save projections removed, the SHA-256 digests of every JSON waveform
+and time point matched at one and default workers on both multipliers and
+the BSIM4 chain.
+
+| Full-precision comparison | Matching SHA-256 |
+|---|---|
+| mult16_bsim4, 1 and 12 workers | `130ab727c5e26c4a7156b4bd9e5ccc0f7db4a3fd61b4abd06f4c9012bcd29a7f` |
+| mult16_mos1, 1 and 5 workers | `39e09dabb59609e26c98704a96e01987e11f25b581dfda889eb6fb96621ab935` |
+| inv_chain1000_bsim4, 1 and 3 workers | `f5739483db7c3f68cb55c9fc4c7031745f92fd5d958c3c0678d9b820fb8274eb` |

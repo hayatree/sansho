@@ -1,7 +1,8 @@
 //! Direct tunneling from gate to channel, diffusions and body.
 //! Provenance: Berkeley BSIM4 4.8.2 technical manual, §§4.1–4.3 and Appendix A.7.
 
-use super::{D, Size, channel::Bias, floor, params::Bin, softplus};
+use super::{Size, channel::Bias, floor, params::Bin, softplus};
+use crate::dual::Dual;
 use crate::{ModelParams, junction::safe_exp};
 
 #[derive(Debug)]
@@ -11,7 +12,7 @@ struct Barrier {
     coeff: [f64; 3],
 }
 impl Barrier {
-    fn current(&self, voltage: D, aux: D, oxide: D) -> D {
+    fn current<const N: usize>(&self, voltage: Dual<N>, aux: Dual<N>, oxide: Dual<N>) -> Dual<N> {
         let [a, b, c] = self.coeff;
         self.scale * voltage * aux * safe_exp(-self.exponent * (a - b * oxide) * (1. + c * oxide))
     }
@@ -30,6 +31,9 @@ pub(super) struct Gate {
     flat_sd: f64,
 }
 impl Gate {
+    pub(super) fn enabled(&self) -> bool {
+        self.channel_mode != 0 || self.bulk_mode
+    }
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         p: &ModelParams,
@@ -114,13 +118,13 @@ impl Gate {
 }
 impl Size {
     /// Currents leaving gate towards the forward-channel drain, source and body.
-    pub(super) fn tunneling(&self, b: &Bias) -> [D; 3] {
+    pub(super) fn tunneling<const N: usize>(&self, b: &Bias<N>) -> [Dual<N>; 3] {
         let g = &self.gate;
-        let mut result = [D::cst(0.); 3];
+        let mut result = [Dual::cst(0.); 3];
         if g.channel_mode == 0 && !g.bulk_mode {
             return result;
         }
-        let vgb = b.gate - b.bulk;
+        let vgb = b.cv.gate - b.cv.bulk;
         let flat = self.cv.flat_zero;
         let delta = flat - vgb - 0.02;
         let acc = floor(
@@ -130,20 +134,20 @@ impl Size {
         // Use the depletion solution of (7.62) to continue (4.2) into accumulation.
         let dep = vgb - flat + acc - b.over;
         let oxide = b.over + super::charges::depletion(dep, self.k1ox);
-        let aux = |v: D, n: usize| g.slope[n] * softplus(v / g.slope[n]);
+        let aux = |v: Dual<N>, n: usize| g.slope[n] * softplus(v / g.slope[n]);
         if g.bulk_mode {
             result[2] = g.accumulation.current(vgb, aux(flat - vgb, 1), acc)
                 + g.inversion.current(vgb, aux(oxide - g.eigbinv, 2), oxide);
         }
         if g.channel_mode != 0 {
             let vth = if g.channel_mode == 1 {
-                D::cst(self.vth0)
+                Dual::cst(self.vth0)
             } else {
-                b.threshold
+                b.cv.threshold
             };
-            let current = g.channel.current(b.gate, aux(b.gate - vth, 0), oxide);
+            let current = g.channel.current(b.cv.gate, aux(b.cv.gate - vth, 0), oxide);
             let drive = floor(b.over, 1e-12);
-            let part = g.pigcd.map(D::cst).unwrap_or_else(|| {
+            let part = g.pigcd.map(Dual::cst).unwrap_or_else(|| {
                 floor(
                     g.channel.exponent * (1. - 0.5 * b.vd / drive) / drive.sq(),
                     0.,
@@ -157,10 +161,10 @@ impl Size {
         }
         result
     }
-    pub(super) fn edge_tunneling(&self, v: D, side: usize) -> D {
+    pub(super) fn edge_tunneling<const N: usize>(&self, v: Dual<N>, side: usize) -> Dual<N> {
         let g = &self.gate;
         if g.channel_mode == 0 {
-            return D::cst(0.);
+            return Dual::cst(0.);
         }
         let smooth = ((v - g.flat_sd).sq() + 1e-4).sqrt();
         g.edge[side].current(v, smooth, smooth)

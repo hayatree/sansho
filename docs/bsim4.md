@@ -4,6 +4,33 @@ Provenance: Original implementation of the UC Berkeley BSIM Group's *BSIM4 4.8.2
 
 Use a four-terminal MOS instance in drain, gate, source, bulk order and a model of type `nmos` or `pmos` with `level=54`. The channel sign convention changes with the type. DC, AC and transient analyses share a quasi-static terminal-current and charge model. The implementation is in `crates/spx-devices/src/bsim4/`. It uses the existing fixed-size forward-mode dual numbers and the engine's ordinary device-group interface.
 
+## Terminal evaluation and bypass
+
+Chunks without internal drain, source, body or gate nodes store terminal indices
+and model bindings separately. The IV and CV equations depend on voltage
+differences. Forward AD uses drain, gate and bulk directions with source held
+fixed. Translation invariance supplies the source column as the negative sum.
+A wired source and bulk need only the drain and gate directions for an unlimited
+intrinsic stamp. Junctions use one derivative per physical branch. The matrix
+receives the combined four-terminal currents and charges. The LTE controller
+also receives the four intrinsic, four overlap and four signed junction charges.
+
+A prepared model retains the zero-body-bias electrostatics and its body derivative
+after geometry, temperature and layout adjustments. The mobility-0 transport
+specialization requires constant effective width, unit saturation lambda and
+disabled Coulomb scattering, overshoot and ballistic corrections. Other settings
+use the general transport equations. Exact charge sampling uses the electrostatic
+and CV equations with zero AD lanes.
+
+During Newton iteration the default `.options bypass=1` permits reuse when
+all four terminal voltages are within `vntol` of the original linearization.
+Currents and charges receive the first-order correction at the current iterate.
+The combined stamp additionally requires unchanged `gmin`, completed limiting
+and ordinary bias initialization. Cross-instance sharing requires identical
+model bindings and voltage bits. `.options bypass=0` selects exact-bias reuse.
+The converged charge sample always uses the actual voltages. The M5-3 benchmarks
+measure the accuracy and work counts for both bypass settings. [Performance measurements](performance.md#m5-3-single-worker-bsim4)
+
 ## Equation coverage
 
 | Manual section | Evaluation in spx |

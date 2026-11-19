@@ -181,6 +181,16 @@ impl Junction {
         };
         (forward + correction) * self.isat
     }
+    pub(super) fn charge<const N: usize>(&self, v: Dual<N>) -> Dual<N> {
+        if v.v >= 0. {
+            v * (self.forward_cap[0] + 0.5 * self.forward_cap[1] * v)
+        } else {
+            // A reverse-biased depletion region needs a nonnegative physical extent.
+            self.cap.iter().fold(Dual::cst(0.), |sum, &[c, p, m]| {
+                sum + depletion_charge(v, c.max(0.), p, m, 0.)
+            })
+        }
+    }
     pub(super) fn eval<const N: usize>(&self, v: Dual<N>, gmin: f64) -> (Dual<N>, Dual<N>) {
         let bound = if self.mode != 0 && v.v > self.forward {
             Some(self.forward)
@@ -197,14 +207,6 @@ impl Junction {
         } else {
             self.exponential(v)
         };
-        let q = if v.v >= 0. {
-            v * (self.forward_cap[0] + 0.5 * self.forward_cap[1] * v)
-        } else {
-            // A reverse-biased depletion region needs a nonnegative physical extent.
-            self.cap.iter().fold(Dual::cst(0.), |sum, &[c, p, m]| {
-                sum + depletion_charge(v, c.max(0.), p, m, 0.)
-            })
-        };
         let mut total = current + gmin * v;
         for [amplitude, voltage, slope] in self.traps {
             if amplitude > 0. && slope > 0. {
@@ -218,6 +220,6 @@ impl Junction {
                 total += -amplitude * trap;
             }
         }
-        (total, q)
+        (total, self.charge(v))
     }
 }

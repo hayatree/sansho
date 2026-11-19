@@ -1,4 +1,4 @@
-//! Built-in silicon BSIM4 level-54 devices, stamped using four-terminal forward-mode AD.
+//! Built-in silicon BSIM4 level-54 devices, stamped using forward-mode AD.
 //! Provenance: original realization of the Berkeley BSIM4 4.8.2 technical manual,
 //! chapters 1–3, 5–7, 11–13 and Appendix A. See docs/bsim4.md for selector coverage.
 
@@ -9,6 +9,8 @@ mod gate;
 mod junction;
 mod layout;
 mod params;
+mod profile;
+mod terminal_stamp;
 #[cfg(test)]
 mod tests;
 use crate::{
@@ -29,14 +31,14 @@ type D = Dual<4>;
 const EPS0: f64 = 8.8541878128e-12;
 const EPS_SI: f64 = 11.7 * EPS0;
 
-fn floor(x: D, lower: f64) -> D {
-    if x.v < lower { D::cst(lower) } else { x }
+fn floor<const N: usize>(x: Dual<N>, lower: f64) -> Dual<N> {
+    if x.v < lower { Dual::cst(lower) } else { x }
 }
-fn theta(x: D) -> D {
+fn theta<const N: usize>(x: Dual<N>) -> Dual<N> {
     let e = (-floor(x, 1e-8)).exp();
     e / (1. - e).sq()
 }
-fn softplus(x: D) -> D {
+fn softplus<const N: usize>(x: Dual<N>) -> Dual<N> {
     if x.v > 35. {
         x
     } else if x.v < -35. {
@@ -46,7 +48,7 @@ fn softplus(x: D) -> D {
     }
 }
 /// Rationalized lower root of the smoothing quadratic (5.33), exact zero at x=0.
-fn smooth_min(limit: D, x: D, delta: f64) -> D {
+fn smooth_min<const N: usize>(limit: Dual<N>, x: Dual<N>, delta: f64) -> Dual<N> {
     let diff = limit - x - delta;
     2. * limit * x / (limit + x + delta + (diff.sq() + 4. * delta * limit).sqrt())
 }
@@ -82,6 +84,7 @@ struct CoreStamp {
 #[derive(Debug, Default)]
 pub struct CoreCache {
     instances: Vec<Option<CoreStamp>>,
+    terminal: terminal_stamp::Cache,
     shared: Vec<Option<(usize, CoreStamp)>>,
 }
 impl CoreCache {
@@ -105,8 +108,16 @@ impl CoreCache {
         {
             *entry = None;
         }
+        if entry.is_some()
+            && let Some(p) = &mut self.terminal.profile
+        {
+            p.shared += 1;
+        }
         &entry
             .get_or_insert_with(|| {
+                if let Some(p) = &mut self.terminal.profile {
+                    p.evaluation::<4>(&model.size, lin);
+                }
                 let (f, q, _) = model.size.terminals(lin);
                 (identity, CoreStamp { lin, f, q })
             })
@@ -118,6 +129,7 @@ impl CoreCache {
 #[derive(Debug, Default)]
 pub struct Bsim4s {
     instances: Vec<Instance>,
+    compact: Option<terminal_stamp::Batch>,
 }
 
 /// Elaboration inputs for one transistor. Temperatures in degrees Celsius.
@@ -219,9 +231,18 @@ impl PreparedModel {
             Size::new(p, b.instance, b.geometry, b.polarity, b.temp, b.tnom).map_err(&error)?;
         layout::stress(&mut size, &b, b.scale).map_err(&error)?;
         let network = Network::new(&b, &mut size).map_err(&error)?;
+        size.basic_transport = size.mobmod == 0
+            && size.p.a1 == 0.
+            && size.p.a2 == 1.
+            && size.p.dwg == 0.
+            && size.p.dwb == 0.
+            && size.p.ud == 0.
+            && size.overshoot == 0.
+            && size.ballistic_speed == 0.;
+        size.zero_body = Some(size.body_bias(Dual::<1>::var(0., 0)));
         let z = D::cst(0.);
         size.cv.flat_zero =
-            size.channel(z, z, z).2.threshold.v - size.phi - size.k1 * size.phi.sqrt();
+            size.channel(z, z, z).2.cv.threshold.v - size.phi - size.k1 * size.phi.sqrt();
         if !size.cv.flat_zero.is_finite() {
             return Err(error("non-finite zero-bias threshold".into()));
         }
@@ -269,14 +290,48 @@ impl PreparedModel {
 }
 
 impl Size {
-    fn terminals(&self, lin: [f64; 4]) -> ([D; 4], [D; 4], channel::Bias) {
-        let [d, g, s, b] = std::array::from_fn(|k| D::var(lin[k], k) * self.sign);
+    fn limit_intrinsic(
+        &self,
+        mut bias: [f64; 3],
+        prev: &[f64; 5],
+        ctx: &EvalCtx,
+        off: bool,
+    ) -> ([f64; 3], bool) {
+        if ctx.init_junctions {
+            bias = if off {
+                [0.; 3]
+            } else {
+                [self.vth0 + 0.1, 0.1, -0.1]
+            };
+        } else if ctx.limit {
+            let (vg, lg) = limit_step(bias[0], prev[0], prev[0] - self.vth0);
+            let (vd, ld) = limit_step(bias[1], prev[1], prev[1]);
+            let limit = |v, old, side: usize| {
+                let j = &self.junction[side];
+                limit_junction(v, old, j.nvt, j.vcrit)
+            };
+            let (vb, lb) = limit(bias[2], prev[2], 1);
+            let (vbd, lbd) = limit(vb - vd, prev[2] - prev[1], 0);
+            bias = [vg, if lbd { vb - vbd } else { vd }, vb];
+            return (bias, lg || ld || lb || lbd);
+        }
+        (bias, false)
+    }
+    fn terminals(&self, lin: [f64; 4]) -> ([D; 4], [D; 4], channel::Bias<4>) {
+        self.terminal_equations(std::array::from_fn(|k| D::var(lin[k], k)))
+    }
+
+    fn terminal_equations<const N: usize>(
+        &self,
+        v: [Dual<N>; 4],
+    ) -> ([Dual<N>; 4], [Dual<N>; 4], channel::Bias<N>) {
+        let [d, g, s, b] = v.map(|x| x * self.sign);
         let reverse = d.v < s.v;
         let (drain, source) = if reverse { (s, d) } else { (d, s) };
         let (ids, sub, bias) = self.channel(g - source, drain - source, b - source);
         let [igd, igs, igb] = self.tunneling(&bias);
         let mut f = [ids + sub - igd, igd + igs + igb, -ids - igs, -sub - igb];
-        let mut q = self.charges(&bias);
+        let mut q = self.charges(&bias.cv);
         if reverse {
             f.swap(0, 2);
             q.swap(0, 2);
@@ -285,7 +340,11 @@ impl Size {
             let leak = self.gidl(
                 side,
                 terminal - other,
-                self.gate_voltage(g - other),
+                if (!reverse && side == 0) || (reverse && side == 1) {
+                    bias.cv.gate
+                } else {
+                    self.gate_voltage(g - other)
+                },
                 terminal - b,
             );
             let ig = self.edge_tunneling(g - terminal, side);
@@ -372,8 +431,17 @@ impl DeviceGroup for Bsim4s {
         }
     }
     fn setup(&mut self, b: &mut StampBuilder<'_>) -> Result<(), Diagnostic> {
+        let compact = self.instances.iter().all(|d| d.nodes == d.inner);
         for d in &mut self.instances {
             d.at = b.counts();
+            if compact {
+                b.core(&d.inner);
+                // Preserve each component of the LTE test before nodal cancellation.
+                for _ in 0..12 {
+                    b.tracked_q(None);
+                }
+                continue;
+            }
             b.charge_core(&d.inner);
             let overlap = d.overlap_nodes();
             for r in overlap {
@@ -411,10 +479,15 @@ impl DeviceGroup for Bsim4s {
                 b.core(&[d1, g, s, body, d.middle]);
             }
         }
+        self.compact = compact.then(|| terminal_stamp::Batch::new(&self.instances));
         Ok(())
     }
     fn eval(&self, ctx: &EvalCtx, x: &[f64], state: StateRef<'_>, out: &mut Slots) {
-        self.evaluate(ctx, x, state, out, None, 0.);
+        if self.compact.is_some() {
+            self.eval_cached(ctx, x, state, out, &mut CoreCache::default(), 0.);
+        } else {
+            self.evaluate(ctx, x, state, out, None, 0.);
+        }
     }
 
     fn eval_cached(
@@ -426,11 +499,30 @@ impl DeviceGroup for Bsim4s {
         cache: &mut CoreCache,
         tolerance: f64,
     ) {
+        if let Some(batch) = &self.compact {
+            batch.eval_terminals(ctx, x, state, out, &mut cache.terminal, tolerance);
+            return;
+        }
+        if let Some(p) = &mut cache.terminal.profile {
+            p.visits += self.instances.len() as u64;
+        }
         cache.instances.resize_with(self.len(), || None);
         cache
             .shared
             .resize_with(1 << CoreCache::INDEX_BITS, || None);
         self.evaluate(ctx, x, state, out, Some(cache), tolerance);
+    }
+    fn sample_charges(
+        &self,
+        x: &[f64],
+        state: &mut StateRef<'_>,
+        out: &mut Slots,
+        cache: &mut CoreCache,
+    ) -> bool {
+        if let Some(batch) = &self.compact {
+            batch.sample_terminals(x, state, out, &mut cache.terminal);
+        }
+        self.compact.is_some()
     }
 }
 
@@ -453,25 +545,13 @@ impl Bsim4s {
             let m = &dev.model.size;
             let act = dev.inner.map(|n| volt(x, n));
             let [d, g, s, b] = act;
-            let mut bias = [g - s, d - s, b - s].map(|v| m.sign * v);
-            if ctx.init_junctions {
-                bias = if dev.off {
-                    [0.; 3]
-                } else {
-                    [m.vth0 + 0.1, 0.1, -0.1]
-                };
-            } else if ctx.limit {
-                let (vg, lg) = limit_step(bias[0], prev[0], prev[0] - m.vth0);
-                let (vd, ld) = limit_step(bias[1], prev[1], prev[1]);
-                let limit = |v, old, side: usize| {
-                    let j = &m.junction[side];
-                    limit_junction(v, old, j.nvt, j.vcrit)
-                };
-                let (vb, lb) = limit(bias[2], prev[2], 1);
-                let (vbd, lbd) = limit(vb - vd, prev[2] - prev[1], 0);
-                bias = [vg, if lbd { vb - vbd } else { vd }, vb];
-                out.noncon |= lg || ld || lb || lbd;
-            }
+            let (bias, limited) = m.limit_intrinsic(
+                [g - s, d - s, b - s].map(|v| m.sign * v),
+                prev,
+                ctx,
+                dev.off,
+            );
+            out.noncon |= limited;
             prev[..3].copy_from_slice(&bias);
             let lin = [
                 s + m.sign * bias[1],
@@ -496,6 +576,11 @@ impl Bsim4s {
                                 .all(|(old, v)| (old - v).abs() <= tolerance))
                 });
                 if let Some(stamp) = reusable {
+                    if stamp.lin.map(f64::to_bits) != lin.map(f64::to_bits)
+                        && let Some(p) = &mut cache.terminal.profile
+                    {
+                        p.approximate += 1;
+                    }
                     out.core(&mut at, &stamp.f, &stamp.q, &act, &stamp.lin);
                 } else {
                     let stamp = cache.exact(&dev.model, lin).clone();
@@ -504,6 +589,12 @@ impl Bsim4s {
                 }
                 None
             } else {
+                if let Some(p) = cache
+                    .as_deref_mut()
+                    .and_then(|c| c.terminal.profile.as_mut())
+                {
+                    p.evaluation::<4>(m, lin);
+                }
                 let (f, q, bias) = m.terminals(lin);
                 out.core(&mut at, &f, &q, &act, &lin);
                 Some(bias)

@@ -1,7 +1,8 @@
 //! Quasi-static terminal charge in the channel frame and overlap charge.
 //! Provenance: Berkeley BSIM4 4.8.2 technical manual, §§7.2–7.5.
 
-use super::{D, EPS_SI, Size, channel::Bias, floor, smooth_min, softplus};
+use super::{EPS_SI, Size, channel::CvBias, floor, smooth_min, softplus};
+use crate::dual::Dual;
 use crate::{ModelParams, junction::safe_exp};
 
 #[derive(Debug)]
@@ -47,7 +48,7 @@ impl ChargeModel {
     }
 }
 impl Size {
-    pub(super) fn overlap_charge(&self, v: D, side: usize) -> D {
+    pub(super) fn overlap_charge<const N: usize>(&self, v: Dual<N>, side: usize) -> Dual<N> {
         let q = self.overlap[side] * v;
         if self.cv.mode == 0 {
             return q;
@@ -58,9 +59,9 @@ impl Size {
         q + self.cv.edge[side] * (v - edge - 0.5 * k * ((1. - 4. * edge / k).sqrt() - 1.))
     }
 
-    pub(super) fn charges(&self, b: &Bias) -> [D; 4] {
+    pub(super) fn charges<const N: usize>(&self, b: &CvBias<N>) -> [Dual<N>; 4] {
         let cv = &self.cv;
-        let zero = D::cst(0.);
+        let zero = Dual::cst(0.);
         if cv.xpart < 0. {
             return [zero; 4];
         }
@@ -77,7 +78,11 @@ impl Size {
                 };
                 return [zero, qg, zero, -qg];
             }
-            (over, -c * self.k1ox * (self.phi - b.bulk).sqrt(), D::cst(c))
+            (
+                over,
+                -c * self.k1ox * (self.phi - b.bulk).sqrt(),
+                Dual::cst(c),
+            )
         } else {
             let nvt = b.swing * self.vt * cv.noff;
             let vgst = b.gate - b.threshold;
@@ -96,12 +101,12 @@ impl Size {
             let sub0 = depletion(b.gate - flat_eff - b.bulk - raw, self.k1ox);
             if cv.mode == 1 {
                 let cap = cv.area * self.coxe;
-                (raw, cap * (drop - sub0), D::cst(cap))
+                (raw, cap * (drop - sub0), Dual::cst(cap))
             } else {
                 let xmax = self.xdep0 * (self.vt / (2. * self.phi)).sqrt() / 3.;
                 let field = (b.gate - b.bulk - flat) / (1e8 * self.toxp);
                 let depth = smooth_min(
-                    D::cst(xmax),
+                    Dual::cst(xmax),
                     xmax * safe_exp(self.centroid_field * field),
                     1e-3 * self.toxe,
                 );
@@ -146,11 +151,11 @@ impl Size {
     }
 }
 
-pub(super) fn depletion(arg: D, k1: f64) -> D {
+pub(super) fn depletion<const N: usize>(arg: Dual<N>, k1: f64) -> Dual<N> {
     if arg.v < 0. {
         arg
     } else if k1 == 0. {
-        D::cst(0.)
+        Dual::cst(0.)
     } else {
         k1 * ((arg + 0.25 * k1 * k1).sqrt() - 0.5 * k1)
     }

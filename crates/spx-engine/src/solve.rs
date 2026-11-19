@@ -55,6 +55,10 @@ pub(crate) struct Workspace {
     assembly_time: Duration,
     symbolic_time: Duration,
     full_factors: usize,
+    repivot_time: Duration,
+    refactor_time: Duration,
+    gathered: u64,
+    stamp_sizes: [u64; 3],
     refactors: usize,
     solve_time: Duration,
     last_linear_jac: Option<Vec<f64>>,
@@ -98,7 +102,22 @@ impl Drop for Workspace {
                     duration.as_secs_f64() * 1000.
                 );
             }
+            let _ = writeln!(
+                err,
+                "spx-lu-ns {} {}",
+                self.repivot_time.as_nanos(),
+                self.refactor_time.as_nanos()
+            );
+            let _ = writeln!(err, "spx-assembly-stamps {}", self.gathered);
+            if self.gathered > 0 {
+                let _ = writeln!(
+                    err,
+                    "spx-assembly-ns-per-stamp {:.3}",
+                    self.assembly_time.as_secs_f64() * 1e9 / self.gathered as f64
+                );
+            }
             let _ = writeln!(err, "spx-workers {}", rayon::current_num_threads());
+            let _ = spx_devices::bsim4::CoreCache::report_profile(&self.core_cache, &mut err);
             let _ = writeln!(err, "spx-identical {}", self.identical_factors);
             let _ = writeln!(err, "spx-factors {} {}", self.full_factors, self.refactors);
         }
@@ -122,12 +141,23 @@ impl Workspace {
     pub(crate) fn new(ckt: &Circuit) -> Self {
         let n = ckt.dim();
         let nnz = ckt.pattern.nnz();
+        let profile_bsim =
+            spx_diag::profile_enabled() && std::env::var_os("SPX_PROFILE_BSIM4").is_some();
         Self {
             timed: spx_diag::profile_enabled() || spx_diag::profile_devices(),
             detailed: spx_diag::profile_devices(),
             assembly_time: Duration::ZERO,
             symbolic_time: Duration::ZERO,
             full_factors: 0,
+            repivot_time: Duration::ZERO,
+            refactor_time: Duration::ZERO,
+            gathered: 0,
+            stamp_sizes: {
+                let count = |map: &Gather| map.contributions;
+                let gm = &ckt.gather;
+                let dc = count(&gm.g) + count(&gm.f) + count(&gm.b);
+                [dc, dc + count(&gm.c) + count(&gm.q), count(&gm.q)]
+            },
             refactors: 0,
             solve_time: Duration::ZERO,
             last_linear_jac: (ckt.linear && n >= 2048).then(Vec::new),
@@ -138,7 +168,17 @@ impl Workspace {
             newton_calls: 0,
             newton_iterations: 0,
             slots: ckt.new_slots(),
-            core_cache: (0..ckt.groups.len()).map(|_| Default::default()).collect(),
+            core_cache: ckt
+                .groups
+                .iter()
+                .map(|g| {
+                    let mut c = spx_devices::bsim4::CoreCache::default();
+                    if profile_bsim && g.type_name() == "bsim4" {
+                        c.enable_profile();
+                    }
+                    c
+                })
+                .collect(),
             asm: Assembled {
                 g: vec![0.0; nnz],
                 c: vec![0.0; nnz],
@@ -273,14 +313,25 @@ fn assemble_for(
     request: Assembly,
 ) {
     ws.assemblies += 1;
+    if ws.timed {
+        ws.gathered += ws.stamp_sizes[match request {
+            Assembly::Resistive => 0,
+            Assembly::Charges(_) => 2,
+            _ => 1,
+        }];
+    }
     let par = ckt.parallel && rayon::current_num_threads() > 1;
     let eval = |((group, s), ((current, accepted), cache)): EvalItem<'_>| {
         s.noncon = false;
         s.error = None;
-        let state = StateRef { accepted, current };
+        let mut state = StateRef { accepted, current };
+        if matches!(request, Assembly::Charges(_)) && group.sample_charges(x, &mut state, s, cache)
+        {
+            return;
+        }
         if let Assembly::Charges(Some(node)) | Assembly::Transient(Some(node)) = request {
             group.eval_fixed_voltage(ctx, x, state, s, node);
-        } else if ckt.dim() >= 256 || opts.bypass {
+        } else if ckt.dim() >= 256 || opts.bypass || group.type_name() == "bsim4" {
             group.eval_cached(
                 ctx,
                 x,
@@ -378,10 +429,7 @@ fn gather(dst: &mut [f64], map: &Gather, slots: &[Slots], pick: fn(&Slots) -> &[
     let Some((ptr, src)) = map.by_destination.as_ref().filter(|_| par) else {
         dst.fill(0.);
         for (slots, group) in slots.iter().zip(&map.by_group) {
-            let values = pick(slots);
-            for &(k, d) in group {
-                dst[d] += values[k];
-            }
+            group.sum(pick(slots), dst);
         }
         return;
     };
@@ -556,7 +604,13 @@ pub(crate) fn newton(
                 }
             }
             if let Some(t) = lu_start {
-                ws.factor_time += t.elapsed();
+                let elapsed = t.elapsed();
+                ws.factor_time += elapsed;
+                if !matches!(factor, Ok(true)) {
+                    ws.repivot_time += elapsed;
+                } else {
+                    ws.refactor_time += elapsed;
+                }
             }
             match factor {
                 Ok(_) => {}

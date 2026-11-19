@@ -545,6 +545,18 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
         self.eval(ctx, x, state, out);
     }
 
+    /// Optionally sample exact transient charges and advance limiter history at an
+    /// unlimited solution. Return false to request full device evaluation.
+    fn sample_charges(
+        &self,
+        _x: &[f64],
+        _state: &mut StateRef<'_>,
+        _out: &mut Slots,
+        _cache: &mut bsim4::CoreCache,
+    ) -> bool {
+        false
+    }
+
     /// Evaluate a Newton assembly whose specified voltage increment is exactly zero.
     fn eval_fixed_voltage(
         &self,
