@@ -22,6 +22,12 @@ use crate::{
 /// Diode model parameters.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiodeModel {
+    /// Prepared operating temperature in kelvin.
+    pub temperature: Option<f64>,
+    pub tnom: Option<f64>,
+    pub eg: f64,
+    pub xti: f64,
+
     /// Saturation current (A).
     pub is: f64,
     /// Emission coefficient.
@@ -45,9 +51,23 @@ pub struct DiodeModel {
 }
 
 impl DiodeModel {
+    pub fn at_temperature(&mut self, t: crate::temperature::Temperature) {
+        self.temperature = Some(t.kelvin);
+        if t.kelvin == t.nominal {
+            return;
+        }
+        self.is *= (t.saturation(self.eg, self.xti) / self.n).exp();
+        self.cjo *= t.capacitance(self.vj, self.m);
+        self.vj = t.potential(self.vj);
+    }
     /// Build from `.model` parameters. Returns the model and the names of ignored parameters.
     pub fn from_params(p: &ModelParams) -> (Self, Vec<String>) {
         let m = Self {
+            temperature: None,
+            tnom: p.opt(&["tnom"]),
+            eg: p.get("eg", 1.11),
+            xti: p.get("xti", 3.0),
+
             is: p.get("is", 1e-14),
             n: p.get("n", 1.0),
             rs: p.get("rs", 0.0),
@@ -59,9 +79,7 @@ impl DiodeModel {
             bv: p.get("bv", f64::INFINITY),
             ibv: p.get("ibv", 1e-3),
         };
-        // Temperature and noise parameters have no effect while TEMP = TNOM and no noise
-        // analysis exists.
-        p.accept(&["level", "eg", "xti", "kf", "af", "tnom"]);
+        p.accept(&["level", "kf", "af"]);
         (m, p.unused())
     }
 }
@@ -127,9 +145,9 @@ impl DeviceGroup for Diodes {
         Ok(())
     }
     fn eval(&self, ctx: &EvalCtx, x: &[f64], st: StateRef<'_>, out: &mut Slots) {
-        let vt = thermal_voltage(ctx.temp);
         for i in 0..self.len() {
             let m = &self.model[i];
+            let vt = thermal_voltage(m.temperature.unwrap_or(ctx.temp));
             let area = self.area[i];
             let mut at = self.at[i];
             if m.rs > 0.0 {

@@ -14,8 +14,7 @@
 //! `TFeff = TF·(1 + XTF·(Ibf/(Ibf+ITF))²·exp(Vbc/(1.44·VTF)))`.
 //!
 //! Not modelled yet (reported as ignored parameters): current-dependent base resistance
-//! (`IRB`, `RBM`), excess phase (`PTF`), split base–collector capacitance (`XCJC` < 1),
-//! temperature dependence.
+//! (`IRB`, `RBM`), excess phase (`PTF`) and split base–collector capacitance (`XCJC` < 1).
 //!
 //! Provenance: original implementation of the model equations published in H. K. Gummel &
 //! H. C. Poon, "An integral charge control model of bipolar transistors", Bell Syst. Tech. J.
@@ -36,6 +35,13 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 #[allow(missing_docs)]
 pub struct BjtModel {
+    /// Prepared operating temperature in kelvin.
+    pub temperature: Option<f64>,
+    pub tnom: Option<f64>,
+    pub eg: f64,
+    pub xti: f64,
+    pub xtb: f64,
+
     /// +1 for NPN, −1 for PNP.
     pub polarity: f64,
     pub is: f64,
@@ -72,12 +78,39 @@ pub struct BjtModel {
 }
 
 impl BjtModel {
+    pub fn at_temperature(&mut self, t: crate::temperature::Temperature) {
+        self.temperature = Some(t.kelvin);
+        if t.kelvin == t.nominal {
+            return;
+        }
+        let log_is = t.saturation(self.eg, self.xti);
+        let beta = t.ratio().powf(self.xtb);
+        self.is *= log_is.exp();
+        self.bf *= beta;
+        self.br *= beta;
+        self.ise *= (log_is / self.ne).exp() / beta;
+        self.isc *= (log_is / self.nc).exp() / beta;
+        for (v, c, m) in [
+            (&mut self.vje, &mut self.cje, self.mje),
+            (&mut self.vjc, &mut self.cjc, self.mjc),
+            (&mut self.vjs, &mut self.cjs, self.mjs),
+        ] {
+            *c *= t.capacitance(*v, m);
+            *v = t.potential(*v);
+        }
+    }
     /// Build from `.model` parameters (`polarity` from the model type). Returns the model and
     /// the names of ignored parameters.
     pub fn from_params(p: &ModelParams, polarity: f64) -> (Self, Vec<String>) {
         let inf = f64::INFINITY;
         let nz = |v: f64| if v == 0.0 { inf } else { v };
         let m = Self {
+            temperature: None,
+            tnom: p.opt(&["tnom"]),
+            eg: p.get("eg", 1.11),
+            xti: p.get("xti", 3.0),
+            xtb: p.get("xtb", 0.0),
+
             polarity,
             is: p.get("is", 1e-16),
             bf: p.get("bf", 100.0),
@@ -111,7 +144,7 @@ impl BjtModel {
             mjs: p.opt(&["mjs", "ms"]).unwrap_or(0.0),
             fc: p.get("fc", 0.5),
         };
-        p.accept(&["level", "eg", "xti", "xtb", "kf", "af", "tnom"]);
+        p.accept(&["level", "kf", "af"]);
         let mut ignored = p.unused();
         if p.opt(&["xcjc"]).is_some_and(|v| v != 1.0) {
             ignored.push("xcjc".into());
@@ -189,9 +222,9 @@ impl DeviceGroup for Bjts {
         Ok(())
     }
     fn eval(&self, ctx: &EvalCtx, x: &[f64], st: StateRef<'_>, out: &mut Slots) {
-        let vt = thermal_voltage(ctx.temp);
         for i in 0..self.len() {
             let m = &self.model[i];
+            let vt = thermal_voltage(m.temperature.unwrap_or(ctx.temp));
             let area = self.area[i];
             let mut at = self.at[i];
             for (k, r) in [m.rc, m.rb, m.re].into_iter().enumerate() {

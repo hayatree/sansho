@@ -125,3 +125,24 @@ With ngspice installed locally, `ngspice -b "${deck}_ngspice.cir"` runs the same
 | `sky_mirror` | Current entering the positive terminal of Vsense at 1 V | The diode-connected reference device sets the gate voltage at 20 µA. The output device has an independent local model draw. Supply current has negative sign. |
 
 The two simulators use independent streams. The mean tolerance is four estimated standard errors of the difference, plus an optional preselected model allowance, `--model-rtol R`, times the absolute reference mean (default zero). The sample standard deviation ratio uses the central 99.9% F interval for two independent normal samples. At N=200 the allowed ratio is 0.79088 to 1.26442. This is an approximate sampling check for nonlinear circuit responses. The script rejects missing rows, failed measurements and a zero-spread reference.
+
+## R1 device and temperature decks
+
+| Deck in `verify/decks` | Comparison |
+|---|---|
+| `transformer_load.cir` | Loaded winding voltages and currents in AC and transient analysis |
+| `behavior_multiplier.cir` | Parameterized two-input multiplication under a DC sweep and two sinusoidal inputs |
+| `behavior_limiter.cir` | DC soft clipping, its incremental AC transconductance, and an E table/G value load away from table breakpoints |
+| `behavior_table_corners.cir` | KNOWN: E table with interior breakpoints; ngspice smooths the corners, spx interpolates linearly |
+| `switch_hold.cir` | With a 10 ns maximum step, two hold capacitors sampled by voltage and current controls with corresponding hysteresis thresholds |
+| `junction_temperature.cir` | Diode forward drop and BJT gain over a −20 to 100 °C sweep with model TNOM |
+| `temperature_instances.cir` | Diode and BJT branch currents with absolute instance temperatures and offsets from a 55 °C ambient |
+| `mos_temperature.cir` | Body-biased MOS1 drain current as threshold and mobility vary with temperature |
+| `passive_ic.cir` | RC discharge and RL decay from capacitor-voltage and inductor-current initial conditions under UIC |
+| `mos_geometry_scale.cir` | AC gain and junction loading with lengths, perimeters and areas specified in scaled layout units |
+
+A new deck can carry `* spx-verify: pending-reference` while awaiting its
+first maintainer-generated raw file. Cached verification runs spx first and
+reports SKIP when that reference is absent. Once the reference exists it is
+compared normally. Remove the marker when publishing the reference so its
+subsequent absence is an error.

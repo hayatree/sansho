@@ -1,0 +1,8 @@
+Table-controlled source with interior breakpoints
+* Provenance: original circuit for rs-spice release-prep verification.
+* spx-verify: known-difference ngspice smooths E-source table breakpoints (XSPICE pwl input_domain); spx interpolates the table linearly
+Vin in 0 DC 0
+Etable command 0 table={v(in)} (-2,-0.6) (-0.5,-0.4) (0.5,0.4) (2,0.6)
+Rload command 0 1k
+.dc Vin -2 2 0.05
+.end

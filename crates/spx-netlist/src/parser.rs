@@ -335,6 +335,12 @@ impl Parser {
         let span = line.span();
         let name = head.to_string();
         let kind = match head.as_bytes().first() {
+            Some(b'k') => self.coupling(line),
+            Some(b's' | b'w') => self.switch(line),
+            Some(b'b') => self.behavioral(line),
+            Some(b'e' | b'g') if line.tokens.get(4).is_some_and(Token::is_eq) => {
+                self.behavioral(line)
+            }
             Some(b'r') => self.two_terminal(line, "R", "r"),
             Some(b'c') => self.two_terminal(line, "C", "c"),
             Some(b'l') => self.two_terminal(line, "L", "l"),
@@ -367,13 +373,126 @@ impl Parser {
         }
     }
 
+    fn coupling(&mut self, line: &Line) -> Option<ElementKind> {
+        let t = self.need(line, 4, "Kname L1 L2 coefficient")?;
+        self.no_extra(t, 4);
+        let k = self.number(&t[3], "coupling coefficient")?;
+        if !(-1.0..=1.0).contains(&k) || t[1].lower() == t[2].lower() {
+            self.err(
+                "E-COUPLING-K",
+                "coupling needs distinct windings and a coefficient between -1 and 1",
+                line.span(),
+            );
+            return None;
+        }
+        Some(ElementKind::Coupling {
+            first: t[1].lower(),
+            second: t[2].lower(),
+            k,
+        })
+    }
+
+    fn switch(&mut self, line: &Line) -> Option<ElementKind> {
+        let voltage = line.tokens[0].lower().starts_with('s');
+        let count = if voltage { 6 } else { 5 };
+        let t = self.need(
+            line,
+            count,
+            "Sname p n cp cn model [on|off] or Wname p n Vcontrol model [on|off]",
+        )?;
+        let control = if voltage {
+            crate::SwitchControl::Voltage(node_name(&t[3]), node_name(&t[4]))
+        } else {
+            crate::SwitchControl::Current(t[3].lower())
+        };
+        let on = match t.get(count).map(Token::lower).as_deref() {
+            Some("on") => true,
+            None | Some("off") => false,
+            _ => {
+                self.err("E-SWITCH-MODEL", "expected on or off", t[count].span);
+                return None;
+            }
+        };
+        self.no_extra(t, count + 1);
+        Some(ElementKind::Switch {
+            p: node_name(&t[1]),
+            n: node_name(&t[2]),
+            control,
+            model: t[count - 1].lower(),
+            on,
+        })
+    }
+
+    fn behavioral(&mut self, line: &Line) -> Option<ElementKind> {
+        let t = self.need(line, 6, "Bname p n V={expression} or I={expression}")?;
+        let name = t[0].lower();
+        let key = t[3].lower();
+        let voltage = match (name.as_bytes()[0], key.as_str()) {
+            (b'b', "v") | (b'e', "value" | "table") => true,
+            (b'b', "i") | (b'g', "value" | "table") => false,
+            _ => {
+                self.err(
+                    "E-BSOURCE-EXPR",
+                    "invalid behavioural source specification",
+                    line.span(),
+                );
+                return None;
+            }
+        };
+        if !t[4].is_eq() {
+            self.err(
+                "E-BSOURCE-EXPR",
+                "expected '=' before expression",
+                line.span(),
+            );
+            return None;
+        }
+        let mut table = vec![];
+        let expr = crate::expr::strip_delims(&t[5].text).to_owned();
+        if key == "table" {
+            let mut prev = f64::NEG_INFINITY;
+            if t.len() < 8 || !(t.len() - 6).is_multiple_of(2) {
+                self.err(
+                    "E-BSOURCE-EXPR",
+                    "expected table coordinate pairs",
+                    line.span(),
+                );
+                return None;
+            }
+            for pair in t[6..].as_chunks::<2>().0 {
+                let x = self.number(&pair[0], "table coordinate")?;
+                if x <= prev {
+                    self.err(
+                        "E-BSOURCE-EXPR",
+                        "table coordinates must increase",
+                        pair[0].span,
+                    );
+                    return None;
+                }
+                prev = x;
+                table.push((x, self.number(&pair[1], "table value")?));
+            }
+        } else {
+            self.no_extra(t, 6);
+        }
+        Some(ElementKind::Behavioral {
+            p: node_name(&t[1]),
+            n: node_name(&t[2]),
+            voltage,
+            expr,
+            table,
+        })
+    }
+
     /// `Xname n+ n- value [key=value ...]` or `Xname n+ n- key=value ...`
     fn two_terminal(&mut self, line: &Line, letter: &str, key: &str) -> Option<ElementKind> {
         let usage = format!("{letter}name n+ n- value");
         let t = self.need(line, 3, &usage)?;
         let (p, n) = (node_name(&t[1]), node_name(&t[2]));
         let mut value = None;
+        let mut model = None;
         let mut mult = 1.;
+        let mut params = vec![];
         let mut i = 3;
         while i < t.len() {
             if t.get(i + 1).is_some_and(Token::is_eq) {
@@ -387,18 +506,20 @@ impl Parser {
                     return None;
                 };
                 let v = self.number(vt, &k)?;
-                if k == key {
+                if k == "tc" {
+                    params.push(("tc1".into(), v));
+                    if let Some(second) = t.get(i + 3).and_then(|t| parse_number(&t.text)) {
+                        params.push(("tc2".into(), second));
+                        i += 1;
+                    }
+                } else if k == key {
                     value = Some(v);
                 } else if matches!(k.as_str(), "m" | "mult") {
                     mult = v;
-                } else if k == "ic" {
-                    self.diags.push(
-                        Diagnostic::warning(
-                            "W-PARSE-IGNORED",
-                            "initial conditions (ic=) are not supported yet and were ignored",
-                        )
-                        .with_span(t[i].span),
-                    );
+                } else if (k == "ic" && letter != "R")
+                    || matches!(k.as_str(), "tc1" | "tc2" | "temp" | "dtemp")
+                {
+                    params.push((k, v));
                 } else {
                     self.diags.push(
                         Diagnostic::warning(
@@ -409,7 +530,15 @@ impl Parser {
                     );
                 }
                 i += 3;
-            } else if value.is_none() && i == 3 {
+            } else if model.is_none()
+                && parse_number(&t[i].text).is_none()
+                && (value.is_some()
+                    || t.get(i + 1)
+                        .is_some_and(|t| parse_number(&t.text).is_some()))
+            {
+                model = Some(t[i].lower());
+                i += 1;
+            } else if value.is_none() {
                 let v = self.number(&t[i], "the element value")?;
                 self.lint_value(letter, &t[i], v);
                 value = Some(v);
@@ -453,9 +582,27 @@ impl Parser {
             return None;
         }
         Some(match letter {
-            "R" => ElementKind::Resistor { p, n, value },
-            "C" => ElementKind::Capacitor { p, n, value },
-            _ => ElementKind::Inductor { p, n, value },
+            "R" => ElementKind::Resistor {
+                p,
+                n,
+                value,
+                model,
+                params,
+            },
+            "C" => ElementKind::Capacitor {
+                p,
+                n,
+                value,
+                model,
+                params,
+            },
+            _ => ElementKind::Inductor {
+                p,
+                n,
+                value,
+                model,
+                params,
+            },
         })
     }
 
@@ -976,7 +1123,24 @@ impl Parser {
         let mut shared: HashMap<_, Vec<(String, f64)>> = HashMap::new();
         let mut canonical = HashMap::new();
         'element: for e in &mut self.elements {
+            let mut empty = Vec::new();
             let (model, params) = match &mut e.kind {
+                ElementKind::Resistor {
+                    model: Some(model),
+                    params,
+                    ..
+                }
+                | ElementKind::Inductor {
+                    model: Some(model),
+                    params,
+                    ..
+                }
+                | ElementKind::Capacitor {
+                    model: Some(model),
+                    params,
+                    ..
+                } => (model, params),
+                ElementKind::Switch { model, .. } => (model, &mut empty),
                 ElementKind::Mosfet { model, params, .. }
                 | ElementKind::Diode { model, params, .. }
                 | ElementKind::Bjt { model, params, .. }
@@ -1079,15 +1243,28 @@ impl Parser {
         for e in &self.elements {
             let Some(name) = e.kind.model() else { continue };
             let expected: &[&str] = match e.kind {
+                ElementKind::Switch {
+                    control: crate::SwitchControl::Voltage(..),
+                    ..
+                } => &["sw"],
+                ElementKind::Switch { .. } => &["csw"],
+                ElementKind::Resistor { .. } => &["r"],
+                ElementKind::Capacitor { .. } => &["c"],
+                ElementKind::Inductor { .. } => &["l"],
                 ElementKind::Diode { .. } => &["d"],
                 ElementKind::Bjt { .. } => &["npn", "pnp"],
                 ElementKind::Va { .. } => &[],
                 _ => &["nmos", "pmos"],
             };
+            let code = if matches!(e.kind, ElementKind::Switch { .. }) {
+                "E-SWITCH-MODEL"
+            } else {
+                "E-PARSE-MODEL"
+            };
             match self.model_names.get(name).map(|&i| &self.models[i]) {
                 None => errs.push(
                     Diagnostic::error(
-                        "E-PARSE-MODEL",
+                        code,
                         format!("`{}` references undefined model `{name}`", e.name),
                     )
                     .with_span(e.span),
@@ -1095,7 +1272,7 @@ impl Parser {
                 Some(m) if !expected.is_empty() && !expected.contains(&m.kind.as_str()) => errs
                     .push(
                         Diagnostic::error(
-                            "E-PARSE-MODEL",
+                            code,
                             format!(
                                 "`{}` needs a model of type {}, but `{name}` is of type `{}`",
                                 e.name,
@@ -1472,6 +1649,29 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passive_initial_values_and_geometry_scale_survive_export() {
+        let src = "initial conditions\nC1 a b 20p ic=-2.5\nL1 b 0 4u ic=7m\n.options scale=0.5u\n";
+        let nl = parse(src).unwrap();
+        let copy = parse(&crate::write(&nl)).unwrap();
+        assert_eq!(
+            nl.elements.iter().map(|e| &e.kind).collect::<Vec<_>>(),
+            copy.elements.iter().map(|e| &e.kind).collect::<Vec<_>>()
+        );
+        assert_eq!(copy.options[0].value, Some(0.5e-6));
+    }
+
+    #[test]
+    fn invalid_coupling_and_switch_models_have_card_spans() {
+        for (line, code) in [
+            ("Kbad Lp Ls -1.01", "E-COUPLING-K"),
+            ("Sbad p 0 s 0 wrong\n.model wrong csw", "E-SWITCH-MODEL"),
+        ] {
+            let ds = parse(&format!("bad card\n{line}\n")).unwrap_err();
+            assert!(ds.iter().any(|d| d.code == code && d.span.is_some()));
+        }
+    }
 
     #[test]
     fn parameterized_bins_bind_only_live_expressions() {

@@ -67,6 +67,32 @@ pub const CODES: &[CodeInfo] = &[
         "A conditional directive is misplaced, unbalanced or has an invalid expression.",
         &["Check the parameter scope and the nesting of .if, .elseif, .else and .endif."],
     ),
+    e(
+        "E-COUPLING-K",
+        "Invalid coupling coefficient",
+        "A mutual inductance requires distinct windings and a finite coefficient in [-1, 1].",
+        &["Check the winding names and the signed coupling coefficient."],
+    ),
+    e(
+        "E-COUPLING-L",
+        "Undefined or invalid winding",
+        "A coupled winding must reference an inductor with positive effective inductance.",
+        &["Use two existing L instance names in the same scope."],
+    ),
+    e(
+        "E-BSOURCE-EXPR",
+        "Invalid behavioural source expression",
+        "A source expression contains an invalid function, probe or non-finite value or derivative.",
+        &[
+            "Check the function arguments, node and branch names and the expression domain at the operating point.",
+        ],
+    ),
+    e(
+        "E-SWITCH-MODEL",
+        "Invalid switch model or control",
+        "A switch requires a matching SW or CSW model, positive resistances and a resolvable control.",
+        &["Check the model type and parameters and the controlling branch of a W element."],
+    ),
     // --- Verilog-A compiler ---
     CodeInfo {
         code: "I-VA-JIT",
@@ -306,8 +332,8 @@ pub const CODES: &[CodeInfo] = &[
     w(
         "W-MODEL-TEMP",
         "Temperature not applied",
-        "Temperature scaling of model parameters is not implemented yet.",
-        &["Simulate at TNOM (27 °C) until temperature scaling lands."],
+        "Older spx releases reported this warning when they left nominal semiconductor parameters unscaled.",
+        &["Use a release with temperature scaling for the selected model."],
     ),
     // --- Lint ---
     w(
@@ -383,8 +409,8 @@ pub const CODES: &[CodeInfo] = &[
     e(
         "E-DC-SOURCE",
         "Invalid DC sweep source",
-        "The `.dc` source is not an independent voltage or current source.",
-        &["Sweep a `V` or `I` element."],
+        "The sweep target must be an independent voltage or current source or TEMP.",
+        &["Sweep a `V` or `I` element or use `.dc temp start stop step`."],
     ),
     e(
         "E-SOLVE-SINGULAR",

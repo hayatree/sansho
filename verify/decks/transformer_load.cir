@@ -1,0 +1,11 @@
+Loaded transformer, dotted winding voltage and reflected impedance
+* Provenance: original circuit for rs-spice release-prep verification.
+Vin in 0 DC 0 AC 1 SIN(0 1 10k)
+Rp in p 20
+Lp p 0 2m
+Ls s 0 500u
+Kps Lp Ls 0.92
+Rload s 0 30
+.ac dec 6 100 100k
+.tran 1u 300u
+.end

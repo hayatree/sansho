@@ -38,6 +38,10 @@ const EPS_OX: f64 = 3.9 * 8.854_187_812_8e-12;
 #[derive(Debug, Clone, PartialEq)]
 #[allow(missing_docs)]
 pub struct Mos1Model {
+    /// Prepared operating temperature in kelvin.
+    pub temperature: Option<f64>,
+    pub tnom: Option<f64>,
+
     /// +1 for NMOS, −1 for PMOS.
     pub polarity: f64,
     pub vto: f64,
@@ -82,6 +86,26 @@ impl Mos1Model {
         self.cgbo *= copies;
         self.cox *= copies;
     }
+    pub fn at_temperature(&mut self, t: crate::temperature::Temperature) {
+        self.temperature = Some(t.kelvin);
+        if t.kelvin == t.nominal {
+            return;
+        }
+        let phi = t.potential(self.phi);
+        self.vto += -0.5 * t.gap_change()
+            + self.polarity
+                * (0.5 * (phi - self.phi) + self.gamma * (phi.sqrt() - self.phi.sqrt()));
+        self.phi = phi;
+        self.kp /= t.ratio().powf(1.5);
+        self.is *= t.mos_saturation();
+        self.js *= t.mos_saturation();
+        let bottom = t.capacitance(self.pb, self.mj);
+        self.cbd = self.cbd.map(|c| c * bottom);
+        self.cbs = self.cbs.map(|c| c * bottom);
+        self.cj *= bottom;
+        self.cjsw *= t.capacitance(self.pb, self.mjsw);
+        self.pb = t.potential(self.pb);
+    }
     /// Build from `.model` parameters. Returns the model and the names of ignored parameters.
     pub fn from_params(p: &ModelParams, polarity: f64) -> (Self, Vec<String>) {
         let cox = p.get("tox", 0.0);
@@ -91,6 +115,9 @@ impl Mos1Model {
             .opt(&["kp"])
             .unwrap_or(if cox > 0.0 { u0 * 1e-4 * cox } else { 2e-5 });
         let m = Self {
+            temperature: None,
+            tnom: p.opt(&["tnom"]),
+
             polarity,
             vto: p.opt(&["vto", "vt0"]).unwrap_or(0.0),
             kp,
@@ -389,6 +416,7 @@ impl Mos1s {
         for i in 0..self.len() {
             let m = &self.model[i];
             let dv = &self.derived[i];
+            let vt = thermal_voltage(m.temperature.unwrap_or(ctx.temp));
             let mut at = self.at[i];
             if !CHARGES_ONLY && m.rd > 0.0 {
                 out.resistor(
@@ -425,7 +453,9 @@ impl Mos1s {
                 let (vgs, l1) = limit_step(vgs_a, s[0], s[0] - vto);
                 let (vds, l2) = limit_step(vds_a, s[1], s[1]);
                 let peak = dv.iss.max(dv.isd);
-                let vc = if peak.to_bits() == common_is.to_bits() {
+                let vc = if m.temperature.is_none_or(|t| t == ctx.temp)
+                    && peak.to_bits() == common_is.to_bits()
+                {
                     common_vcrit
                 } else {
                     vcrit(peak, vt)

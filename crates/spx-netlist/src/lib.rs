@@ -20,7 +20,7 @@ mod statistics;
 mod writer;
 pub use statistics::Sample;
 
-pub use expr::{Expr, eval_const, parse_expr};
+pub use expr::{Expr, eval_const, parse_behavior, parse_expr};
 pub use lexer::{Lexed, Line, Token, lex, lex_source};
 pub use number::parse_number;
 pub use parser::{parse, parse_with, prepare_parameters};
@@ -116,6 +116,13 @@ pub struct Element {
     pub kind: ElementKind,
 }
 
+/// Control quantity of an ideal switch.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub enum SwitchControl {
+    Voltage(String, String),
+    Current(String),
+}
+
 /// Element types and their parameters. Node names are lower-cased; ground is [`GROUND`].
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -129,6 +136,29 @@ pub enum ElementKind {
         /// Numeric instance overrides.
         params: Vec<(String, f64)>,
     },
+    /// Symmetric mutual inductance, with dots at the first winding terminals.
+    Coupling {
+        first: String,
+        second: String,
+        k: f64,
+    },
+    /// SW or CSW controlled conductance.
+    Switch {
+        p: String,
+        n: String,
+        control: SwitchControl,
+        model: String,
+        on: bool,
+    },
+    /// Nonlinear controlled voltage or current source.
+    Behavioral {
+        p: String,
+        n: String,
+        voltage: bool,
+        expr: String,
+        /// Optional endpoint-clamped E/G lookup.
+        table: Vec<(f64, f64)>,
+    },
     /// `Rxxx n+ n- value`
     Resistor {
         /// Positive node.
@@ -137,6 +167,11 @@ pub enum ElementKind {
         n: String,
         /// Resistance in ohms.
         value: f64,
+        /// Optional passive model providing nominal temperature and coefficients.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        /// Instance parameters, including temperature coefficients and initial condition.
+        params: Vec<(String, f64)>,
     },
     /// `Cxxx n+ n- value`
     Capacitor {
@@ -146,6 +181,11 @@ pub enum ElementKind {
         n: String,
         /// Capacitance in farads.
         value: f64,
+        /// Optional passive model providing nominal temperature and coefficients.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        /// Instance parameters, including temperature coefficients and initial condition.
+        params: Vec<(String, f64)>,
     },
     /// `Lxxx n+ n- value`
     Inductor {
@@ -155,6 +195,11 @@ pub enum ElementKind {
         n: String,
         /// Inductance in henries.
         value: f64,
+        /// Optional passive model providing nominal temperature and coefficients.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        /// Instance parameters, including temperature coefficients and initial condition.
+        params: Vec<(String, f64)>,
     },
     /// `Vxxx n+ n- [DC v] [AC mag [phase]] [tran-fn]`
     VoltageSource {
@@ -276,7 +321,11 @@ impl ElementKind {
     /// Model name for semiconductor devices.
     pub fn model(&self) -> Option<&str> {
         match self {
-            Self::Va { model, .. }
+            Self::Resistor { model, .. }
+            | Self::Capacitor { model, .. }
+            | Self::Inductor { model, .. } => model.as_deref(),
+            Self::Switch { model, .. }
+            | Self::Va { model, .. }
             | Self::Diode { model, .. }
             | Self::Bjt { model, .. }
             | Self::Mosfet { model, .. } => Some(model),
@@ -305,6 +354,14 @@ impl ElementKind {
     /// Terminal nodes of the element (output and controlling nodes).
     pub fn nodes(&self) -> Vec<&str> {
         match self {
+            Self::Coupling { .. } => vec![],
+            Self::Switch {
+                p,
+                n,
+                control: SwitchControl::Voltage(a, b),
+                ..
+            } => vec![p, n, a, b],
+            Self::Switch { p, n, .. } | Self::Behavioral { p, n, .. } => vec![p, n],
             Self::Va { nodes, .. } => nodes.iter().map(String::as_str).collect(),
             Self::Resistor { p, n, .. }
             | Self::Capacitor { p, n, .. }

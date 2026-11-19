@@ -82,6 +82,7 @@ impl DeviceGroup for Resistors {
 /// Capacitors (`q = C (vp - vn)`).
 #[derive(Debug, Default)]
 pub struct Capacitors {
+    ic: Vec<Option<f64>>,
     names: Vec<String>,
     p: Vec<Node>,
     n: Vec<Node>,
@@ -91,6 +92,10 @@ pub struct Capacitors {
 impl Capacitors {
     /// Add an instance.
     pub fn push(&mut self, name: &str, p: Node, n: Node, c: f64) {
+        self.push_initial(name, p, n, c, None);
+    }
+    pub fn push_initial(&mut self, name: &str, p: Node, n: Node, c: f64, ic: Option<f64>) {
+        self.ic.push(ic);
         self.names.push(name.to_string());
         self.p.push(p);
         self.n.push(n);
@@ -101,6 +106,13 @@ impl Capacitors {
 impl DeviceGroup for Capacitors {
     fn instance_name(&self, index: usize) -> Option<&str> {
         self.names.get(index).map(String::as_str)
+    }
+    fn initial_values(&self, _: &mut [f64], voltages: &mut Vec<(Node, Node, f64)>) {
+        for (i, ic) in self.ic.iter().enumerate() {
+            if let Some(v) = ic {
+                voltages.push((self.p[i], self.n[i], *v));
+            }
+        }
     }
     fn type_name(&self) -> &'static str {
         "capacitor"
@@ -123,10 +135,15 @@ impl DeviceGroup for Capacitors {
         }
         Ok(())
     }
-    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
+    fn eval(&self, ctx: &crate::EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
             let c = self.c[i];
-            let q = c * (volt(x, self.p[i]) - volt(x, self.n[i]));
+            let v = volt(x, self.p[i]) - volt(x, self.n[i]);
+            let q = c * if ctx.initial_charge {
+                self.ic[i].unwrap_or(v)
+            } else {
+                v
+            };
             out.c[4 * i..4 * i + 4].copy_from_slice(&[c, -c, -c, c]);
             out.q[2 * i] = q;
             out.q[2 * i + 1] = -q;
@@ -137,6 +154,7 @@ impl DeviceGroup for Capacitors {
 /// Inductors. Branch equation `vp - vn - d/dt (L i) = 0`, i.e. `f = vp - vn`, `q = -L i`.
 #[derive(Debug, Default)]
 pub struct Inductors {
+    ic: Vec<Option<f64>>,
     names: Vec<String>,
     p: Vec<Node>,
     n: Vec<Node>,
@@ -147,6 +165,10 @@ pub struct Inductors {
 impl Inductors {
     /// Add an instance.
     pub fn push(&mut self, name: &str, p: Node, n: Node, l: f64) {
+        self.push_initial(name, p, n, l, None);
+    }
+    pub fn push_initial(&mut self, name: &str, p: Node, n: Node, l: f64, ic: Option<f64>) {
+        self.ic.push(ic);
         self.names.push(name.to_string());
         self.p.push(p);
         self.n.push(n);
@@ -157,6 +179,13 @@ impl Inductors {
 impl DeviceGroup for Inductors {
     fn instance_name(&self, index: usize) -> Option<&str> {
         self.names.get(index).map(String::as_str)
+    }
+    fn initial_values(&self, x: &mut [f64], _: &mut Vec<(Node, Node, f64)>) {
+        for (&k, &ic) in self.k.iter().zip(&self.ic) {
+            if let Some(ic) = ic {
+                x[k] = ic;
+            }
+        }
     }
     fn type_name(&self) -> &'static str {
         "inductor"

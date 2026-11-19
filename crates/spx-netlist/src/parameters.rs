@@ -129,7 +129,24 @@ pub(crate) fn bind_models(
     let mut used = HashSet::new();
     let mut literal_aliases = HashMap::<usize, String>::new();
     for (element, e) in elements.iter_mut().enumerate() {
+        let mut empty = vec![];
         let (model, params) = match &mut e.kind {
+            ElementKind::Resistor {
+                model: Some(model),
+                params,
+                ..
+            }
+            | ElementKind::Inductor {
+                model: Some(model),
+                params,
+                ..
+            }
+            | ElementKind::Capacitor {
+                model: Some(model),
+                params,
+                ..
+            } => (model, params),
+            ElementKind::Switch { model, .. } => (model, &mut empty),
             ElementKind::Mosfet { model, params, .. }
             | ElementKind::Va { model, params, .. }
             | ElementKind::Bjt { model, params, .. }
@@ -277,7 +294,11 @@ impl ParameterPlan {
             let model = element.kind.model().map(str::to_owned);
             let mut sampled = crate::parser::sample_element(&line, &nl)?;
             match &mut sampled.kind {
-                ElementKind::Mosfet { model: m, .. }
+                ElementKind::Resistor { model: m, .. }
+                | ElementKind::Capacitor { model: m, .. }
+                | ElementKind::Inductor { model: m, .. } => *m = model,
+                ElementKind::Switch { model: m, .. }
+                | ElementKind::Mosfet { model: m, .. }
                 | ElementKind::Bjt { model: m, .. }
                 | ElementKind::Va { model: m, .. }
                 | ElementKind::Diode { model: m, .. } => {

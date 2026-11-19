@@ -221,6 +221,7 @@ impl Workspace {
 /// Build an evaluation context from the options.
 pub(crate) fn make_ctx(opts: &SimOptions, mode: Mode, tran: TranParams) -> EvalCtx {
     EvalCtx {
+        initial_charge: false,
         mode,
         time: 0.0,
         tran,
@@ -518,7 +519,6 @@ pub(crate) fn newton(
     max_iter: usize,
     gshunt: f64,
 ) -> Result<usize, NewtonError> {
-    let n = ckt.dim();
     ws.newton_calls += 1;
     if ws.lu.is_none() {
         let start = ws.timed.then(Instant::now);
@@ -534,6 +534,39 @@ pub(crate) fn newton(
         }
     }
     ws.restore();
+    let mut used = 0;
+    let mut ctx = *ctx;
+    let mut visited = Vec::new();
+    loop {
+        used += continuous_newton(ckt, &ctx, integ, x, ws, opts, max_iter - used, gshunt)?;
+        let mut changed = false;
+        for &i in &ckt.discrete {
+            changed |= ckt.groups[i].settle(x, &mut ws.state[i]);
+        }
+        if !changed {
+            return Ok(used);
+        }
+        let configuration: Vec<_> = ckt.discrete.iter().map(|&i| ws.state[i][0] > 0.).collect();
+        if used >= max_iter || visited.contains(&configuration) {
+            return Err(NewtonError::NoConvergence { worst: Vec::new() });
+        }
+        visited.push(configuration);
+        ctx.init_junctions = false;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn continuous_newton(
+    ckt: &Circuit,
+    ctx: &EvalCtx,
+    integ: &Integration,
+    x: &mut [f64],
+    ws: &mut Workspace,
+    opts: &SimOptions,
+    max_iter: usize,
+    gshunt: f64,
+) -> Result<usize, NewtonError> {
+    let n = ckt.dim();
     let kinds = ckt.unknowns.kinds();
     let mut ctx = *ctx;
     for iter in 1..=max_iter {

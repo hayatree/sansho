@@ -56,6 +56,10 @@ const OPS: &[&str] = &[
 ];
 
 fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
+    tokenize_for(s, false)
+}
+
+fn tokenize_for(s: &str, probes: bool) -> Result<Vec<Tok>, String> {
     let b = s.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -94,7 +98,29 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'.') {
                 i += 1;
             }
-            out.push(Tok::Id(s[start..i].to_ascii_lowercase()));
+            let id = s[start..i].to_ascii_lowercase();
+            let tail = s[i..].trim_start();
+            if probes
+                && matches!(id.as_str(), "v" | "i")
+                && let Some(args) = tail.strip_prefix('(')
+            {
+                let (args, rest) = args.split_once(')').ok_or("unterminated probe")?;
+                let names: Vec<_> = args.split(',').map(str::trim).collect();
+                if names.len() > if id == "v" { 2 } else { 1 }
+                    || names.iter().any(|s| {
+                        s.is_empty() || s.contains(['(', ')']) || s.contains(char::is_whitespace)
+                    })
+                {
+                    return Err(format!("invalid arguments of {id} probe"));
+                }
+                out.push(Tok::Id(format!(
+                    "{id}({})",
+                    names.join(",").to_ascii_lowercase()
+                )));
+                i = s.len() - rest.len();
+            } else {
+                out.push(Tok::Id(id));
+            }
         } else if let Some(op) = OPS.iter().find(|op| s[i..].starts_with(**op)) {
             out.push(Tok::Op(op));
             i += op.len();
@@ -428,6 +454,96 @@ pub fn eval_const(s: &str) -> Result<f64, String> {
         &|n| Err(format!("unknown parameter `{n}`")),
         &Funcs::new(),
     )
+}
+
+/// Parse a source expression. Probe arguments are literal circuit identifiers:
+/// for example, node `01` is distinct from node `1`.
+pub fn parse_behavior(text: &str) -> Result<Expr, String> {
+    let mut p = P {
+        t: tokenize_for(strip_delims(text), true)?,
+        i: 0,
+    };
+    let e = p.cond()?;
+    if p.i != p.t.len() {
+        return Err("unexpected trailing expression input".into());
+    }
+    Ok(e)
+}
+
+/// Expand lexical parameters and user functions while preserving live probes.
+pub(crate) fn source_text(
+    e: &Expr,
+    funcs: &Funcs,
+    var: &dyn Fn(&str) -> Result<String, String>,
+    probe: &dyn Fn(&str, &str) -> String,
+    depth: usize,
+) -> Result<String, String> {
+    if depth > 64 {
+        return Err("source expression nests too deeply".into());
+    }
+    let sub = |e: &Expr| source_text(e, funcs, var, probe, depth + 1);
+    match e {
+        Expr::Num(x) => Ok(x.to_string()),
+        Expr::Var(n) if n.ends_with(')') => {
+            let (kind, args) = n.split_once('(').ok_or("invalid probe")?;
+            Ok(format!(
+                "{kind}({})",
+                args.trim_end_matches(')')
+                    .split(',')
+                    .map(|s| probe(kind, s))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ))
+        }
+        Expr::Var(n) => var(n),
+        Expr::Unary(op, a) => Ok(format!("({op}{})", sub(a)?)),
+        Expr::Binary(op, a, b) => {
+            let op = match op {
+                'l' => "<=",
+                'g' => ">=",
+                '=' => "==",
+                'n' => "!=",
+                '&' => "&&",
+                '|' => "||",
+                _ => &op.to_string(),
+            };
+            Ok(format!("({} {op} {})", sub(a)?, sub(b)?))
+        }
+        Expr::Cond(c, a, b) => Ok(format!("({} ? {} : {})", sub(c)?, sub(a)?, sub(b)?)),
+        Expr::Call(name, args) => {
+            // Function definitions are parsed by the shared expression parser.
+            if matches!(name.as_str(), "v" | "i") {
+                let args = args
+                    .iter()
+                    .map(|a| match a {
+                        Expr::Var(s) => Ok(probe(name, s)),
+                        Expr::Num(n) => Ok(probe(name, &n.to_string())),
+                        _ => Err("invalid probe argument"),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(format!("{name}({})", args.join(",")));
+            }
+            let values = args.iter().map(sub).collect::<Result<Vec<_>, _>>()?;
+            if let Some(f) = funcs.get(name) {
+                if values.len() != f.args.len() {
+                    return Err(format!("wrong argument count for {name}"));
+                }
+                source_text(
+                    &f.body,
+                    funcs,
+                    &|n| match f.args.iter().position(|s| s == n) {
+                        Some(i) => Ok(values[i].clone()),
+                        None => var(n),
+                    },
+                    probe,
+                    depth + 1,
+                )
+            } else {
+                Ok(format!("{name}({})", values.join(",")))
+            }
+        }
+        Expr::Draw(..) => Err("unbound statistical source expression".into()),
+    }
 }
 
 #[cfg(test)]

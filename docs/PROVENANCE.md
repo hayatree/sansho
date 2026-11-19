@@ -258,3 +258,19 @@ The netlist sampler, lexical binding plan and CPU batch runner are original Rust
 The integer finalizer follows Steele, Lea and Flood, *Fast Splittable Pseudorandom Number Generators* (OOPSLA 2014). Stable string identities use FNV-1a arithmetic. Indexing the random function by independent run and call-site counters follows the design principle in Salmon et al., *Parallel Random Numbers: As Easy as 1, 2, 3* (SC 2011). The normal transform follows Box and Muller, *A Note on the Generation of Random Normal Deviates* (1958). Sample variance uses Welford's online recurrence. The independent sample-variance ratio uses the standard F distribution and the incomplete beta continued fraction.
 
 All three validation circuits and their reference drivers were authored for this repository. The SKY130 deck references the locally installed Volare model files. The implementation uses existing Rust dependencies and the existing faer symbolic and sequential numeric factorization interfaces.
+
+### R1 ngspice-dialect devices and temperature
+
+The element cards and control quantities follow the public ngspice user manual
+descriptions of coupled inductors, nonlinear dependent sources, switches,
+temperature options and transient initial conditions. The coupled flux and
+controlled-source stamps follow Ho, Ruehli and Brennan, *The Modified Nodal
+Approach to Network Analysis* (1975). The expression evaluator extends the
+repository's forward-mode dual-number implementation. The switch configuration
+iteration and crossing-time interpolation are original implementations.
+
+The temperature translations in `temperature.rs`, `diode.rs`, `bjt.rs` and
+`mos1.rs` follow the silicon junction, Gummel–Poon and level-1 MOS models
+in Massobrio and Antognetti, *Semiconductor Device Modeling with SPICE* (1993).
+The BSIM4 equations retain their existing provenance. The R1 verification
+circuits and analytic regression tests were written for this project.

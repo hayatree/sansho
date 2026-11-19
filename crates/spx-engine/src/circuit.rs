@@ -45,6 +45,7 @@ pub struct Circuit {
     pub(crate) groups: Vec<Arc<dyn DeviceGroup>>,
     bindings: Option<Arc<BatchBindings>>,
     pub(crate) fixed_voltage: Option<FixedVoltage>,
+    pub(crate) discrete: Vec<usize>,
     pub(crate) linear: bool,
     /// Per group: number of state values.
     pub(crate) state_len: Vec<usize>,
@@ -548,6 +549,15 @@ pub(crate) fn compile_cached(
 ) -> Result<(Circuit, Vec<Diagnostic>), Vec<Diagnostic>> {
     #[cfg(not(feature = "jit"))]
     let _ = dc_only;
+    if ![opts.temp, opts.tnom]
+        .iter()
+        .all(|t| t.is_finite() && *t > -273.15)
+    {
+        return Err(vec![Diagnostic::error(
+            "E-ELAB-PARAM",
+            "absolute temperatures must be positive and finite",
+        )]);
+    }
     let mut diags: Vec<Diagnostic> = Vec::new();
 
     // --- Node numbering (order of first appearance, ground excluded) ---
@@ -653,17 +663,6 @@ pub(crate) fn compile_cached(
             .with_note("every circuit needs a reference node named `0` (or `gnd`)"),
         ]);
     }
-    for (i, &t) in touches.iter().enumerate() {
-        if t < 2 {
-            diags.push(
-                Diagnostic::warning(
-                    "W-ELAB-DANGLING",
-                    format!("node `{}` is connected to only one terminal", node_names[i]),
-                )
-                .with_note("a dangling node usually indicates a typo in a node name"),
-            );
-        }
-    }
     let mut node_elements: Vec<Vec<String>> = vec![Vec::new(); node_names.len()];
     for nonlinear in [true, false] {
         for e in &nl.elements {
@@ -731,7 +730,9 @@ pub(crate) fn compile_cached(
                     }
                 }
             }
-            ElementKind::Resistor { .. } | ElementKind::Diode { .. } => {
+            ElementKind::Switch { .. }
+            | ElementKind::Resistor { .. }
+            | ElementKind::Diode { .. } => {
                 dc.union(p, n);
             }
             ElementKind::Bjt { .. } => {
@@ -747,6 +748,7 @@ pub(crate) fn compile_cached(
                 dc.union(s, b);
             }
             ElementKind::Inductor { .. }
+            | ElementKind::Behavioral { voltage: true, .. }
             | ElementKind::VoltageSource { .. }
             | ElementKind::Vcvs { .. }
             | ElementKind::Ccvs { .. } => {
@@ -791,8 +793,7 @@ pub(crate) fn compile_cached(
         );
     }
 
-    let (mut groups, native_count) =
-        native_groups(&nl.elements, &nl.models, opts, node, &mut diags)?;
+    let (mut groups, native_count) = native_groups(&nl.elements, nl, opts, node, &mut diags)?;
     nonlinear_count += native_count;
     #[cfg(feature = "jit")]
     let first_va = groups.len();
@@ -801,6 +802,22 @@ pub(crate) fn compile_cached(
     }
 
     // --- Unknowns and stamps ---
+    for g in &groups {
+        for i in g.probe_nodes() {
+            touches[i] += 1;
+        }
+    }
+    for (i, &t) in touches.iter().enumerate() {
+        if t < 2 {
+            diags.push(
+                Diagnostic::warning(
+                    "W-ELAB-DANGLING",
+                    format!("node `{}` is connected to only one terminal", node_names[i]),
+                )
+                .with_note("a dangling node usually indicates a typo in a node name"),
+            );
+        }
+    }
     let (unknowns, layouts, group_offsets) = setup_groups(&mut groups, &node_names, &mut diags)?;
     let n = unknowns.len();
     let mut pb = PatternBuilder::new(n);
@@ -919,6 +936,11 @@ pub(crate) fn compile_cached(
             ordering: None,
             ics,
             nodesets,
+            discrete: groups
+                .iter()
+                .enumerate()
+                .filter_map(|(i, g)| (g.type_name() == "switch").then_some(i))
+                .collect(),
             groups: groups.into_iter().map(Arc::from).collect(),
             bindings: None,
             state_len,
@@ -1181,9 +1203,51 @@ fn prepare_va_kernels(
 
 type Groups = Vec<Box<dyn DeviceGroup>>;
 
+fn instance_temperature(
+    inst: &ModelParams,
+    opts: &SimOptions,
+    nominal: Option<f64>,
+) -> Result<spx_devices::temperature::Temperature, Diagnostic> {
+    let kelvin = inst.get("temp", opts.temp + inst.get("dtemp", 0.)) + 273.15;
+    let nominal = nominal.unwrap_or(opts.tnom) + 273.15;
+    if ![kelvin, nominal].iter().all(|v| v.is_finite() && *v > 0.) {
+        return Err(Diagnostic::error(
+            "E-ELAB-PARAM",
+            "absolute temperatures must be positive and finite",
+        ));
+    }
+    Ok(spx_devices::temperature::Temperature { kelvin, nominal })
+}
+
+fn passive_value(
+    value: f64,
+    params: &[(String, f64)],
+    model: Option<&ModelCard>,
+    opts: &SimOptions,
+) -> Result<f64, Diagnostic> {
+    if params.is_empty() && model.is_none() {
+        return Ok(value);
+    }
+    let p = ModelParams::new(params);
+    let m = model
+        .map(|m| ModelParams::new(&m.params))
+        .unwrap_or_default();
+    let t = instance_temperature(&p, opts, m.opt(&["tnom"]))?;
+    let d = t.kelvin - t.nominal;
+    let result =
+        value * (1. + d * (p.get("tc1", m.get("tc1", 0.)) + d * p.get("tc2", m.get("tc2", 0.))));
+    if !result.is_finite() {
+        return Err(Diagnostic::error(
+            "E-ELAB-PARAM",
+            "non-finite temperature-adjusted component value",
+        ));
+    }
+    Ok(result)
+}
+
 fn native_groups<'a>(
     elements: impl IntoIterator<Item = &'a Element>,
-    models: &[ModelCard],
+    nl: &Netlist,
     opts: &SimOptions,
     node: impl Fn(&str) -> Node,
     diags: &mut Vec<Diagnostic>,
@@ -1205,18 +1269,196 @@ fn native_groups<'a>(
     let mut mos1 = Chunked::<Mos1s>::new(CHUNK_NONLINEAR);
     let mut bsim4_models = HashMap::<_, Arc<PreparedModel>>::new();
     let mut bsim4 = Chunked::<Bsim4s>::new(CHUNK_NONLINEAR);
-    let mut model_cache = ModelCache::new(models, opts);
+    let mut model_cache = ModelCache::new(&nl.models);
+    let mut controlled: Groups = Vec::new();
+    let mut windings = HashMap::new();
+    if nl
+        .elements
+        .iter()
+        .any(|e| matches!(e.kind, ElementKind::Coupling { .. }))
+    {
+        for e in &nl.elements {
+            if let ElementKind::Inductor {
+                value,
+                params,
+                model,
+                ..
+            } = &e.kind
+            {
+                windings.insert(
+                    e.name.as_str(),
+                    passive_value(
+                        *value,
+                        params,
+                        model.as_ref().and_then(|name| model_cache.card(name)),
+                        opts,
+                    ),
+                );
+            }
+        }
+    }
     for e in elements {
         match &e.kind {
             ElementKind::Va { .. } => {}
-            ElementKind::Resistor { p, n, value } => {
-                res.cur().push(&e.name, node(p), node(n), *value)
+            ElementKind::Behavioral {
+                p,
+                n,
+                voltage,
+                expr,
+                table,
+            } => {
+                let source = spx_devices::behavioral::Behavioral::new(
+                    &e.name,
+                    [node(p), node(n)],
+                    *voltage,
+                    expr,
+                    table,
+                    |s| {
+                        if s == GROUND
+                            || (node(s).is_none()
+                                && nl.elements.iter().any(|e| e.kind.nodes().contains(&s)))
+                        {
+                            Some(None)
+                        } else {
+                            node(s).map(Some)
+                        }
+                    },
+                );
+                match source {
+                    Ok(mut g) => {
+                        g.span = Some(e.span);
+                        controlled.push(Box::new(g));
+                    }
+                    Err(d) => errors.push(d.with_span(e.span)),
+                }
+                nonlinear_count += 1;
             }
-            ElementKind::Capacitor { p, n, value } => {
-                cap.cur().push(&e.name, node(p), node(n), *value)
+            ElementKind::Coupling { first, second, k } => {
+                let mut inductance = [0.; 2];
+                for (dst, w) in inductance.iter_mut().zip([first, second]) {
+                    match windings.get(w.as_str()) {
+                        Some(Ok(v)) if *v > 0. => *dst = *v,
+                        _ => errors.push(
+                            Diagnostic::error(
+                                "E-COUPLING-L",
+                                format!("{} needs a positive inductor named {w}", e.name),
+                            )
+                            .with_span(e.span),
+                        ),
+                    }
+                }
+                controlled.push(Box::new(spx_devices::controlled::Coupling {
+                    name: e.name.clone(),
+                    windings: [first.clone(), second.clone()],
+                    mutual: k * inductance[0].sqrt() * inductance[1].sqrt(),
+                    branches: [0; 2],
+                }));
             }
-            ElementKind::Inductor { p, n, value } => {
-                ind.cur().push(&e.name, node(p), node(n), *value)
+            ElementKind::Switch {
+                p,
+                n,
+                model,
+                control,
+                on,
+            } => {
+                use spx_devices::controlled::{Control, Switch};
+                let Some(card) = model_cache.card(model) else {
+                    errors.push(
+                        Diagnostic::error("E-SWITCH-MODEL", format!("undefined {model}"))
+                            .with_span(e.span),
+                    );
+                    continue;
+                };
+                let m = ModelParams::new(&card.params);
+                let (control, vt, vh) = match control {
+                    spx_netlist::SwitchControl::Voltage(a, b) => {
+                        (Control::Voltage(node(a), node(b)), "vt", "vh")
+                    }
+                    spx_netlist::SwitchControl::Current(a) => {
+                        (Control::Current(a.clone(), None), "it", "ih")
+                    }
+                };
+                let ron = m.get("ron", 1.);
+                // The default off conductance is GMIN, including an ideal open at GMIN=0.
+                let roff = m.opt(&["roff"]);
+                let goff = roff.map_or(opts.gmin, |r| 1. / r);
+                let (threshold, width) = (m.get(vt, 0.), m.get(vh, 0.).abs());
+                if !(ron.is_finite() && ron > 0. && (1. / ron).is_finite())
+                    || roff.is_some_and(|r| !r.is_finite() || r <= 0.)
+                    || !goff.is_finite()
+                    || !width.is_finite()
+                    || !threshold.is_finite()
+                {
+                    errors.push(
+                        Diagnostic::error(
+                            "E-SWITCH-MODEL",
+                            format!("invalid switch resistances or thresholds in {model}"),
+                        )
+                        .with_span(card.span),
+                    );
+                    continue;
+                }
+                ModelCache::warn_ignored(card, &m.unused(), diags);
+                controlled.push(Box::new(Switch {
+                    span: e.span,
+                    name: e.name.clone(),
+                    p: node(p),
+                    n: node(n),
+                    control,
+                    threshold,
+                    width,
+                    gon: 1. / ron,
+                    goff,
+                    initially_on: *on,
+                }));
+                nonlinear_count += 1;
+            }
+            ElementKind::Resistor {
+                p,
+                n,
+                value,
+                model,
+                params,
+            }
+            | ElementKind::Capacitor {
+                p,
+                n,
+                value,
+                model,
+                params,
+            }
+            | ElementKind::Inductor {
+                p,
+                n,
+                value,
+                model,
+                params,
+            } => {
+                let model = model.as_ref().and_then(|name| model_cache.card(name));
+                let value = match passive_value(*value, params, model, opts) {
+                    Ok(value) => value,
+                    Err(d) => {
+                        errors.push(d.with_span(e.span));
+                        continue;
+                    }
+                };
+                let (p, n) = (node(p), node(n));
+                let ic = params
+                    .iter()
+                    .rev()
+                    .find(|(k, _)| k == "ic")
+                    .map(|(_, v)| *v);
+                match e.kind {
+                    ElementKind::Resistor { .. } if value == 0. => errors.push(
+                        Diagnostic::error("E-ELAB-PARAM", "zero temperature-adjusted resistance")
+                            .with_span(e.span),
+                    ),
+                    ElementKind::Resistor { .. } => res.cur().push(&e.name, p, n, value),
+                    ElementKind::Capacitor { .. } => {
+                        cap.cur().push_initial(&e.name, p, n, value, ic)
+                    }
+                    _ => ind.cur().push_initial(&e.name, p, n, value, ic),
+                }
             }
             ElementKind::VoltageSource { p, n, source } => {
                 vsrc.cur().push(&e.name, node(p), node(n), source.clone());
@@ -1252,10 +1494,17 @@ fn native_groups<'a>(
                 params,
                 off,
             } => {
-                let Some(m) = model_cache.diode(model, diags, &mut errors) else {
+                let Some(mut m) = model_cache.diode(model, diags, &mut errors) else {
                     continue;
                 };
                 let inst = ModelParams::new(params);
+                match instance_temperature(&inst, opts, m.tnom) {
+                    Ok(t) => m.at_temperature(t),
+                    Err(d) => {
+                        errors.push(d.with_span(e.span));
+                        continue;
+                    }
+                }
                 let area = inst.get("area", 1.0) * inst.opt(&["m", "mult"]).unwrap_or(1.);
                 if !area.is_finite() || area <= 0. {
                     errors.push(
@@ -1280,10 +1529,17 @@ fn native_groups<'a>(
                 params,
                 off,
             } => {
-                let Some(m) = model_cache.bjt(model, diags, &mut errors) else {
+                let Some(mut m) = model_cache.bjt(model, diags, &mut errors) else {
                     continue;
                 };
                 let inst = ModelParams::new(params);
+                match instance_temperature(&inst, opts, m.tnom) {
+                    Ok(t) => m.at_temperature(t),
+                    Err(d) => {
+                        errors.push(d.with_span(e.span));
+                        continue;
+                    }
+                }
                 let area = inst.get("area", 1.0) * inst.opt(&["m", "mult"]).unwrap_or(1.);
                 if !area.is_finite() || area <= 0. {
                     errors.push(
@@ -1355,7 +1611,7 @@ fn native_groups<'a>(
                         instance: &inst,
                         geometry: geom,
                         polarity: if card.kind == "pmos" { -1. } else { 1. },
-                        temp: opts.temp,
+                        temp: inst.get("temp", opts.temp + inst.get("dtemp", 0.)),
                         tnom: opts.tnom,
                         scale: opts.scale,
                     };
@@ -1391,6 +1647,13 @@ fn native_groups<'a>(
                     );
                     continue;
                 }
+                match instance_temperature(&inst, opts, m.tnom) {
+                    Ok(t) => m.at_temperature(t),
+                    Err(d) => {
+                        errors.push(d.with_span(e.span));
+                        continue;
+                    }
+                }
                 m.multiply(copies);
                 warn_instance(e, &inst, diags);
                 if let Some(msg) = Mos1s::check_geometry(&m, &geom) {
@@ -1424,6 +1687,7 @@ fn native_groups<'a>(
     bjts.into_groups(&mut groups);
     mos1.into_groups(&mut groups);
     bsim4.into_groups(&mut groups);
+    groups.extend(controlled);
     Ok((groups, nonlinear_count))
 }
 
@@ -1444,7 +1708,10 @@ fn setup_groups(
         let mut sb = StampBuilder::new(&unknowns);
         match g.setup(&mut sb) {
             Ok(()) => layouts.push(sb.finish()),
-            Err(d) => {
+            Err(mut d) => {
+                if let Some(span) = g.instance_span() {
+                    d = d.with_span(span);
+                }
                 errors.push(d);
                 layouts.push(StampLayout::default());
             }
@@ -1476,6 +1743,13 @@ impl Circuit {
         );
         let nl = params.nominal();
         let mut changed = params.varying_instances();
+        for e in &nl.elements {
+            if let ElementKind::Coupling { first, second, .. } = &e.kind
+                && (changed.contains(first.as_str()) || changed.contains(second.as_str()))
+            {
+                changed.insert(&e.name);
+            }
+        }
         for a in &nl.analyses {
             if let spx_netlist::AnalysisCard::Dc { source, .. } = a {
                 changed.insert(source);
@@ -1524,7 +1798,7 @@ impl Circuit {
         let mut diagnostics = vec![];
         let (mut changed, _) = native_groups(
             bindings.elements.iter().map(|&i| &nl.elements[i]),
-            &nl.models,
+            nl,
             opts,
             |n| self.node_index.get(n).copied(),
             &mut diagnostics,
@@ -1608,6 +1882,7 @@ impl Circuit {
             bindings: self.bindings.clone(),
             topology: self.topology.clone(),
             fixed_voltage: None,
+            discrete: self.discrete.clone(),
             linear: groups.iter().all(|g| g.is_linear()),
             state_len: groups.iter().map(|g| g.state_len()).collect(),
             groups,
@@ -1625,17 +1900,17 @@ fn topology_error() -> Vec<Diagnostic> {
 /// Resolves `.model` cards into typed models once per model name, emitting warnings once.
 struct ModelCache<'a> {
     cards: HashMap<&'a str, &'a ModelCard>,
-    temp_differs: bool,
+
     diodes: HashMap<String, Option<DiodeModel>>,
     bjts: HashMap<String, Option<BjtModel>>,
     mos: HashMap<String, Option<Mos1Model>>,
 }
 
 impl<'a> ModelCache<'a> {
-    fn new(cards: &'a [ModelCard], opts: &SimOptions) -> Self {
+    fn new(cards: &'a [ModelCard]) -> Self {
         Self {
             cards: cards.iter().map(|c| (c.name.as_str(), c)).collect(),
-            temp_differs: (opts.temp - opts.tnom).abs() > 1e-9,
+
             diodes: HashMap::new(),
             bjts: HashMap::new(),
             mos: HashMap::new(),
@@ -1650,7 +1925,6 @@ impl<'a> ModelCache<'a> {
     fn prepare(
         &self,
         card: &ModelCard,
-        diags: &mut Vec<Diagnostic>,
         errors: &mut Vec<Diagnostic>,
     ) -> Option<(ModelParams, f64)> {
         let params = ModelParams::new(&card.params);
@@ -1666,34 +1940,6 @@ impl<'a> ModelCache<'a> {
             }
             errors.push(d);
             return None;
-        }
-        if let Some(t) = params.opt(&["tnom"])
-            && (t - 27.0).abs() > 1e-9
-        {
-            diags.push(
-                Diagnostic::warning(
-                    "W-MODEL-TEMP",
-                    format!(
-                        "model `{}`: TNOM = {t} is not supported yet; parameters are used as \
-                         given at the simulation temperature",
-                        card.name
-                    ),
-                )
-                .with_span(card.span),
-            );
-        }
-        if self.temp_differs {
-            diags.push(
-                Diagnostic::warning(
-                    "W-MODEL-TEMP",
-                    format!(
-                        "model `{}`: temperature scaling is not implemented yet; parameters are \
-                         not adjusted to TEMP",
-                        card.name
-                    ),
-                )
-                .with_span(card.span),
-            );
         }
         let polarity = match card.kind.as_str() {
             "pnp" | "pmos" => -1.0,
@@ -1728,7 +1974,7 @@ impl<'a> ModelCache<'a> {
             return m.clone();
         }
         let card = self.card(name)?;
-        let m = self.prepare(card, diags, errors).map(|(p, _)| {
+        let m = self.prepare(card, errors).map(|(p, _)| {
             let (m, ignored) = DiodeModel::from_params(&p);
             Self::warn_ignored(card, &ignored, diags);
             m
@@ -1747,7 +1993,7 @@ impl<'a> ModelCache<'a> {
             return m.clone();
         }
         let card = self.card(name)?;
-        let m = self.prepare(card, diags, errors).map(|(p, pol)| {
+        let m = self.prepare(card, errors).map(|(p, pol)| {
             let (m, ignored) = BjtModel::from_params(&p, pol);
             Self::warn_ignored(card, &ignored, diags);
             m
@@ -1766,7 +2012,7 @@ impl<'a> ModelCache<'a> {
             return m.clone();
         }
         let card = self.card(name)?;
-        let m = self.prepare(card, diags, errors).map(|(p, pol)| {
+        let m = self.prepare(card, errors).map(|(p, pol)| {
             let (m, ignored) = Mos1Model::from_params(&p, pol);
             Self::warn_ignored(card, &ignored, diags);
             m

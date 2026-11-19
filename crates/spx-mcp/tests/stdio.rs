@@ -260,3 +260,18 @@ fn statistical_batch_is_bounded_and_ordered() {
             .contains("256 KiB")
     );
 }
+
+#[test]
+fn release_dialect_lint_and_explanation_via_stdio() {
+    let mut c = Client::start();
+    let deck = include_str!("../../../verify/decks/switch_hold.cir");
+    let (valid, err) = c.tool("validate_netlist", json!({"netlist":deck}));
+    assert!(!err && valid["ok"] == true, "{valid}");
+    let (bad, err) = c.tool(
+        "validate_netlist",
+        json!({"netlist":deck.replace("Vsense mirror","Vmissing mirror")}),
+    );
+    assert!(!err && bad["ok"] == false, "{bad}");
+    let (why, err) = c.tool("explain_failure", json!({"code":"E-SWITCH-MODEL"}));
+    assert!(!err && why["codes"][0]["code"] == "E-SWITCH-MODEL");
+}

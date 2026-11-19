@@ -293,3 +293,23 @@ fn subcircuit_save_resolves_local_current_and_port_voltage() {
     assert_eq!(a.real("V(a)").unwrap(), [1.]);
     assert!((a.real("I(v.x1.vprobe)").unwrap()[0] - 0.001).abs() < 1e-14);
 }
+
+#[test]
+fn dialect_lint_and_failure_explanations() {
+    let s = session(1);
+    for (card, code) in [
+        ("K1 L1 L2 1.5", "E-COUPLING-K"),
+        ("K1 L1 V1 0.5", "E-COUPLING-L"),
+        ("B1 b 0 V={v(missing)}", "E-BSOURCE-EXPR"),
+        ("B1 b 0 V={i(no_branch)}", "E-BSOURCE-EXPR"),
+        ("S1 a 0 b 0 absent", "E-SWITCH-MODEL"),
+        ("W1 a 0 v99 m\n.model m csw", "E-SWITCH-MODEL"),
+    ] {
+        let report = s.validate(&format!("bad deck\nV1 a 0 1\nL1 b 0 1m\n{card}\n.op\n"));
+        assert!(
+            report.diagnostics.iter().any(|d| d.code == code),
+            "{report:?}"
+        );
+        assert!(!s.explain(code).unwrap().codes[0].remedies.is_empty());
+    }
+}

@@ -20,6 +20,8 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Quantity {
+    /// Degrees Celsius.
+    Temperature,
     /// Seconds.
     Time,
     /// Hertz.
@@ -33,6 +35,7 @@ pub enum Quantity {
 impl Quantity {
     fn raw_name(self) -> &'static str {
         match self {
+            Self::Temperature => "temperature",
             Self::Time => "time",
             Self::Frequency => "frequency",
             Self::Voltage => "voltage",
@@ -43,6 +46,7 @@ impl Quantity {
     /// SI unit symbol.
     pub fn unit(self) -> &'static str {
         match self {
+            Self::Temperature => "°C",
             Self::Time => "s",
             Self::Frequency => "Hz",
             Self::Voltage => "V",

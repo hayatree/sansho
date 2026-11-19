@@ -273,13 +273,21 @@ pub(crate) fn op(ckt: &Circuit, opts: &SimOptions) -> Result<AnalysisResult, Dia
 pub(crate) fn dc_sweep(
     ckt: &mut Circuit,
     opts: &SimOptions,
+    nl: &spx_netlist::Netlist,
     source: &str,
     start: f64,
     stop: f64,
     step: f64,
 ) -> Result<(AnalysisResult, crate::DcStats), Diagnostic> {
     let _phase = spx_diag::Phase::start("analysis");
-    let Some(original) = ckt.param(source, "dc") else {
+    let temperature = source == "temp";
+    let mut previous_iterations = 0;
+    let mut previous_calls = 0;
+    let Some(original) = (if temperature {
+        Some(opts.temp)
+    } else {
+        ckt.param(source, "dc")
+    }) else {
         return Err(Diagnostic::error(
             "E-DC-SOURCE",
             format!("DC sweep source `{source}` is not an independent voltage or current source"),
@@ -298,13 +306,52 @@ pub(crate) fn dc_sweep(
     for k in 0..count {
         let v = start + k as f64 * step;
         ctx.final_step = k + 1 == count;
-        if !ckt.set_param(source, "dc", v) {
+        let point;
+        let ckt = if temperature {
+            if v <= -273.15 {
+                return Err(Diagnostic::error(
+                    "E-PARSE-VALUE",
+                    "temperature must exceed absolute zero",
+                ));
+            }
+            let mut options = opts.clone();
+            options.temp = v;
+            point = crate::circuit::compile_cached(nl, &options, &ckt.va_modules, true)
+                .map_err(|ds| {
+                    ds.into_iter().next().unwrap_or_else(|| {
+                        Diagnostic::error("E-ELAB-PARAM", "temperature elaboration failed")
+                    })
+                })?
+                .0;
+            if point.unknowns.names() != ckt.unknowns.names() {
+                return Err(Diagnostic::error(
+                    "E-ELAB-PARAM",
+                    "temperature sweep changed the circuit unknowns",
+                ));
+            }
+            previous_iterations += ws.newton_iterations;
+            previous_calls += ws.newton_calls;
+            let mut fresh = Workspace::new(&point);
+            if fresh
+                .accepted
+                .iter()
+                .map(Vec::len)
+                .eq(ws.accepted.iter().map(Vec::len))
+            {
+                std::mem::swap(&mut fresh.accepted, &mut ws.accepted);
+            }
+            ws = fresh;
+            ctx.temp = v + 273.15;
+            &point
+        } else if !ckt.set_param(source, "dc", v) {
             result = Err(Diagnostic::error(
                 "E-DC-SOURCE",
                 format!("cannot apply dc={v} to {source} in the current circuit layout"),
             ));
             break;
-        }
+        } else {
+            &*ckt
+        };
         // Continue from the previous point; fall back to a full operating-point solve.
         let continued = k > 0
             && newton(ckt, &ctx, &integ, &mut x, &mut ws, opts, opts.itl1, 0.0)
@@ -321,20 +368,31 @@ pub(crate) fn dc_sweep(
             c.push(xv);
         }
     }
-    ckt.set_param(source, "dc", original);
+    if !temperature {
+        ckt.set_param(source, "dc", original);
+    }
     result?;
     let stats = crate::DcStats {
         source: source.to_owned(),
         points: count,
-        iterations: ws.newton_iterations,
-        extra_solves: ws.newton_calls.saturating_sub(count),
+        iterations: previous_iterations + ws.newton_iterations,
+        extra_solves: (previous_calls + ws.newton_calls).saturating_sub(count),
     };
     Ok((
         AnalysisResult {
             kind: AnalysisKind::Dc,
             scale: Some(Variable {
-                name: if is_current { "i-sweep" } else { "v-sweep" }.into(),
-                quantity: if is_current {
+                name: if temperature {
+                    "temp-sweep"
+                } else if is_current {
+                    "i-sweep"
+                } else {
+                    "v-sweep"
+                }
+                .into(),
+                quantity: if temperature {
+                    Quantity::Temperature
+                } else if is_current {
                     Quantity::Current
                 } else {
                     Quantity::Voltage
@@ -695,6 +753,44 @@ pub(crate) fn tran(
         for &(i, v) in &ckt.ics {
             x[i] = v;
         }
+        // Propagate the capacitor voltage differences for the reported t=0
+        // sample. Independent capacitor charge histories also handle conflicting
+        // constraints (e.g. parallel capacitors initially at different voltages).
+        let mut voltages = vec![];
+        for g in &ckt.groups {
+            g.initial_values(&mut x, &mut voltages);
+        }
+        if !voltages.is_empty() {
+            let ground = n;
+            let mut edges = vec![vec![]; n + 1];
+            for (p, q, v) in voltages {
+                let (p, q) = (p.unwrap_or(ground), q.unwrap_or(ground));
+                edges[q].push((p, v));
+                edges[p].push((q, -v));
+            }
+            let mut seen = vec![false; n + 1];
+            let mut queue = std::collections::VecDeque::from([(ground, 0.)]);
+            seen[ground] = true;
+            for &(i, v) in &ckt.ics {
+                queue.push_back((i, v));
+                seen[i] = true;
+            }
+            for root in 0..=n {
+                while let Some((i, v)) = queue.pop_front() {
+                    for &(j, d) in &edges[i] {
+                        if !seen[j] {
+                            seen[j] = true;
+                            x[j] = v + d;
+                            queue.push_back((j, x[j]));
+                        }
+                    }
+                }
+                if !seen[root] && !edges[root].is_empty() {
+                    seen[root] = true;
+                    queue.push_back((root, x[root]));
+                }
+            }
+        }
         ws.clear_state();
     } else {
         // `.ic` holds nodes at their value while the operating point is solved.
@@ -730,9 +826,16 @@ pub(crate) fn tran(
 
     // Charges at the operating point.
     let mut eval_ctx = ctx;
+    eval_ctx.initial_charge = uic;
     eval_ctx.limit = false;
     ws.restore();
+    if uic {
+        for &i in &ckt.discrete {
+            ckt.groups[i].settle(&x, &mut ws.state[i]);
+        }
+    }
     crate::solve::assemble_charges(ckt, &eval_ctx, &x, &mut ws, opts)?;
+    eval_ctx.initial_charge = false;
     if uic {
         ws.commit();
     }
@@ -873,6 +976,18 @@ pub(crate) fn tran(
             }
             continue;
         }
+        let crossing = ckt
+            .discrete
+            .iter()
+            .filter_map(|&i| ckt.groups[i].crossing(&x, &x_new, &ws.accepted[i], &ws.state[i]))
+            .reduce(f64::min);
+        if let Some(fraction) = crossing
+            && fraction < 0.999
+            && h > 2. * hmin
+        {
+            h = (h * fraction.clamp(0.05, 0.999)).max(hmin);
+            continue;
+        }
         // Charges at the converged point (state is updated consistently for commit).
         eval_ctx.time = ctx.time;
         eval_ctx.final_step = ctx.final_step;
@@ -959,6 +1074,10 @@ pub(crate) fn tran(
             t = next_bp;
             bp_idx += 1;
             hist.clear();
+        }
+        if crossing.is_some() {
+            hist.clear();
+            grow = grow.min(1.);
         }
         hist.push(t, &mut buffer);
         ws.commit();

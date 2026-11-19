@@ -562,8 +562,55 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
     module type case-insensitively and accepts numeric and quoted parameter expressions.
     The simulator scales parallel copies at the terminals when it supplies an implicit
     multiplier. See the binding rules in [Verilog-A §11](verilog-a.md#11-va-4b-production-circuits).
-  - Not yet: `.option scale`, `B` sources, `K` coupling, switches, `.temp` scaling,
-    instance `ic=`.
+  - `Kname L1 L2 k` contributes symmetric branch fluxes with
+    `M = k sqrt(L1 L2)`. The first node of each winding is its dotted terminal.
+    Couplings accumulate in source order. DC sees shorted windings, AC sees
+    the full inductance matrix, and both transient methods integrate the same flux.
+    Each pair requires distinct positive inductors and `|k| ≤ 1`. For networks
+    of three or more windings, the author must supply a physically realizable matrix.
+  - A behavioural voltage source adds a branch equation. A behavioural current
+    source injects equal and opposite terminal currents. The expression parser
+    expands parameters and `.func` in the instance scope and resolves `v(a,b)`
+    and `i(Vsense)` after flattening. Directional dual numbers differentiate
+    against each distinct input for Newton and AC. `time` is in seconds and
+    `temper` in °C. Comparisons and `u(x)` have zero small-signal gain.
+    A conditional differentiates its selected arm. The spx expression dialect
+    uses natural `ln` and `log`, decimal `log10`, and signed-magnitude `pwr`.
+    `E/G value={expr}` share these stamps. `E/G table={expr} (x,y)...`
+    and expression lookups `pwl(x,x0,y0,...)` interpolate linearly between
+    increasing constant coordinates and hold the end values outside the table.
+    The right-hand slope applies at interior knots. ngspice 44 smooths `E table`
+    breakpoints (observed as a black box; see `verify/decks/behavior_table_corners.cir`),
+    so values near interior knots differ by design.
+  - S and W devices use the model threshold plus or minus the magnitude of
+    the hysteresis parameter. Between thresholds they retain the accepted
+    state. An optional `on` or `off` sets the initial state there (default off).
+    Each continuous Newton solve holds conductances fixed. An outer loop
+    tests the converged controls and re-solves any changed configuration.
+    Repeated configurations fail the trial. During a transient, spx estimates
+    a bracketed crossing by linear interpolation, retries with a shorter step,
+    and restarts integration history at an accepted transition. Rejected steps
+    discard trial switch states. Crossings between two samples on the same
+    side of a threshold require a smaller maximum step to resolve.
+  - `.temp` or `.options temp` sets the operating temperature. Model `tnom`
+    defaults to `.options tnom` (27 °C by default). Instance `temp` overrides
+    the circuit value, otherwise `dtemp` adds a local offset. R/C/L values
+    use `1 + tc1 ΔT + tc2 ΔT²` with explicit nominal component values and
+    optional R/C/L model cards. The diode and BJT adjust saturation current,
+    built-in junction potentials and depletion capacitances. BJT gain scales
+    with XTB. MOS1 adjusts threshold, mobility, surface potential and junctions.
+    Level 54 receives the operating temperature through its geometry binding.
+    A `.dc temp` sweep rebuilds the temperature-dependent bindings at every point.
+    Ordinary `.param` expressions retain their preprocessing-time values.
+  - With `.tran ... uic`, capacitor `ic=` specifies initial voltage from the
+    first terminal to the second. Each capacitor seeds its own charge history.
+    Inductor `ic=` specifies branch current entering the first terminal and
+    contributes to both self and mutual flux. A transient starting from an
+    operating point uses the solved charges and currents.
+  - `.option scale` multiplies explicitly supplied MOS `l`, `w`, `pd` and
+    `ps` by the scale and `ad` and `as` by its square. Geometry defaults
+    are in SI units. BSIM4 also scales the instance distances `sa`, `sb`,
+    `sd` and `xgw`. Finger count and multiplicity are dimensionless.
 - `.save v(node) i(vsrc)` selects exported raw and API vectors across analysis cards. Multiple
   cards accumulate selections. The independent scale and circuit ordering are preserved, and
   `.save all` exports all vectors. Both deck measurements and later session measurements have

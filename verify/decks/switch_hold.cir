@@ -1,0 +1,14 @@
+Voltage and current controlled sampling of a ramp
+* Provenance: original circuit for rs-spice release-prep verification.
+Vin in 0 PWL(0 0 20u 1)
+Vgate drive 0 PULSE(0 2 2u 1u 1u 4u 10u)
+Vsense drive gate 0
+Rgate gate 0 1k
+Ssample in held gate 0 sample
+Wsample in copy Vsense mirror
+.model sample SW(ron=50 roff=1g vt=1 vh=0.2)
+.model mirror CSW(ron=50 roff=1g it=1m ih=0.2m)
+Cstore held 0 2n
+Ccopy copy 0 2n
+.tran 50n 20u 0 10n
+.end

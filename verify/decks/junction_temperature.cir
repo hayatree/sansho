@@ -1,0 +1,11 @@
+Forward drops and gain over a temperature sweep
+* Provenance: original circuit for rs-spice release-prep verification.
+Id 0 d 100u
+D1 d 0 dd
+.model dd D(is=2e-14 n=1.1 eg=1.11 xti=3 tnom=20)
+Ib 0 b 1u
+Vc c 0 2
+Q1 c b 0 qq
+.model qq npn(is=2e-16 bf=120 xtb=1.5 xti=3 eg=1.11 tnom=20)
+.dc temp -20 100 20
+.end

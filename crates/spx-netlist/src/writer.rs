@@ -222,10 +222,72 @@ pub fn write(nl: &Netlist) -> String {
                 let _ = write!(l, "{name} {} {model}", nodes.join(" "));
                 params(&mut l, ps);
             }
-            ElementKind::Resistor { p, n, value }
-            | ElementKind::Capacitor { p, n, value }
-            | ElementKind::Inductor { p, n, value } => {
+            ElementKind::Coupling { first, second, k } => {
+                let _ = write!(l, "{name} {first} {second} {}", num(*k));
+            }
+            ElementKind::Behavioral {
+                p,
+                n,
+                voltage,
+                expr,
+                table,
+            } => {
+                let key = if !table.is_empty() {
+                    "table"
+                } else if !name.starts_with('b') {
+                    "value"
+                } else if *voltage {
+                    "v"
+                } else {
+                    "i"
+                };
+                let _ = write!(l, "{name} {p} {n} {key}={{{expr}}}");
+                for (x, y) in table {
+                    let _ = write!(l, " ({},{})", num(*x), num(*y));
+                }
+            }
+            ElementKind::Switch {
+                p,
+                n,
+                control,
+                model,
+                on,
+            } => {
+                let ctrl = match control {
+                    crate::SwitchControl::Voltage(a, b) => format!("{a} {b}"),
+                    crate::SwitchControl::Current(v) => v.clone(),
+                };
+                let _ = write!(l, "{name} {p} {n} {ctrl} {model}");
+                if *on {
+                    l.push_str(" on");
+                }
+            }
+            ElementKind::Resistor {
+                p,
+                n,
+                value,
+                model,
+                params: ps,
+            }
+            | ElementKind::Capacitor {
+                p,
+                n,
+                value,
+                model,
+                params: ps,
+            }
+            | ElementKind::Inductor {
+                p,
+                n,
+                value,
+                model,
+                params: ps,
+            } => {
                 let _ = write!(l, "{name} {p} {n} {}", num(*value));
+                if let Some(model) = model {
+                    let _ = write!(l, " {model}");
+                }
+                params(&mut l, ps);
             }
             ElementKind::VoltageSource { p, n, source: s }
             | ElementKind::CurrentSource { p, n, source: s } => {

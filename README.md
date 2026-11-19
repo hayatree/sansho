@@ -2,8 +2,10 @@
 
 A fast, agent-native SPICE circuit simulator written in Rust.
 
-> **Status:** pre-alpha. R, C, L, V, I, E, F, G, H, diodes, BJTs (Gummel–Poon) and level-1
-> MOSFETs; `.op`, `.dc`, `.ac`, `.tran` (trapezoidal or BDF2 with LTE control), `.meas`, `.model`,
+> **Status:** pre-alpha. R, C, L, coupled windings (K), independent and controlled sources
+> (V/I/E/F/G/H/B), SW/CSW switches, diodes, Gummel–Poon BJTs, MOS1 and built-in BSIM4.
+> Supports operating and nominal temperatures, DC temperature sweeps, scaled MOS geometry,
+> capacitor and inductor initial conditions, `.op`, `.dc`, `.ac`, `.tran` (trapezoidal or BDF2 with LTE control), `.meas`, `.model`,
 > `.options`, `.param`/expressions/`.func`, `.subckt`, `.include`/`.lib`, model binning, `.ic`,
 > `.nodeset`, UIC; compiled Verilog-A modules through `.hdl` and `N` instances (VA-3). Results are checked against ngspice (`verify/`). Session API and MCP server for
 > AI agents; pre-run lint and structured diagnostics ([`docs/diagnostics.md`](docs/diagnostics.md));

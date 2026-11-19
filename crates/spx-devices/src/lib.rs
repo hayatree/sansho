@@ -11,8 +11,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod behavioral;
 pub mod bjt;
 pub mod bsim4;
+pub mod controlled;
 pub mod diode;
 pub mod dual;
 pub mod junction;
@@ -20,6 +22,7 @@ mod linear;
 pub mod model;
 pub mod mos1;
 mod sources;
+pub mod temperature;
 pub mod va;
 pub mod waveform;
 
@@ -448,6 +451,8 @@ pub struct TranParams {
 /// Evaluation context.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvalCtx {
+    /// Sample instance initial charges for the first UIC history point.
+    pub initial_charge: bool,
     /// Source mode.
     pub mode: Mode,
     /// Simulation time (transient only).
@@ -474,6 +479,7 @@ impl EvalCtx {
     /// Context for DC analyses.
     pub fn dc() -> Self {
         Self {
+            initial_charge: false,
             mode: Mode::Dc,
             time: 0.0,
             tran: TranParams {
@@ -526,6 +532,30 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
     /// Whether `f` and `q` are linear in `x` (enables single-solve Newton).
     fn is_linear(&self) -> bool;
 
+    /// Supply UIC branch currents and differential voltage constraints.
+    fn initial_values(&self, _x: &mut [f64], _voltages: &mut Vec<(Node, Node, f64)>) {}
+    /// Source span for diagnostics emitted during setup.
+    fn instance_span(&self) -> Option<spx_diag::Span> {
+        None
+    }
+    /// Node voltages read by expressions in addition to explicit terminals.
+    fn probe_nodes(&self) -> Vec<usize> {
+        Vec::new()
+    }
+    /// Update discrete controls after a converged continuous solve.
+    fn settle(&self, _x: &[f64], _state: &mut [f64]) -> bool {
+        false
+    }
+    /// Fraction of a proposed step at which a discrete transition occurred.
+    fn crossing(
+        &self,
+        _old: &[f64],
+        _new: &[f64],
+        _accepted: &[f64],
+        _current: &[f64],
+    ) -> Option<f64> {
+        None
+    }
     /// Allocate branch-current and internal-node unknowns. Called for all groups before any
     /// [`Self::setup`].
     fn alloc_unknowns(&mut self, _u: &mut Unknowns) {}

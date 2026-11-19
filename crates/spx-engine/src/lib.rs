@@ -222,7 +222,7 @@ fn run_analysis(
                     .unwrap_or_else(|| Diagnostic::error("E-ELAB-INTERNAL", "recompilation failed"))
             })?
             .0;
-            analysis::dc_sweep(&mut own, opts, source, *start, *stop, *step).map(
+            analysis::dc_sweep(&mut own, opts, nl, source, *start, *stop, *step).map(
                 |(analysis, dc)| {
                     stats = Some(Stats::Dc(dc));
                     analysis
@@ -415,7 +415,7 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
             },
         ] => {
             vec![
-                analysis::dc_sweep(&mut ckt, &opts, source, *start, *stop, *step).map(
+                analysis::dc_sweep(&mut ckt, &opts, nl, source, *start, *stop, *step).map(
                     |(mut result, stats)| {
                         add_aliases(&ckt, &mut result);
                         (result, Some(Stats::Dc(stats)))

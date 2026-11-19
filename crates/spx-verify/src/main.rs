@@ -92,6 +92,30 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>), Proble
         .file_stem()
         .map_or_else(|| "deck".into(), |s| s.to_string_lossy().into_owned());
     let ref_raw = cli.out.join(format!("{stem}.ref.raw"));
+    let ours = match spx_engine::run(&nl) {
+        Ok(o) => o.results,
+        Err(e) => {
+            return Err(Problem::Failed(format!(
+                "simulation failed: {}",
+                e.diagnostics
+                    .first()
+                    .map_or(String::new(), ToString::to_string)
+            )));
+        }
+    };
+    if let Ok(f) = std::fs::File::create(cli.out.join(format!("{stem}.spx.raw"))) {
+        let mut w = std::io::BufWriter::new(f);
+        // Best effort: the raw file is only kept for inspection.
+        let _ = spx_output::write_raw_ascii(&ours, &mut w);
+    }
+    if cli.cached
+        && text
+            .lines()
+            .any(|l| l.trim() == "* spx-verify: pending-reference")
+        && matches!(ref_raw.try_exists(), Ok(false))
+    {
+        return Err(Problem::Missing(ref_raw.display().to_string()));
+    }
     let reference = if cli.cached {
         read_reference(&ref_raw)?
     } else {
@@ -114,22 +138,6 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>), Proble
         std::fs::rename(pending, &ref_raw)?;
         fresh
     };
-    let ours = match spx_engine::run(&nl) {
-        Ok(o) => o.results,
-        Err(e) => {
-            return Err(Problem::Failed(format!(
-                "simulation failed: {}",
-                e.diagnostics
-                    .first()
-                    .map_or(String::new(), ToString::to_string)
-            )));
-        }
-    };
-    if let Ok(f) = std::fs::File::create(cli.out.join(format!("{stem}.spx.raw"))) {
-        let mut w = std::io::BufWriter::new(f);
-        // Best effort: the raw file is only kept for inspection.
-        let _ = spx_output::write_raw_ascii(&ours, &mut w);
-    }
     let tol = Tolerances::from_deck(&text);
     let mut report = compare(&reference, &ours, &tol);
     if !ours.measures.is_empty() {

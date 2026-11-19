@@ -721,7 +721,10 @@ impl Flat<'_> {
             let emitted = !h.starts_with('.')
                 || ctx.prefix.is_empty()
                 || matches!(h.as_str(), ".ic" | ".nodeset" | ".save");
+            let behavioral = h.starts_with('b')
+                || (h.starts_with(['e', 'g']) && line.tokens.get(4).is_some_and(Token::is_eq));
             if self.statistical
+                && !behavioral
                 && emitted
                 && !h.starts_with('x')
                 && !matches!(h.as_str(), ".param" | ".func" | ".model" | ".global")
@@ -844,7 +847,45 @@ impl Flat<'_> {
                 self.instance(line, ctx, scope, depth);
                 continue;
             }
-            let mut toks = if substituted {
+            let mut toks = if behavioral && line.tokens.len() >= 6 {
+                let mut toks = line.tokens.clone();
+                let expr = crate::expr::parse_behavior(&toks[5].text).and_then(|e| {
+                    crate::expr::source_text(
+                        &e,
+                        &self.defs.funcs,
+                        &|name| match name {
+                            "time" | "temper" => Ok(name.to_owned()),
+                            "pi" => Ok(std::f64::consts::PI.to_string()),
+                            _ => scope.get(name, &self.defs.funcs).map(|v| {
+                                if v.is_sign_negative() {
+                                    format!("(-{})", -v)
+                                } else {
+                                    v.to_string()
+                                }
+                            }),
+                        },
+                        &|kind, name| {
+                            if kind == "v" {
+                                ctx.node(&self.defs, name)
+                            } else {
+                                ctx.element(name)
+                            }
+                        },
+                        0,
+                    )
+                });
+                match expr {
+                    Ok(s) => toks[5].text = format!("{{{s}}}"),
+                    Err(e) => {
+                        self.error("E-BSOURCE-EXPR", e, toks[5].span);
+                        continue;
+                    }
+                }
+                for t in &mut toks[6..] {
+                    *t = self.value(t, scope);
+                }
+                toks
+            } else if substituted {
                 line.tokens.clone()
             } else {
                 self.substitute(&line.tokens, scope)
@@ -852,8 +893,11 @@ impl Flat<'_> {
             let letter = h.chars().next().unwrap_or(' ');
             let n = toks.len();
             let node_slots: Vec<usize> = match letter {
-                'r' | 'c' | 'l' | 'v' | 'i' | 'd' | 'f' | 'h' => (1..3.min(n)).collect(),
-                'e' | 'g' | 'm' => (1..5.min(n)).collect(),
+                'w' | 'b' | 'r' | 'c' | 'l' | 'v' | 'i' | 'd' | 'f' | 'h' => {
+                    (1..3.min(n)).collect()
+                }
+                'e' | 'g' if toks.get(4).is_some_and(Token::is_eq) => (1..3.min(n)).collect(),
+                's' | 'e' | 'g' | 'm' => (1..5.min(n)).collect(),
                 'n' => {
                     let end = (1..n)
                         .find(|&i| toks.get(i + 1).is_some_and(Token::is_eq))
@@ -883,14 +927,31 @@ impl Flat<'_> {
             }
             if !ctx.prefix.is_empty() {
                 toks[0].text = ctx.element(&toks[0].text);
+                if matches!(letter, 'r' | 'c' | 'l') {
+                    for t in toks.iter_mut().skip(3).take(2) {
+                        if ctx.local_models.contains(&t.lower()) {
+                            t.text = ctx.model(&t.text);
+                        }
+                    }
+                }
                 // Controlling source of F/H.
-                if matches!(letter, 'f' | 'h')
+                if letter == 'k' {
+                    for t in toks.iter_mut().take(3).skip(1) {
+                        t.text = ctx.element(&t.text);
+                    }
+                }
+                if letter == 'w'
+                    && let Some(t) = toks.get_mut(4)
+                {
+                    t.text = ctx.model(&t.text);
+                }
+                if matches!(letter, 'f' | 'h' | 'w')
                     && let Some(t) = toks.get_mut(3)
                 {
                     t.text = ctx.element(&t.text);
                 }
                 // Model reference of D/Q/M: the first positional token after the nodes.
-                if matches!(letter, 'd' | 'q' | 'm' | 'n') {
+                if matches!(letter, 's' | 'd' | 'q' | 'm' | 'n') {
                     let at = node_slots.last().map_or(1, |&i| i + 1);
                     if let Some(t) = toks.get_mut(at)
                         && !t.is_eq()

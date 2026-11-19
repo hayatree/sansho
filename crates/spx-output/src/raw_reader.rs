@@ -46,6 +46,7 @@ fn kind_of(plot: &str) -> Option<AnalysisKind> {
 
 fn quantity_of(t: &str) -> Quantity {
     match t.to_ascii_lowercase().as_str() {
+        "temperature" => Quantity::Temperature,
         "time" => Quantity::Time,
         "frequency" => Quantity::Frequency,
         "current" => Quantity::Current,
