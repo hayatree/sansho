@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+mod btf;
 mod faer_backend;
 mod pattern;
 mod refactor;

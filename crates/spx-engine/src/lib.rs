@@ -144,6 +144,7 @@ pub struct Checked {
 ///
 /// On failure, returns all diagnostics (errors first).
 pub fn check(nl: &Netlist) -> Result<Checked, Vec<Diagnostic>> {
+    let _phase = spx_diag::Phase::start("setup");
     let (options, mut warnings) = SimOptions::from_cards(&nl.options);
     warnings.extend(nl.warnings.iter().cloned());
     let (circuit, w) = compile(nl, &options).map_err(|mut d| {
@@ -321,6 +322,26 @@ pub fn run_with(nl: &Netlist, cfg: &RunConfig) -> Result<RunOutput, RunError> {
     if nl.hdl.is_empty() && nl.elements.len() < circuit::PARALLEL_MIN_NONLINEAR {
         let jobs = cfg.threads.min(nl.analyses.len().max(1));
         return parallel::with_threads(jobs, || run_in_current_pool(nl));
+    }
+    if nl.hdl.is_empty() && nl.analyses.len() == 1 {
+        // Native elaboration is serial. Budget workers for useful device
+        // evaluation rather than waking the entire host for each assembly.
+        let checked = check_run(nl)?;
+        let ckt = &checked.circuit;
+        let work: usize = ckt
+            .groups
+            .iter()
+            .map(|g| {
+                let weight = if g.type_name() == "bsim4" { 4 } else { 1 };
+                g.len().saturating_mul(weight)
+            })
+            .sum();
+        let jobs = if ckt.parallel {
+            work.div_ceil(4096).max(2)
+        } else {
+            1
+        };
+        return parallel::with_threads(cfg.threads.min(jobs), || run_checked(nl, checked));
     }
     #[cfg(feature = "jit")]
     if !nl.hdl.is_empty() && nl.analyses.len() == 1 {

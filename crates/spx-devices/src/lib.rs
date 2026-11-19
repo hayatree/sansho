@@ -523,6 +523,20 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
     /// consistent, and set [`Slots::noncon`].
     fn eval(&self, ctx: &EvalCtx, x: &[f64], state: StateRef<'_>, out: &mut Slots);
 
+    /// Evaluate with a job-local linearization cache dedicated to this group.
+    /// A zero tolerance permits only bit-exact input reuse.
+    fn eval_cached(
+        &self,
+        ctx: &EvalCtx,
+        x: &[f64],
+        state: StateRef<'_>,
+        out: &mut Slots,
+        _cache: &mut bsim4::CoreCache,
+        _tolerance: f64,
+    ) {
+        self.eval(ctx, x, state, out);
+    }
+
     /// Evaluate a Newton assembly whose specified voltage increment is exactly zero.
     fn eval_fixed_voltage(
         &self,

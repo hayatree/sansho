@@ -2,7 +2,7 @@
 //! Provenance: original implementation from Gilbert and Peierls (1988) and Davis
 //! (2006), using faer's public ordering and pivoted simplicial factor interfaces.
 
-use crate::{CscPattern, FaerLu, LinearSolver, SolverError};
+use crate::{CscPattern, SolverError};
 use faer::dyn_stack::{MemBuffer, MemStack};
 use faer::sparse::linalg::lu::{factorize_symbolic_lu, simplicial};
 use faer::sparse::{SparseColMatRef, SymbolicSparseColMat};
@@ -18,15 +18,44 @@ pub struct NewtonLu {
 
 #[derive(Debug)]
 enum Backend {
+    Serial(Box<crate::faer_backend::SerialLu>),
+    Btf(Box<crate::btf::Btf>, CscPattern),
     Sparse(Box<Sparse>),
-    General(Box<FaerLu<f64>>),
 }
 
 impl NewtonLu {
     /// Prepare the column ordering and allocate pivoting workspace.
     pub fn new(pattern: &CscPattern) -> Result<Self, SolverError> {
         let n = pattern.dim();
-        let sparse = if n > 0 && pattern.nnz() <= n.saturating_mul(16) {
+        let selection = std::env::var("SPX_REAL_SOLVER").unwrap_or_default();
+        let auto = matches!(selection.as_str(), "" | "auto");
+        if !auto && !matches!(selection.as_str(), "newton" | "faer" | "btf") {
+            return Err(SolverError::Backend(format!(
+                "unknown SPX_REAL_SOLVER value {selection:?}"
+            )));
+        }
+        if (selection == "btf" || auto && n >= 2048 && pattern.nnz() <= n.saturating_mul(16))
+            && let Some(btf) = crate::btf::Btf::new(pattern, selection == "btf")?
+        {
+            return Ok(Self {
+                backend: Backend::Btf(Box::new(btf), pattern.clone()),
+                dim: n,
+                ready: false,
+            });
+        }
+        if auto && n >= 16_384 {
+            return Ok(Self {
+                backend: Backend::Serial(Box::new(crate::faer_backend::SerialLu::new(pattern)?)),
+                dim: n,
+                ready: false,
+            });
+        }
+        Self::unblocked(pattern, selection == "faer")
+    }
+
+    fn unblocked(pattern: &CscPattern, general: bool) -> Result<Self, SolverError> {
+        let n = pattern.dim();
+        let sparse = if !general && n > 0 && pattern.nnz() <= n.saturating_mul(16) {
             Sparse::new(pattern)?
         } else {
             None
@@ -34,9 +63,7 @@ impl NewtonLu {
         let backend = if let Some(sparse) = sparse {
             Backend::Sparse(Box::new(sparse))
         } else {
-            let mut lu = FaerLu::new();
-            lu.analyze(pattern)?;
-            Backend::General(Box::new(lu))
+            Backend::Serial(Box::new(crate::faer_backend::SerialLu::new(pattern)?))
         };
         Ok(Self {
             backend,
@@ -49,15 +76,27 @@ impl NewtonLu {
     pub fn last_column(&self) -> Option<usize> {
         match &self.backend {
             Backend::Sparse(s) => s.order.col_perm().arrays().0.last().copied(),
-            Backend::General(_) => None,
+            Backend::Serial(_) | Backend::Btf(..) => None,
         }
     }
 
     /// Factor a new numeric assembly, reverting to partial pivoting if needed.
     pub fn factor(&mut self, values: &[f64]) -> Result<(), SolverError> {
+        self.factor_with_status(values).map(|_| ())
+    }
+
+    /// Factor and report whether the saved pivot sequence was reused.
+    pub fn factor_with_status(&mut self, values: &[f64]) -> Result<bool, SolverError> {
+        self.ready = false;
+        if let Backend::Btf(b, pattern) = &self.backend
+            && !b.supports(values)
+        {
+            *self = Self::unblocked(pattern, false)?;
+        }
         let result = match &mut self.backend {
+            Backend::Btf(b, _) => b.factor(values),
+            Backend::Serial(g) => g.factor(values),
             Backend::Sparse(s) => s.factor(values),
-            Backend::General(s) => s.factor(values),
         };
         self.ready = result.is_ok();
         result
@@ -75,8 +114,9 @@ impl NewtonLu {
             });
         }
         match &mut self.backend {
+            Backend::Btf(b, _) => b.solve(rhs),
+            Backend::Serial(g) => g.solve(rhs),
             Backend::Sparse(s) => s.solve(rhs),
-            Backend::General(s) => s.solve(rhs),
         }
     }
 }
@@ -163,7 +203,7 @@ impl Sparse {
         }))
     }
 
-    fn factor(&mut self, values: &[f64]) -> Result<(), SolverError> {
+    fn factor(&mut self, values: &[f64]) -> Result<bool, SolverError> {
         if values.len() != self.matrix.row_idx().len() {
             return Err(SolverError::DimensionMismatch {
                 expected: self.matrix.row_idx().len(),
@@ -180,7 +220,7 @@ impl Sparse {
                     .plan
                     .refactor(values, &mut self.work, (floor * 1e8).min(f64::MAX))
             {
-                return Ok(());
+                return Ok(true);
             }
         }
         let Some((index, peak)) = values
@@ -200,7 +240,7 @@ impl Sparse {
                 .refactor(values, &mut self.work, (peak.abs() * 1e8).min(f64::MAX))
         {
             self.peak_index = index;
-            return Ok(());
+            return Ok(true);
         }
         self.peak_index = index;
         let a = SparseColMatRef::new(self.matrix.as_ref(), values);
@@ -221,7 +261,7 @@ impl Sparse {
         })?;
         self.plan
             .record(a, perm.arrays().0, &self.inverse, &self.pivoted);
-        Ok(())
+        Ok(false)
     }
     fn solve(&mut self, rhs: &mut [f64]) -> Result<(), SolverError> {
         let x = &mut self.work;
@@ -464,7 +504,7 @@ impl Plan {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::PatternBuilder;
+    use crate::{FaerLu, LinearSolver, PatternBuilder};
 
     #[test]
     fn reuses_and_replaces_pivots_without_changing_the_solution_bits() {

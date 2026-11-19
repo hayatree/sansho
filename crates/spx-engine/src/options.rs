@@ -13,6 +13,8 @@ pub struct SimOptions {
     pub va_cache: bool,
     /// Enable native Verilog-A kernels in JIT builds.
     pub va_jit: bool,
+    /// Permit BSIM4 intrinsic stamp reuse within vntol during Newton iteration.
+    pub bypass: bool,
     /// Relative tolerance.
     pub reltol: f64,
     /// Absolute current tolerance (A).
@@ -67,6 +69,7 @@ impl Default for SimOptions {
     fn default() -> Self {
         Self {
             va_cache: true,
+            bypass: false,
             va_jit: cfg!(feature = "jit"),
             reltol: 1e-3,
             abstol: 1e-12,
@@ -100,6 +103,10 @@ impl SimOptions {
             let ok = match (c.name.as_str(), c.value) {
                 ("va_cache", Some(v @ (0.0 | 1.0))) => {
                     o.va_cache = v == 1.;
+                    true
+                }
+                ("bypass", Some(v @ (0.0 | 1.0))) => {
+                    o.bypass = v == 1.;
                     true
                 }
                 ("va_jit", Some(v @ (0.0 | 1.0))) => {

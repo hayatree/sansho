@@ -90,6 +90,7 @@ type DynamicCards<'a> =
 struct Parser {
     has_hdl: bool,
     elements: Vec<Element>,
+    element_names: std::collections::HashSet<String>,
     analyses: Vec<AnalysisCard>,
     options: Vec<OptionCard>,
     models: Vec<ModelCard>,
@@ -233,7 +234,7 @@ impl Parser {
             }
         };
         if let Some(kind) = kind {
-            if self.elements.iter().any(|e| e.name == name) {
+            if !self.element_names.insert(name.clone()) {
                 self.err(
                     "E-PARSE-DUPLICATE",
                     format!("duplicate element name `{name}`"),

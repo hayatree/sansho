@@ -281,6 +281,12 @@ pub fn profile_devices() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("SPX_PROFILE_DEVICES").is_some())
 }
 
+/// Enable aggregate phase timers for a profiled process.
+pub fn profile_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("SPX_PROFILE").as_deref() == Ok("1"))
+}
+
 /// Optional wall-clock probe for startup and analysis benchmarks.
 #[derive(Debug)]
 pub struct Phase(&'static str, Option<std::time::Instant>);
@@ -288,13 +294,7 @@ pub struct Phase(&'static str, Option<std::time::Instant>);
 impl Phase {
     /// Emit a machine-readable elapsed time on drop when SPX_PROFILE is set.
     pub fn start(name: &'static str) -> Self {
-        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        Self(
-            name,
-            ENABLED
-                .get_or_init(|| std::env::var_os("SPX_PROFILE").is_some())
-                .then(std::time::Instant::now),
-        )
+        Self(name, profile_enabled().then(std::time::Instant::now))
     }
 }
 

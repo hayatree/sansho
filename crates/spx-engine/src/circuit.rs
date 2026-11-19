@@ -73,42 +73,44 @@ pub(crate) type Src = (u32, u32);
 /// The order is fixed at elaboration, so the floating-point result does not depend on how the
 /// destinations are distributed over threads (architecture D4).
 #[derive(Debug)]
-pub(crate) enum Gather {
-    // Small systems fit in cache and are always assembled on one worker.
-    ByGroup(Vec<Vec<(usize, usize)>>),
-    ByDestination { ptr: Vec<usize>, src: Vec<Src> },
+pub(crate) struct Gather {
+    pub(crate) by_group: Vec<Vec<(usize, usize)>>,
+    pub(crate) by_destination: Option<(Vec<usize>, Vec<Src>)>,
 }
 
 impl Gather {
-    /// Build from `(group, slot, destination)` triples given in accumulation order.
+    /// Keep the source order for contiguous single-worker reads. The optional
+    /// transpose allows parallel workers to own disjoint destination ranges.
     fn build(len: usize, entries: impl Iterator<Item = (usize, usize, usize)> + Clone) -> Self {
-        if len <= crate::solve::GATHER_CHUNK {
-            let mut groups = Vec::<Vec<_>>::new();
-            for (g, k, d) in entries {
-                if groups.len() <= g {
-                    groups.resize_with(g + 1, Vec::new);
-                }
-                groups[g].push((k, d));
+        let mut by_group = Vec::<Vec<_>>::new();
+        for (g, k, d) in entries.clone() {
+            if by_group.len() <= g {
+                by_group.resize_with(g + 1, Vec::new);
             }
-            return Self::ByGroup(groups);
+            by_group[g].push((k, d));
         }
-        let mut ptr = vec![0usize; len + 1];
-        for (_, _, d) in entries.clone() {
-            ptr[d + 1] += 1;
+        let by_destination = (len > crate::solve::GATHER_CHUNK).then(|| {
+            let mut ptr = vec![0usize; len + 1];
+            for (_, _, d) in entries.clone() {
+                ptr[d + 1] += 1;
+            }
+            for i in 0..len {
+                ptr[i + 1] += ptr[i];
+            }
+            let mut fill = ptr.clone();
+            let mut src = vec![(0u32, 0u32); ptr[len]];
+            for (g, k, d) in entries {
+                src[fill[d]] = (g as u32, k as u32);
+                fill[d] += 1;
+            }
+            (ptr, src)
+        });
+        Self {
+            by_group,
+            by_destination,
         }
-        for i in 0..len {
-            ptr[i + 1] += ptr[i];
-        }
-        let mut fill = ptr.clone();
-        let mut src = vec![(0u32, 0u32); ptr[len]];
-        for (g, k, d) in entries {
-            src[fill[d]] = (g as u32, k as u32);
-            fill[d] += 1;
-        }
-        Self::ByDestination { ptr, src }
     }
 }
-
 /// Gather maps for `G`, `C` (pattern values) and `f`, `q`, `b` (unknowns).
 #[derive(Debug)]
 pub(crate) struct GatherMaps {
@@ -746,9 +748,11 @@ pub(crate) fn compile_cached(
             if e.kind.model().is_some() != nonlinear {
                 continue;
             }
+            // A device can touch a node at multiple terminals. Element names
+            // are unique and all terminals of this device are visited together.
             for n in e.kind.nodes() {
                 if let Some(&i) = node_index.get(n)
-                    && !node_elements[i].contains(&e.name)
+                    && node_elements[i].last() != Some(&e.name)
                 {
                     node_elements[i].push(e.name.clone());
                 }

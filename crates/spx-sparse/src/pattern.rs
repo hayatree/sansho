@@ -54,7 +54,14 @@ impl PatternBuilder {
         for c in 0..n {
             col_ptr[c + 1] += col_ptr[c];
         }
+        let mut implicit = vec![true; n];
+        for &(r, c) in &self.entries {
+            if r == c {
+                implicit[r] = false;
+            }
+        }
         let pattern = CscPattern {
+            implicit_diagonals: (0..n).filter(|&j| implicit[j]).collect(),
             n,
             col_ptr,
             row_idx,
@@ -71,6 +78,7 @@ impl PatternBuilder {
 /// An immutable `n × n` CSC sparsity pattern with sorted row indices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CscPattern {
+    pub(crate) implicit_diagonals: Vec<usize>,
     n: usize,
     col_ptr: Vec<usize>,
     row_idx: Vec<usize>,

@@ -12,6 +12,7 @@ use spx_diag::{Confidence, Culprit, CulpritKind, Diagnostic};
 use spx_sparse::{NewtonLu, SolverError};
 
 use rayon::prelude::*;
+use std::time::{Duration, Instant};
 
 use crate::circuit::{Circuit, DISCARD, Gather};
 use crate::options::SimOptions;
@@ -50,13 +51,21 @@ pub(crate) struct Assembled {
 #[derive(Debug)]
 pub(crate) struct Workspace {
     timed: bool,
-    lu_time: std::time::Duration,
+    detailed: bool,
+    assembly_time: Duration,
+    symbolic_time: Duration,
+    full_factors: usize,
+    refactors: usize,
+    solve_time: Duration,
+    last_linear_jac: Option<Vec<f64>>,
+    identical_factors: usize,
     factor_time: std::time::Duration,
     group_time: std::time::Duration,
     pub assemblies: usize,
     pub newton_calls: usize,
     pub newton_iterations: usize,
     pub slots: Vec<Slots>,
+    core_cache: Vec<spx_devices::bsim4::CoreCache>,
     pub asm: Assembled,
     jac: Vec<f64>,
     rhs: Vec<f64>,
@@ -73,7 +82,27 @@ pub(crate) struct Workspace {
 
 impl Drop for Workspace {
     fn drop(&mut self) {
-        if self.timed {
+        if spx_diag::profile_enabled() {
+            use std::io::Write;
+            let mut err = std::io::stderr().lock();
+            for (name, duration) in [
+                ("device", self.group_time),
+                ("assembly", self.assembly_time),
+                ("symbolic", self.symbolic_time),
+                ("numeric", self.factor_time),
+                ("solve", self.solve_time),
+            ] {
+                let _ = writeln!(
+                    err,
+                    "spx-phase {name} {:.6}",
+                    duration.as_secs_f64() * 1000.
+                );
+            }
+            let _ = writeln!(err, "spx-workers {}", rayon::current_num_threads());
+            let _ = writeln!(err, "spx-identical {}", self.identical_factors);
+            let _ = writeln!(err, "spx-factors {} {}", self.full_factors, self.refactors);
+        }
+        if self.detailed {
             use std::io::Write;
             let _ = writeln!(
                 std::io::stderr().lock(),
@@ -94,14 +123,22 @@ impl Workspace {
         let n = ckt.dim();
         let nnz = ckt.pattern.nnz();
         Self {
-            timed: spx_diag::profile_devices(),
-            lu_time: std::time::Duration::ZERO,
+            timed: spx_diag::profile_enabled() || spx_diag::profile_devices(),
+            detailed: spx_diag::profile_devices(),
+            assembly_time: Duration::ZERO,
+            symbolic_time: Duration::ZERO,
+            full_factors: 0,
+            refactors: 0,
+            solve_time: Duration::ZERO,
+            last_linear_jac: (ckt.linear && n >= 2048).then(Vec::new),
+            identical_factors: 0,
             factor_time: std::time::Duration::ZERO,
             group_time: std::time::Duration::ZERO,
             assemblies: 0,
             newton_calls: 0,
             newton_iterations: 0,
             slots: ckt.new_slots(),
+            core_cache: (0..ckt.groups.len()).map(|_| Default::default()).collect(),
             asm: Assembled {
                 g: vec![0.0; nnz],
                 c: vec![0.0; nnz],
@@ -159,7 +196,10 @@ pub(crate) fn make_ctx(opts: &SimOptions, mode: Mode, tran: TranParams) -> EvalC
 /// One device group with its slots and state, as zipped for evaluation.
 type EvalItem<'a> = (
     (&'a Box<dyn spx_devices::DeviceGroup>, &'a mut Slots),
-    (&'a mut Vec<f64>, &'a Vec<f64>),
+    (
+        (&'a mut Vec<f64>, &'a Vec<f64>),
+        &'a mut spx_devices::bsim4::CoreCache,
+    ),
 );
 
 /// Evaluate all groups at `x` and sum contributions in a fixed order (architecture D4).
@@ -234,23 +274,41 @@ fn assemble_for(
 ) {
     ws.assemblies += 1;
     let par = ckt.parallel && rayon::current_num_threads() > 1;
-    let eval = |((group, s), (current, accepted)): EvalItem<'_>| {
+    let eval = |((group, s), ((current, accepted), cache)): EvalItem<'_>| {
         s.noncon = false;
         s.error = None;
         let state = StateRef { accepted, current };
         if let Assembly::Charges(Some(node)) | Assembly::Transient(Some(node)) = request {
             group.eval_fixed_voltage(ctx, x, state, s, node);
+        } else if ckt.dim() >= 256 || opts.bypass {
+            group.eval_cached(
+                ctx,
+                x,
+                state,
+                s,
+                cache,
+                if opts.bypass { opts.vntol } else { 0. },
+            );
         } else {
             group.eval(ctx, x, state, s);
         }
     };
     let started = ws.timed.then(std::time::Instant::now);
-    let states = ws.state.iter_mut().zip(ws.accepted.iter());
+    let states = ws
+        .state
+        .iter_mut()
+        .zip(ws.accepted.iter())
+        .zip(&mut ws.core_cache);
     if par {
         ckt.groups
             .par_iter()
             .zip(ws.slots.par_iter_mut())
-            .zip(ws.state.par_iter_mut().zip(ws.accepted.par_iter()))
+            .zip(
+                ws.state
+                    .par_iter_mut()
+                    .zip(ws.accepted.par_iter())
+                    .zip(ws.core_cache.par_iter_mut()),
+            )
             .for_each(eval);
     } else {
         ckt.groups
@@ -262,22 +320,35 @@ fn assemble_for(
     if let Some(started) = started {
         ws.group_time += started.elapsed();
     }
+    let gather_start = ws.timed.then(Instant::now);
     ws.noncon = ws.slots.iter().any(|s| s.noncon);
     let slots = &ws.slots;
     let a = &mut ws.asm;
     let gm = &ckt.gather;
-    if request != Assembly::Resistive {
-        gather(&mut a.q, &gm.q, slots, |s| &s.q, par);
-    }
     if matches!(request, Assembly::Charges(_)) {
+        gather(&mut a.q, &gm.q, slots, |s| &s.q, par);
+        if let Some(t) = gather_start {
+            ws.assembly_time += t.elapsed();
+        }
         return;
     }
-    gather(&mut a.g, &gm.g, slots, |s| &s.g, par);
-    if matches!(request, Assembly::Full | Assembly::Transient(_)) {
-        gather(&mut a.c, &gm.c, slots, |s| &s.c, par);
+    let mut conductance = || {
+        gather(&mut a.g, &gm.g, slots, |s| &s.g, par);
+        gather(&mut a.f, &gm.f, slots, |s| &s.f, par);
+    };
+    let mut charge_and_sources = || {
+        if request != Assembly::Resistive {
+            gather(&mut a.c, &gm.c, slots, |s| &s.c, par);
+            gather(&mut a.q, &gm.q, slots, |s| &s.q, par);
+        }
+        gather(&mut a.b, &gm.b, slots, |s| &s.b, par);
+    };
+    if par {
+        rayon::join(conductance, charge_and_sources);
+    } else {
+        conductance();
+        charge_and_sources();
     }
-    gather(&mut a.f, &gm.f, slots, |s| &s.f, par);
-    gather(&mut a.b, &gm.b, slots, |s| &s.b, par);
     for &(i, v) in &ws.clamp {
         let d = ckt.node_diag[i];
         if d != DISCARD {
@@ -294,6 +365,9 @@ fn assemble_for(
             }
         }
     }
+    if let Some(t) = gather_start {
+        ws.assembly_time += t.elapsed();
+    }
 }
 
 /// Destinations per parallel task in [`gather`].
@@ -301,18 +375,15 @@ pub(crate) const GATHER_CHUNK: usize = 2048;
 
 /// `dst[i] = Σ sources of i`, accumulated in the fixed order of `map`.
 fn gather(dst: &mut [f64], map: &Gather, slots: &[Slots], pick: fn(&Slots) -> &[f64], par: bool) {
-    let (ptr, src) = match map {
-        Gather::ByGroup(groups) => {
-            dst.fill(0.);
-            for (slots, group) in slots.iter().zip(groups) {
-                let values = pick(slots);
-                for &(k, d) in group {
-                    dst[d] += values[k];
-                }
+    let Some((ptr, src)) = map.by_destination.as_ref().filter(|_| par) else {
+        dst.fill(0.);
+        for (slots, group) in slots.iter().zip(&map.by_group) {
+            let values = pick(slots);
+            for &(k, d) in group {
+                dst[d] += values[k];
             }
-            return;
         }
-        Gather::ByDestination { ptr, src } => (ptr, src),
+        return;
     };
     let fill = |base: usize, out: &mut [f64]| {
         for (j, d) in out.iter_mut().enumerate() {
@@ -323,13 +394,9 @@ fn gather(dst: &mut [f64], map: &Gather, slots: &[Slots], pick: fn(&Slots) -> &[
             *d = sum;
         }
     };
-    if par && dst.len() > GATHER_CHUNK {
-        dst.par_chunks_mut(GATHER_CHUNK)
-            .enumerate()
-            .for_each(|(c, out)| fill(c * GATHER_CHUNK, out));
-    } else {
-        fill(0, dst);
-    }
+    dst.par_chunks_mut(GATHER_CHUNK)
+        .enumerate()
+        .for_each(|(c, out)| fill(c * GATHER_CHUNK, out));
 }
 
 /// An unknown that failed to converge.
@@ -390,7 +457,11 @@ pub(crate) fn newton(
     let n = ckt.dim();
     ws.newton_calls += 1;
     if ws.lu.is_none() {
+        let start = ws.timed.then(Instant::now);
         ws.lu = Some(NewtonLu::new(&ckt.pattern).map_err(NewtonError::Solver)?);
+        if let Some(t) = start {
+            ws.symbolic_time += t.elapsed();
+        }
     }
     ws.restore();
     let kinds = ckt.unknowns.kinds();
@@ -415,6 +486,7 @@ pub(crate) fn newton(
         if let Some(d) = ws.slots.iter().find_map(|s| s.error.clone()) {
             return Err(NewtonError::Device(Box::new(d)));
         }
+        let assemble_start = ws.timed.then(Instant::now);
         let a = &ws.asm;
         if static_step {
             ws.jac.copy_from_slice(&a.g);
@@ -443,6 +515,9 @@ pub(crate) fn newton(
                 }
             }
         }
+        if let Some(t) = assemble_start {
+            ws.assembly_time += t.elapsed();
+        }
         let dump = ws.newton_iterations == 1
             && std::env::var("SPX_PROFILE_MATRIX").as_deref() == Ok("entries");
         if dump {
@@ -454,21 +529,52 @@ pub(crate) fn newton(
             .lu
             .as_mut()
             .ok_or(NewtonError::Solver(SolverError::NotReady))?;
-        match lu.factor(&ws.jac) {
-            Ok(()) => {}
-            Err(SolverError::Singular { .. }) => return Err(NewtonError::Singular),
-            Err(e) => return Err(NewtonError::Solver(e)),
+        let identical = ws.last_linear_jac.as_ref().is_some_and(|old| {
+            old.len() == ws.jac.len()
+                && old
+                    .iter()
+                    .zip(&ws.jac)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+        });
+        if identical {
+            if ws.timed {
+                ws.identical_factors += 1;
+            }
+        } else {
+            let factor = lu.factor_with_status(&ws.jac);
+            if ws.timed {
+                if matches!(factor, Ok(true)) {
+                    ws.refactors += 1;
+                } else {
+                    ws.full_factors += 1;
+                }
+            }
+            if let Some(old) = &mut ws.last_linear_jac {
+                old.clear();
+                if factor.is_ok() {
+                    old.extend_from_slice(&ws.jac);
+                }
+            }
+            if let Some(t) = lu_start {
+                ws.factor_time += t.elapsed();
+            }
+            match factor {
+                Ok(_) => {}
+                Err(SolverError::Singular { .. }) => return Err(NewtonError::Singular),
+                Err(e) => return Err(NewtonError::Solver(e)),
+            }
         }
-        if let Some(t) = lu_start {
+        if identical && let Some(t) = lu_start {
             ws.factor_time += t.elapsed();
         }
+        let solve_start = ws.timed.then(Instant::now);
         match lu.solve(&mut ws.rhs) {
             Ok(()) => {}
             Err(SolverError::Singular { .. }) => return Err(NewtonError::Singular),
             Err(e) => return Err(NewtonError::Solver(e)),
         }
-        if let Some(t) = lu_start {
-            ws.lu_time += t.elapsed();
+        if let Some(t) = solve_start {
+            ws.solve_time += t.elapsed();
         }
         if dump {
             use std::io::Write;
@@ -510,7 +616,7 @@ pub(crate) fn newton(
         }
         // A linear circuit is solved exactly by one Newton step.
         if ckt.linear || (converged && iter > 1 && !ws.noncon && !ctx.init_junctions) {
-            if ws.timed {
+            if ws.detailed {
                 use std::io::Write;
                 let _ = writeln!(
                     std::io::stderr().lock(),
@@ -523,7 +629,7 @@ pub(crate) fn newton(
                     "spx-newton {} {} {}",
                     ctx.time,
                     iter,
-                    ws.lu_time.as_nanos()
+                    (ws.solve_time + ws.factor_time).as_nanos()
                 );
             }
             return Ok(iter);

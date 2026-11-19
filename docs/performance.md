@@ -1,4 +1,4 @@
-# Verilog-A performance
+# Simulator performance
 
 The benchmark runs the IHP SG13G2 decks with the release Cranelift JIT. The
 comparison is against ngspice 44.2 with the corresponding OSDI models. The
@@ -310,3 +310,171 @@ run `target/release/spx run -j1 verify/va-decks/cmg_ring5.cir` or the inverter
 deck. Set `SPX_VA_JIT=0` for the interpreter. In the device profile,
 `spx-device` reports native, interpreted and reused counts followed by native
 nanoseconds. `spx-interpreted-ns` reports the interpreted nanoseconds per group.
+
+## Large circuits
+
+M5-1 uses five generated transient decks. The two multipliers share 256
+partial products, a row-wise carry-save array and a final ripple adder.
+The implementation uses 2,336 NAND2s, 32 NOR2s and 304 inverters at 1.8 V.
+The digital check samples all 32 product bits just before the next operand
+change and at the end of the run. Valid lows are −0.18 to 0.36 V and valid
+highs are 1.44 to 1.98 V. Four unsigned operand pairs exercise low and high
+bits and the final carries. MOS1 uses 2 ns per vector. BSIM4 needs 8 ns per
+vector to settle the high-order carries with the generic verification cards.
+The 2 ns BSIM4 pilot produced incorrect products at the sampling times.
+
+The MOS1 ring scales the parallel-assembly test fixture to 1,001 stages. The
+1,000-stage BSIM4 chain starts in its quiescent state and launches an input
+pulse. The 300 × 300 grid includes 90,000 local capacitors, horizontal and
+vertical resistors, a feed resistor and three pulsed loads.
+
+### Reproduction
+
+```sh
+python3 benches/large/gen.py
+cargo build --offline --release -p spx-cli
+python3 benches/large/run.py --runs 3
+python3 benches/large/run.py --check-bits
+```
+
+The driver launches a fresh release CLI for each repetition and reports
+median milliseconds. It times from process launch to exit with
+`SPX_PROFILE=1` and includes writing the projected ASCII raw file. Product
+checks run outside that interval. The optional `--wall-binary` obtains wall
+time from a second executable with profiling disabled. The phase columns are
+independent medians. Setup includes file reading, preprocessing, flattening,
+parsing and checking/elaboration. Device measures wall time across all
+evaluation workers. Assembly includes gathering slots and constructing the
+Newton matrix and RHS. Control covers transient integration coefficients,
+prediction initialization, charge history and LTE. Output covers CLI raw
+serialization and summary. Other costs include Newton convergence tests,
+waveform retention, pool setup and process teardown. A pivot count denotes
+a factorization with a fresh pivot search in at least one block. Refactor
+counts assemblies where all blocks reused their pivot sequences. Identical
+counts solves that reused the entire numeric factorization.
+
+The baseline is revision `137dc4d`, built with only the aggregate timing
+probes and the factor outcome exposed. The candidate uses the same release
+profile and generic cards. The host is a Ryzen AI Max+ 395 with 16 physical
+cores and 32 available logical CPUs. In the default columns the CLI received
+no worker argument. HEAD used 32 workers. The candidate used two for the ring,
+three for the chain, one for the grid, five for the MOS1 multiplier and twelve
+for the BSIM4 multiplier. Independent long deck runs overlapped on this host,
+so the wall times include CPU and memory contention.
+
+An independent wall-clock check ran the untouched release executable from
+`137dc4d` and the candidate with profiling disabled. These are individual
+one-worker runs in seconds. Both multipliers passed all 128 product-bit
+checks on each executable.
+
+| Deck | Untouched HEAD | M5-1 |
+|---|---:|---:|
+| Ring MOS1 | 0.131 | 0.107 |
+| Chain BSIM4 | 1.153 | 0.746 |
+| RC grid | 464.61 | 4.62 |
+| Multiplier MOS1 | 535.67 | 9.39 |
+| Multiplier BSIM4 | 508.14 | 46.65 |
+
+The generated Boolean gate network also agreed with unsigned multiplication
+on 537 edge and pseudorandom operand pairs. Enabling approximate device bypass
+for the cached BSIM4 and SKY130 suites gave 26 passes and the four declared
+known differences.
+
+### M5-1 measurements
+
+Times are milliseconds. Each candidate row and each inverter baseline row is the median of three runs. The grid and multiplier baseline rows are individual full runs. Small differences on the short chain are within the variation observed on this shared host.
+
+| Deck | Workers | Build | Wall | Setup and parse | Device | Assembly | Symbolic | Numeric | Solve | Control | Output |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Ring MOS1 | 1 | HEAD | 122.73 | 22.90 | 62.34 | 21.95 | 0.19 | 4.57 | 1.99 | 0.57 | 0.25 |
+| Ring MOS1 | 1 | M5-1 | 117.59 | 21.25 | 68.45 | 9.27 | 0.26 | 4.99 | 2.04 | 0.47 | 0.22 |
+| Ring MOS1 | default | HEAD | 257.85 | 29.22 | 180.96 | 34.97 | 0.18 | 5.75 | 2.18 | 1.21 | 0.30 |
+| Ring MOS1 | default | M5-1 | 152.66 | 19.93 | 75.44 | 28.47 | 0.23 | 4.74 | 2.00 | 0.47 | 0.20 |
+| Chain BSIM4 | 1 | HEAD | 1,358.46 | 249.29 | 891.76 | 152.45 | 0.19 | 7.08 | 3.29 | 12.61 | 0.18 |
+| Chain BSIM4 | 1 | M5-1 | 741.69 | 249.83 | 424.60 | 41.79 | 0.17 | 4.70 | 2.61 | 10.89 | 0.19 |
+| Chain BSIM4 | default | HEAD | 1,064.33 | 238.65 | 667.37 | 118.93 | 0.16 | 6.51 | 3.11 | 13.41 | 0.26 |
+| Chain BSIM4 | default | M5-1 | 1,069.53 | 281.34 | 616.19 | 119.29 | 0.20 | 7.50 | 4.66 | 12.77 | 0.18 |
+| RC grid | 1 | HEAD | 479,758.61 | 469,685.24 | 139.05 | 244.59 | 112.54 | 8,416.87 | 872.20 | 40.64 | 0.21 |
+| RC grid | 1 | M5-1 | 4,710.13 | 684.23 | 156.82 | 181.63 | 46.96 | 2,239.67 | 1,026.17 | 54.28 | 0.34 |
+| RC grid | default | HEAD | 1,340,635.91 | 447,830.16 | 159.03 | 379.03 | 81.12 | 890,213.61 | 1,625.00 | 52.49 | 0.31 |
+| RC grid | default | M5-1 | 4,781.72 | 765.69 | 159.00 | 172.59 | 58.13 | 2,201.06 | 1,009.04 | 55.52 | 0.58 |
+| Multiplier MOS1 | 1 | HEAD | 643,436.07 | 386.07 | 3,845.27 | 4,326.41 | 20.26 | 616,172.99 | 18,315.49 | 20.15 | 1.11 |
+| Multiplier MOS1 | 1 | M5-1 | 9,169.21 | 80.00 | 2,889.16 | 1,831.55 | 5.07 | 3,858.89 | 403.89 | 17.54 | 2.59 |
+| Multiplier MOS1 | default | HEAD | 5,017,460.00 | 303.35 | 3,885.22 | 3,995.45 | 20.12 | 4,979,916.95 | 27,053.67 | 26.36 | 1.92 |
+| Multiplier MOS1 | default | M5-1 | 14,753.89 | 92.84 | 5,221.22 | 4,151.00 | 10.03 | 4,637.81 | 502.22 | 21.03 | 7.75 |
+| Multiplier BSIM4 | 1 | HEAD | 544,171.47 | 1,554.16 | 43,750.24 | 11,704.24 | 14.05 | 471,772.97 | 15,002.21 | 280.69 | 1.40 |
+| Multiplier BSIM4 | 1 | M5-1 | 49,240.17 | 1,269.04 | 38,801.64 | 4,265.60 | 5.37 | 3,944.31 | 493.65 | 306.99 | 3.15 |
+| Multiplier BSIM4 | default | HEAD | 4,585,350.00 | 1,511.77 | 10,354.48 | 7,958.15 | 11.88 | 4,537,470.17 | 27,678.54 | 273.99 | 1.53 |
+| Multiplier BSIM4 | default | M5-1 | 46,392.89 | 1,310.23 | 29,449.35 | 10,381.15 | 8.07 | 4,275.91 | 575.75 | 295.27 | 2.96 |
+
+Counts are for the complete transient, including initialization. Points include the initial sample. Both multipliers passed all product checks on HEAD. The historical worker comparison flagged different multiplier Newton counts and different grid waveforms. The table includes timings from those completed, profiled CLI processes. The candidate gave identical counts and full-precision waveforms across worker settings.
+
+| Deck | Build | Workers | Newton | Points | Rejected | Pivot search | Fixed pivots | Identical Jacobian |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| Ring MOS1 | HEAD | both | 206 | 66 | 0 | 2 | 204 | 0 |
+| Ring MOS1 | M5-1 | both | 206 | 66 | 0 | 2 | 204 | 0 |
+| Chain BSIM4 | HEAD | both | 290 | 70 | 0 | 1 | 289 | 0 |
+| Chain BSIM4 | M5-1 | both | 290 | 70 | 0 | 1 | 289 | 0 |
+| RC grid | HEAD | both | 63 | 63 | 0 | 63 | 0 | 0 |
+| RC grid | M5-1 | both | 63 | 63 | 0 | 20 | 0 | 43 |
+| Multiplier MOS1 | HEAD | 1 | 2724 | 206 | 27 | 2724 | 0 | 0 |
+| Multiplier MOS1 | HEAD | default | 2680 | 206 | 27 | 2680 | 0 | 0 |
+| Multiplier MOS1 | M5-1 | both | 2664 | 206 | 27 | 1428 | 1236 | 0 |
+| Multiplier BSIM4 | HEAD | 1 | 2344 | 222 | 33 | 2344 | 0 | 0 |
+| Multiplier BSIM4 | HEAD | default | 2346 | 222 | 33 | 2346 | 0 | 0 |
+| Multiplier BSIM4 | M5-1 | both | 2373 | 222 | 32 | 1023 | 1350 | 0 |
+
+### Profile-guided changes
+
+The grid spent 469.7 seconds in setup and parsing at one worker on HEAD.
+Element duplicate detection scanned every previous element. A name set
+preserves duplicate diagnostics with expected linear total lookup time.
+Elaboration now checks repeated terminals of the current device in constant
+time even on a high-fanout rail. The final grid makes 63 solves with 20
+factorizations. Exactly repeating Jacobians account for the other 43.
+An intermediate build that retained general faer's pool-dependent frontal
+kernels produced different grid waveforms across worker settings. Explicitly
+sequential kernels and reusable scratch give identical full-precision results.
+
+At one worker the MOS1 multiplier spent 616.2 seconds in numeric LU on
+HEAD. BTF separates the rail and input constraints before ordering the main
+block. The first BTF trial took 7.18 seconds in numeric factorization. Retaining
+a valid pivot prefix during a partial refactor brought that phase to 4.35 seconds.
+A source-ordered serial gather reduced the assembly phase from 4.06 to 2.38
+seconds in consecutive experiments. In a sweep on this host, four, eight,
+sixteen and thirty-two unrestricted workers took 13.41, 14.98, 17.27 and
+21.07 seconds. The engine now budgets workers using device workload and can
+gather conductance and charge in parallel.
+
+The BSIM4 chain's main cost was intrinsic device evaluation. An eight-nanosecond
+hold in the multiplier exposed the same cost over a larger switching wavefront.
+An optional one-worker trial with `.options bypass=1` completed the multiplier
+in 34.38 seconds, including 24.56 seconds in device evaluation, against 47.69
+and 37.47 seconds respectively in the preceding exact-reuse build. All 128
+bit checks passed in both runs. The approximate option changed the Newton
+work count and remains off by default.
+
+All five candidates produced identical round-trip JSON across one and default
+workers with the save projections removed. The cached verifier reported 14
+ordinary passes, 15 VA passes, 19 BSIM4 passes plus three known differences,
+and seven SKY130 passes plus one known difference. Ngspice 44.2 was unavailable
+as an executable in the offline build environment, and its Docker socket denied
+access. Its runtime and fresh compatibility checks remain for the maintainer.
+
+The next single-worker targets are exact BSIM4 evaluation and the remaining
+pivot searches in the 5,034-column multiplier block. Splitting work across the 67 small companion
+blocks leaves almost all factorization in the large block.
+
+A diagnostic build measured the first successful fixed-pivot update of the
+large block during startup. Both models had 526 dependency levels, including
+253 singleton levels, and a maximum width of 707 columns. Counting one unit
+per column, input entry, stored lower or upper entry and elimination update
+gave the MOS1 block 956,168 work units with 592,618 on its critical path.
+The BSIM4 counts were 968,314 and 603,458. For this cost model, even unlimited
+workers bound ideal speedup to about 1.6× on these two startup factorizations.
+Sampling a reusable pivot sequence every 500 factor calls over each complete
+transient gave 521–529 levels across 11 samples. The ideal column-parallel
+speedup ranged from 1.57× to 1.62× before any synchronization cost. These
+measurements favor reducing repivot and BSIM4 evaluation costs before L3.
+The BSIM4 assembly cost also rose from 4.27 s at one worker to 10.38 s at
+the default, offsetting most of the device evaluation savings.

@@ -27,6 +27,9 @@ that introduces the code.
 | Backward Euler / trapezoidal integration, breakpoint handling | `spx-engine/src/analysis.rs` | Nagel (1975); standard numerical ODE texts. Device-local charge error estimates and the internal RC startup bound are original applications of divided differences and linearized KCL. |
 | Topology checks (DC path, voltage-source loops) | `spx-engine/src/circuit.rs` | Ho, Ruehli & Brennan (1975); union-find (textbook) |
 | ASCII raw file layout | `spx-output` | Publicly documented SPICE3/ngspice rawfile format |
+| Large circuit BTF and real LU | `spx-sparse/src/btf.rs` | Original alternating-path maximum transversal from Duff (1981), iterative strongly connected components from Tarjan (1972), and left-looking sparse elimination from Gilbert & Peierls (1988). Block triangular solves and threshold pivot reuse follow the algorithm descriptions in Davis & Palamadai Natarajan, *Algorithm 907*, ACM TOMS (2010). Ordering uses the existing faer dependency through its public API. |
+| Large circuit decks | `benches/large/gen.py` | Original row-wise unsigned multiplication, CMOS gates and RC lattice. The ring scales the repository's `big_ring` test circuit. The BSIM4 cards come from `verify/bsim4-decks/b4_inverter_tran.cir`. |
+| BSIM4 intrinsic bypass | `spx-devices/src/bsim4/mod.rs` | Original reuse of current and charge linearizations, following device bypass in Nagel's SPICE2 thesis (1975). |
 | Sparse LU | `spx-sparse/src/faer_backend.rs` | `faer` crate (MIT), used as a library dependency |
 | Forward-mode automatic differentiation | `spx-devices/src/dual.rs` | Griewank & Walther, *Evaluating Derivatives* (SIAM, 2008) |
 | pn-junction current, depletion charge with `fc` linearization, junction limiting, `vcrit` | `spx-devices/src/junction.rs` | Nagel (1975); Antognetti & Massobrio (1993), ch. 1 |

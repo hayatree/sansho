@@ -695,7 +695,10 @@ pub(crate) fn tran(
     let mut h = 0.01 * hmax.min(bps.first().copied().unwrap_or(tstop));
     let mut integ = Integration::dc(charges.len());
     let mut x_new = x.clone();
+    let profile = spx_diag::profile_enabled();
+    let mut control = std::time::Duration::ZERO;
     while t < tstop - eps {
+        let begin = profile.then(std::time::Instant::now);
         attempted_steps += 1;
         let next_bp = bps.get(bp_idx).copied().unwrap_or(tstop);
         h = h.min(hmax);
@@ -718,6 +721,9 @@ pub(crate) fn tran(
         ctx.time = t + h;
         ctx.final_step = ctx.time >= tstop - eps;
         x_new.copy_from_slice(&x);
+        if let Some(t) = begin {
+            control += t.elapsed();
+        }
         if let Err(e) = newton(ckt, &ctx, &integ, &mut x_new, &mut ws, opts, opts.itl4, 0.0) {
             h /= 8.0;
             if h < hmin {
@@ -741,6 +747,7 @@ pub(crate) fn tran(
         eval_ctx.time = ctx.time;
         eval_ctx.final_step = ctx.final_step;
         crate::solve::assemble_charges(ckt, &eval_ctx, &x_new, &mut ws, opts)?;
+        let begin = profile.then(std::time::Instant::now);
         let charges = charge_sample(&ws, &local_slots, &mut buffer);
         for i in 0..charges.len() {
             qdot_new[i] = integ.a0 * charges[i] + integ.hist[i];
@@ -800,6 +807,9 @@ pub(crate) fn tran(
             if r > 1.0 {
                 let h_new = h * factor.clamp(0.125, 0.9);
                 if h_new >= hmin {
+                    if let Some(t) = begin {
+                        control += t.elapsed();
+                    }
                     h = h_new;
                     continue;
                 }
@@ -820,6 +830,9 @@ pub(crate) fn tran(
         ws.commit();
         std::mem::swap(&mut qdot, &mut qdot_new);
         std::mem::swap(&mut x, &mut x_new);
+        if let Some(t) = begin {
+            control += t.elapsed();
+        }
         record(t, &x, &mut times, &mut cols);
         h *= grow;
         if hit_bp {
@@ -828,6 +841,14 @@ pub(crate) fn tran(
         }
     }
 
+    if profile {
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "spx-phase control {:.6}",
+            control.as_secs_f64() * 1000.
+        );
+    }
     let stats = crate::TranStats {
         accepted_steps,
         rejected_steps: attempted_steps - accepted_steps,

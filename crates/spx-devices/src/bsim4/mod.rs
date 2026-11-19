@@ -63,6 +63,18 @@ struct Instance {
     at: SlotOffsets,
 }
 
+#[derive(Clone, Debug)]
+struct CoreStamp {
+    lin: [f64; 4],
+    f: [D; 4],
+    q: [D; 4],
+}
+
+/// Per-workspace intrinsic BSIM4 linearizations. One cache belongs to one
+/// configured device group for the lifetime of an analysis.
+#[derive(Debug, Default)]
+pub struct CoreCache(Vec<Option<CoreStamp>>);
+
 /// Chunk of built-in level-54 instances.
 #[derive(Debug, Default)]
 pub struct Bsim4s {
@@ -339,10 +351,38 @@ impl DeviceGroup for Bsim4s {
         Ok(())
     }
     fn eval(&self, ctx: &EvalCtx, x: &[f64], state: StateRef<'_>, out: &mut Slots) {
-        for (dev, prev) in self
+        self.evaluate(ctx, x, state, out, None, 0.);
+    }
+
+    fn eval_cached(
+        &self,
+        ctx: &EvalCtx,
+        x: &[f64],
+        state: StateRef<'_>,
+        out: &mut Slots,
+        cache: &mut CoreCache,
+        tolerance: f64,
+    ) {
+        cache.0.resize_with(self.len(), || None);
+        self.evaluate(ctx, x, state, out, Some(cache), tolerance);
+    }
+}
+
+impl Bsim4s {
+    fn evaluate(
+        &self,
+        ctx: &EvalCtx,
+        x: &[f64],
+        state: StateRef<'_>,
+        out: &mut Slots,
+        mut cache: Option<&mut CoreCache>,
+        tolerance: f64,
+    ) {
+        for (index, (dev, prev)) in self
             .instances
             .iter()
             .zip(state.current.as_chunks_mut::<5>().0)
+            .enumerate()
         {
             let m = &dev.size;
             let act = dev.inner.map(|n| volt(x, n));
@@ -373,9 +413,34 @@ impl DeviceGroup for Bsim4s {
                 s,
                 s + m.sign * bias[2],
             ];
-            let (f, q, bias) = m.terminals(lin);
             let mut at = dev.at;
-            out.core(&mut at, &f, &q, &act, &lin);
+            let entry = cache
+                .as_mut()
+                .filter(|_| dev.network.gate_mode < 2)
+                .map(|c| &mut c.0[index]);
+            let bias = if let Some(stamp) = entry.as_deref().and_then(Option::as_ref)
+                && (stamp.lin.map(f64::to_bits) == lin.map(f64::to_bits)
+                    || (tolerance > 0.
+                        && ctx.limit
+                        && !ctx.init_junctions
+                        && stamp
+                            .lin
+                            .iter()
+                            .zip(lin)
+                            .all(|(old, v)| (old - v).abs() <= tolerance)))
+            {
+                // Predict residuals at the actual voltage with the saved G and C.
+                // Limiting history and junction/overlap stamps still advance.
+                out.core(&mut at, &stamp.f, &stamp.q, &act, &stamp.lin);
+                None
+            } else {
+                let (f, q, bias) = m.terminals(lin);
+                out.core(&mut at, &f, &q, &act, &lin);
+                if let Some(entry) = entry {
+                    *entry = Some(CoreStamp { lin, f, q });
+                }
+                Some(bias)
+            };
             let ov = dev.overlap_nodes().map(|n| volt(x, n));
             let [od, og, os, ob] = std::array::from_fn(|k| D::var(ov[k], k));
             let gd = m.overlap_charge((og - od) * m.sign, 0) * m.sign * m.mult;
@@ -430,7 +495,9 @@ impl DeviceGroup for Bsim4s {
                     volt(x, if mode == 1 { dev.inner[1] } else { dev.middle }),
                 );
             }
-            if mode >= 2 {
+            if mode >= 2
+                && let Some(bias) = bias
+            {
                 let conductance =
                     dev.network.xrcrg1 * (bias.id_per_volt + dev.network.xrcrg2 * bias.beta * m.vt);
                 let g = if mode == 2 {

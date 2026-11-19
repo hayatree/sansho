@@ -152,13 +152,16 @@ pub trait DeviceGroup: Send + Sync {
 
 1. Each group writes contributions into `Slots { g: [f64], c: [f64], f: [f64], q: [f64] }`. Slot
    positions within a group are fixed.
-2. The gather map records source slots in their original accumulation order. Arrays with up to
-   2,048 destinations use a per-group scatter table. Larger arrays use a CSR-style table per destination.
+2. The gather map stores a per-group scatter table in the original accumulation
+   order. Arrays above 2,048 destinations also have a CSR-style table for
+   destination-parallel reduction.
 3. The summation can be parallelized per matrix value k (each k is independent; its summation order
    is fixed).
 
-Results are therefore bit-identical regardless of thread count or scheduling. Extra memory is about
-8 bytes × number of contributions.
+Results are therefore bit-identical regardless of thread count or scheduling.
+On a 64-bit host the scatter table uses 16 bytes per retained contribution.
+The CSR form adds eight bytes per contribution and one word per destination
+boundary, plus vector headers and allocation capacity.
 
 Elaboration fixes the chunk size at 1,024 for linear devices, 64 for built-in nonlinear devices
 and two or six for interpreted VA devices, with the larger size at 32 instances. Native VA
@@ -211,8 +214,13 @@ publication. Section 16 describes two-lane native circuit evaluation and timing 
 - Device state (`StateRef`): an `accepted` copy (last accepted solution, read-only during a solve)
   and a `current` copy (per iteration). Used for limiting history and incremental charge models
   (MOS1 Meyer capacitances).
-- **Device bypass**: skip evaluation of instances whose terminal voltages changed less than a
-  threshold (optional, off by default → enabled after accuracy validation).
+- For BSIM4 at 256 unknowns and above, reuse intrinsic current and charge
+  linearizations for bit-identical terminal biases. The optional
+  `.options bypass=1` also allows changes up to `vntol` on each terminal in
+  a limited Newton iteration. Residuals use the saved derivatives at the
+  current iterate. Overlap, junctions and limiting histories are evaluated
+  normally. Gate resistance modes 2 and 3 use the full evaluation. Exact
+  charge sampling resumes before time-step acceptance.
 
 ### 5.2 DC operating point fallback chain
 
@@ -285,6 +293,35 @@ support used for subsequent plans. Both solves traverse the same flat factor sto
 Each subsequent factorization checks the pivot against the remaining column entries and monitors
 upper-factor growth. Ties, tiny pivots or excessive growth trigger fresh pivoting. The general
 backend handles dense and supernodal patterns and complex solves.
+
+For real systems with at least 2,048 unknowns and at most 16 structural
+entries per column on average, automatic selection first tests a block
+triangular form (BTF). An alternating-path matching pairs rows with columns.
+Iterative Tarjan traversal yields the block solve order. Diagonals inserted
+solely for regularization are excluded from the matching graph. If an assembly
+activates such an entry above the block diagonal, the solver switches back to
+the complete pattern. BTF is used for multiple blocks when the largest holds
+at most half the unknowns or at least 2% of structural entries lie in columns
+outside that block.
+
+Each diagonal block uses faer's public column ordering (natural order below
+four columns) and an original left-looking real LU. A priority queue visits
+reachable earlier pivots in order. Fresh pivoting prefers the matched diagonal
+when it is at least 0.1 times the column maximum. Subsequent assemblies replay
+the same lower-column updates and check the same relative threshold. On a
+failed check the accepted prefix remains valid and pivot search resumes at
+the rejected column. Triangular solves propagate off-block contributions in
+fixed CSC order.
+
+After declining BTF, automatic selection keeps the existing simplicial
+refactorization where applicable below 16,384 unknowns. The general real
+fallback uses faer's sequential numeric and solve kernels and reusable
+scratch at every size. A large linear job reuses valid factors when all assembled Jacobian
+bits match the previous successful factorization. Set `SPX_REAL_SOLVER` to
+`auto`, `newton` (previous selection), `faer` (general backend), or `btf`
+(attempt BTF regardless of size and partition quality). All real backend
+selections use sequential kernels for general LU so worker-count changes
+preserve the single-worker arithmetic.
 
 ---
 
@@ -383,6 +420,15 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 - All levels run on a rayon pool. `run_with` uses up to `threads` workers.
   `run_in_current_pool` uses the pool the caller installed (to avoid clashing with agent-side
   parallelism), and a `Session` keeps one pool for its lifetime.
+- For a single built-in analysis, the engine sizes the pool from the elaborated
+  device groups. When L1 is enabled it budgets at least two workers and one
+  worker per 4,096 weighted instances, capped by the caller's thread limit.
+  BSIM4 has weight four. Linear-only analyses currently use one engine worker.
+  The serial gather traverses source slots by group. Parallel workers can
+  gather conductance and charge concurrently, each in fixed addition order.
+- BTF factorization is serial in M5-1. In both multipliers one block holds
+  5,034 of the 5,106 unknowns. Parallel work within this block would address
+  substantially more arithmetic than scheduling the 67 other blocks.
 - L1 and L2 use the circuit-size thresholds in §4. The [performance report](performance.md) describes the VA benchmarks and timings.
 - Measured (M3, 1001-stage MOS1 ring oscillator, 1595 Newton iterations): assembly 466 ms on 1
   thread, 219 ms on 4, 194 ms on 8; LU (serial until M5) ≈ 145 ms. Results are bit-identical.
