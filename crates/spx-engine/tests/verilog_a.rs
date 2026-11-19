@@ -182,7 +182,7 @@ fn rectifier_transient_matches_builtin() {
     let common = "V1 in 0 SIN(0 1 1meg)
 R1 in out 1k
 C1 out 0 10p
-.options reltol=1e-8 abstol=1e-16 chgtol=1e-20 bypass=0
+.options reltol=1e-8 abstol=1e-16 chgtol=1e-20
 .tran 0.1n 2u 0 0.1n
 ";
     let va = simulate(&format!(
@@ -203,7 +203,10 @@ D1 out 0 dm
         .iter()
         .zip(va.analyses[0].real("v(out)").unwrap())
     {
-        close(v, interp(&builtin.analyses[0], "v(out)", t), 1e-6, 1e-9);
+        // The two runs may take different time grids (a 1-ulp difference in libm `exp`
+        // can flip a step decision), so the built-in waveform is linearly interpolated.
+        // Interpolation error is about h^2 |v''| / 8 = (0.1 ns)^2 (2 pi 1 MHz)^2 / 8 = 5e-8 V.
+        close(v, interp(&builtin.analyses[0], "v(out)", t), 1e-6, 1e-7);
     }
 }
 
