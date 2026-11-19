@@ -150,6 +150,7 @@ pub(crate) fn bind_models(
             ElementKind::Mosfet { model, params, .. }
             | ElementKind::Va { model, params, .. }
             | ElementKind::Bjt { model, params, .. }
+            | ElementKind::Jfet { model, params, .. }
             | ElementKind::Diode { model, params, .. } => (model, params),
             _ => continue,
         };
@@ -301,6 +302,7 @@ impl ParameterPlan {
                 | ElementKind::Mosfet { model: m, .. }
                 | ElementKind::Bjt { model: m, .. }
                 | ElementKind::Va { model: m, .. }
+                | ElementKind::Jfet { model: m, .. }
                 | ElementKind::Diode { model: m, .. } => {
                     if let Some(model) = model {
                         *m = model

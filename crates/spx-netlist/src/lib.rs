@@ -136,6 +136,29 @@ pub enum ElementKind {
         /// Numeric instance overrides.
         params: Vec<(String, f64)>,
     },
+    /// Ideal lossless line, port order [+1, -1, +2, -2].
+    Line {
+        ports: [String; 4],
+        z0: f64,
+        td: f64,
+    },
+    /// SPICE2 polynomial in differential voltages or branch currents.
+    Polynomial {
+        p: String,
+        n: String,
+        voltage: bool,
+        controls: Vec<SwitchControl>,
+        coefficients: Vec<f64>,
+    },
+    /// Gate-junction field-effect transistor.
+    Jfet {
+        d: String,
+        g: String,
+        s: String,
+        model: String,
+        params: Vec<(String, f64)>,
+        off: bool,
+    },
     /// Symmetric mutual inductance, with dots at the first winding terminals.
     Coupling {
         first: String,
@@ -326,6 +349,7 @@ impl ElementKind {
             | Self::Inductor { model, .. } => model.as_deref(),
             Self::Switch { model, .. }
             | Self::Va { model, .. }
+            | Self::Jfet { model, .. }
             | Self::Diode { model, .. }
             | Self::Bjt { model, .. }
             | Self::Mosfet { model, .. } => Some(model),
@@ -355,6 +379,17 @@ impl ElementKind {
     pub fn nodes(&self) -> Vec<&str> {
         match self {
             Self::Coupling { .. } => vec![],
+            Self::Line { ports, .. } => ports.iter().map(String::as_str).collect(),
+            Self::Jfet { d, g, s, .. } => vec![d, g, s],
+            Self::Polynomial { p, n, controls, .. } => {
+                let mut nodes = vec![p.as_str(), n.as_str()];
+                for control in controls {
+                    if let SwitchControl::Voltage(a, b) = control {
+                        nodes.extend([a.as_str(), b.as_str()]);
+                    }
+                }
+                nodes
+            }
             Self::Switch {
                 p,
                 n,

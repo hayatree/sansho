@@ -335,6 +335,9 @@ impl Parser {
         let span = line.span();
         let name = head.to_string();
         let kind = match head.as_bytes().first() {
+            Some(b't') => self.line_device(line),
+            Some(b'j') => self.jfet(line),
+            Some(b'e' | b'f' | b'g' | b'h') if line.polynomial() => self.polynomial(line),
             Some(b'k') => self.coupling(line),
             Some(b's' | b'w') => self.switch(line),
             Some(b'b') => self.behavioral(line),
@@ -371,6 +374,126 @@ impl Parser {
             }
             self.elements.push(Element { name, span, kind });
         }
+    }
+
+    fn line_device(&mut self, line: &Line) -> Option<ElementKind> {
+        let t = self.need(
+            line,
+            8,
+            "Tname p1 n1 p2 n2 z0=value td=value (or f=value [nl=value])",
+        )?;
+        let mut z0 = None;
+        let mut td = None;
+        let mut freq = None;
+        let mut nl = None;
+        for kv in t[5..].chunks(3) {
+            let [key, eq, value] = kv else {
+                return self.arity(line, "expected line parameter=value");
+            };
+            let slot = match key.lower().as_str() {
+                "z0" => &mut z0,
+                "td" => &mut td,
+                "f" => &mut freq,
+                "nl" => &mut nl,
+                _ => {
+                    self.err(
+                        "E-LINE-PARAM",
+                        format!("unknown line parameter {}", key.text),
+                        key.span,
+                    );
+                    return None;
+                }
+            };
+            let v = self.number(value, &key.text)?;
+            if !eq.is_eq() || slot.replace(v).is_some() || !v.is_finite() || v <= 0. {
+                self.err(
+                    "E-LINE-PARAM",
+                    "line parameters must be unique, positive finite assignments",
+                    key.span,
+                );
+                return None;
+            }
+        }
+        let delay = match (td, freq, nl) {
+            (Some(t), None, None) => Some(t),
+            (None, Some(f), nl) => Some(nl.unwrap_or(0.25) / f),
+            _ => None,
+        };
+        if let (Some(z0), Some(td)) = (z0, delay.filter(|d| d.is_finite() && *d > 0.)) {
+            Some(ElementKind::Line {
+                ports: [1, 2, 3, 4].map(|i| node_name(&t[i])),
+                z0,
+                td,
+            })
+        } else {
+            self.err(
+                "E-LINE-PARAM",
+                "expected Z0 and either TD or F with optional NL",
+                line.span(),
+            );
+            None
+        }
+    }
+
+    fn polynomial(&mut self, line: &Line) -> Option<ElementKind> {
+        let t = self.need(line, 6, "E/F/G/Hname p n POLY(n) controls coefficients")?;
+        let letter = t[0].lower();
+        let voltage_control = letter.starts_with(['e', 'g']);
+        let width = if voltage_control { 2 } else { 1 };
+        let Some(count) = t[4]
+            .positive_integer()
+            .filter(|&n| n <= (t.len() - 6) / width)
+        else {
+            self.err("E-POLY-ARITY", "expected positive dimension, one control per variable and at least one coefficient", line.span());
+            return None;
+        };
+        let end = 5 + count * width;
+        let controls = t[5..end]
+            .chunks(width)
+            .map(|args| {
+                if voltage_control {
+                    crate::SwitchControl::Voltage(node_name(&args[0]), node_name(&args[1]))
+                } else {
+                    crate::SwitchControl::Current(args[0].lower())
+                }
+            })
+            .collect();
+        let coefficients = t[end..]
+            .iter()
+            .map(|v| self.number(v, "polynomial coefficient"))
+            .collect::<Option<Vec<_>>>()?;
+        if coefficients.iter().any(|v| !v.is_finite()) {
+            self.err(
+                "E-PARSE-VALUE",
+                "POLY coefficients must be finite",
+                line.span(),
+            );
+            return None;
+        }
+        Some(ElementKind::Polynomial {
+            p: node_name(&t[1]),
+            n: node_name(&t[2]),
+            voltage: letter.starts_with(['e', 'h']),
+            controls,
+            coefficients,
+        })
+    }
+
+    fn jfet(&mut self, line: &Line) -> Option<ElementKind> {
+        let mut f = self.device_fields(line)?;
+        let p = &f.positional;
+        if !(4..=5).contains(&p.len()) {
+            return self.arity(line, "Jname drain gate source model [area] [off]");
+        }
+        self.area(p.get(4), &mut f.params)?;
+        Some(ElementKind::Jfet {
+            d: node_name(&p[0]),
+            g: node_name(&p[1]),
+            s: node_name(&p[2]),
+            model: p[3].lower(),
+            params: f.params,
+            off: f.off,
+        })
     }
 
     fn coupling(&mut self, line: &Line) -> Option<ElementKind> {
@@ -1143,6 +1266,7 @@ impl Parser {
                 } => (model, params),
                 ElementKind::Switch { model, .. } => (model, &mut empty),
                 ElementKind::Mosfet { model, params, .. }
+                | ElementKind::Jfet { model, params, .. }
                 | ElementKind::Diode { model, params, .. }
                 | ElementKind::Bjt { model, params, .. }
                 | ElementKind::Va { model, params, .. } => (model, params),
@@ -1252,6 +1376,7 @@ impl Parser {
                 ElementKind::Resistor { .. } => &["r"],
                 ElementKind::Capacitor { .. } => &["c"],
                 ElementKind::Inductor { .. } => &["l"],
+                ElementKind::Jfet { .. } => &["njf", "pjf"],
                 ElementKind::Diode { .. } => &["d"],
                 ElementKind::Bjt { .. } => &["npn", "pnp"],
                 ElementKind::Va { .. } => &[],

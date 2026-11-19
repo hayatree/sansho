@@ -307,3 +307,24 @@ equations 10.2–14 and Appendix A.10. The zero-resistance reduction uses
 the device's own current and charge derivatives. The verifier matches complex
 pole and zero multisets by minimizing the largest normalized distance using
 bipartite augmenting paths.
+
+### R3 lines, JFETs, classical MOS channels and polynomials
+
+The two traveling-wave equations in `spx-devices/src/line.rs` follow F. H.
+Branin, “Transient Analysis of Lossless Transmission Lines” (1967). Port
+stamps, accepted-step history, corner propagation, interpolation and the
+complex matrix correction are original Rust implementations.
+
+The level-one JFET uses the channel and depletion-junction description in
+Massobrio and Antognetti, *Semiconductor Device Modeling with SPICE*. The
+classical MOS channel reference is A. Vladimirescu and S. Liu, *The Simulation
+of MOS Integrated Circuits Using SPICE2*, UCB/ERL M80/7 (1980). The level-two
+current integrates inversion charge along the channel. The level-three current
+uses the bulk-charge slope and field-dependent mobility. Both reuse the
+existing Shichman–Hodges terminal conventions and Meyer charge implementation.
+Implemented terms and coverage limits are in [compatibility.md](compatibility.md).
+
+The J, T and POLY cards use the published ngspice element and model syntax.
+Graded polynomial enumeration, directional differentiation, numeric tests
+and the R3 decks were written for this project. No third-party device
+implementation or reference deck was imported.

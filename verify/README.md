@@ -229,3 +229,20 @@ the deck retains the residual failure.
 keeps the manual default and is a known difference (see `docs/bsim4.md`, Noise
 defaults). `sens_rc_ac.cir` is a known difference for the reference's R1 vector
 described above.
+
+## R3 element and model decks
+
+| File in `verify/decks` | Check |
+|---|---|
+| `line_reflections.cir` | Matched 50 Ω line and a 25 Ω driver into a 150 Ω termination. Compare near and far end AC phase, delayed ramps and successive reflections. TD and F/NL specify the same 5 ns delay. |
+| `jfet_amplifier.cir` | Common-source NJF with source degeneration and series resistances. Gate sweep, gain and roll-off from CGS/CGD, and a sinusoidal transient. |
+| `mos2_idvd.cir`, `mos3_idvd.cir` | Three gate biases under a common drain-voltage sweep and reverse body bias. Each sense-source current gives one output characteristic. |
+| `mos2_idvg.cir`, `mos3_idvg.cir` | Three drain biases under a common gate sweep, from cutoff into strong inversion. |
+| `mos2_inverter.cir`, `mos3_inverter.cir` | Complementary devices switching a capacitive load on both edges. Compare output transitions and supply current. |
+| `poly_sources.cir` | POLY(2) differential voltage multiplier and POLY(1) current-controlled cubic. DC checks signs and AC checks the local slopes. |
+
+The nine decks run locally through spx. Each needs its own maintainer-generated
+`.ref.raw` for the first comparison with ngspice 44. Cached verification reports
+a missing reference as a failure. Analytic tests independently cover port common
+mode, reflection amplitudes, phase and delay sensitivity, JFET polarity, noise and
+capacitance, MOS channel integrals and derivatives, and all four POLY source types.

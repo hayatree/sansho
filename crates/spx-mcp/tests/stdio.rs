@@ -275,3 +275,20 @@ fn release_dialect_lint_and_explanation_via_stdio() {
     let (why, err) = c.tool("explain_failure", json!({"code":"E-SWITCH-MODEL"}));
     assert!(!err && why["codes"][0]["code"] == "E-SWITCH-MODEL");
 }
+
+#[test]
+fn r3_decks_validate_and_simulate_through_stdio() {
+    let mut client = Client::start();
+    for deck in [
+        include_str!("../../../verify/decks/jfet_amplifier.cir"),
+        include_str!("../../../verify/decks/line_reflections.cir"),
+        include_str!("../../../verify/decks/poly_sources.cir"),
+        include_str!("../../../verify/decks/mos2_inverter.cir"),
+        include_str!("../../../verify/decks/mos3_inverter.cir"),
+    ] {
+        let (report, err) = client.tool("validate_netlist", json!({"netlist":deck}));
+        assert!(!err && report["ok"] == true, "{report}");
+        let (report, err) = client.tool("simulate", json!({"netlist":deck}));
+        assert!(!err && report["job"]["status"] == "ok", "{report}");
+    }
+}

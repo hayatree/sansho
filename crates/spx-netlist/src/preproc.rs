@@ -892,12 +892,22 @@ impl Flat<'_> {
             };
             let letter = h.chars().next().unwrap_or(' ');
             let n = toks.len();
+            let poly = line.polynomial();
+            let dimensions = if poly {
+                toks.get(4).and_then(Token::positive_integer).unwrap_or(0)
+            } else {
+                0
+            };
             let node_slots: Vec<usize> = match letter {
+                'e' | 'g' if poly => (1..3.min(n))
+                    .chain(5..5usize.saturating_add(dimensions.saturating_mul(2)).min(n))
+                    .collect(),
+                'j' => (1..4.min(n)).collect(),
                 'w' | 'b' | 'r' | 'c' | 'l' | 'v' | 'i' | 'd' | 'f' | 'h' => {
                     (1..3.min(n)).collect()
                 }
                 'e' | 'g' if toks.get(4).is_some_and(Token::is_eq) => (1..3.min(n)).collect(),
-                's' | 'e' | 'g' | 'm' => (1..5.min(n)).collect(),
+                's' | 'e' | 'g' | 'm' | 't' => (1..5.min(n)).collect(),
                 'n' => {
                     let end = (1..n)
                         .find(|&i| toks.get(i + 1).is_some_and(Token::is_eq))
@@ -945,13 +955,19 @@ impl Flat<'_> {
                 {
                     t.text = ctx.model(&t.text);
                 }
-                if matches!(letter, 'f' | 'h' | 'w')
+                if poly && matches!(letter, 'f' | 'h') {
+                    for t in toks.iter_mut().skip(5).take(dimensions) {
+                        t.text = ctx.element(&t.text);
+                    }
+                }
+                if !poly
+                    && matches!(letter, 'f' | 'h' | 'w')
                     && let Some(t) = toks.get_mut(3)
                 {
                     t.text = ctx.element(&t.text);
                 }
                 // Model reference of D/Q/M: the first positional token after the nodes.
-                if matches!(letter, 's' | 'd' | 'q' | 'm' | 'n') {
+                if matches!(letter, 's' | 'd' | 'q' | 'j' | 'm' | 'n') {
                     let at = node_slots.last().map_or(1, |&i| i + 1);
                     if let Some(t) = toks.get_mut(at)
                         && !t.is_eq()
@@ -961,7 +977,7 @@ impl Flat<'_> {
                 }
             }
             if (ctx.copies != 1. || ctx.copies_expr.is_some())
-                && matches!(letter, 'm' | 'r' | 'l' | 'c' | 'd' | 'q')
+                && matches!(letter, 'm' | 'r' | 'l' | 'c' | 'd' | 'q' | 'j')
             {
                 let start = node_slots.last().copied().unwrap_or(0) + 1;
                 if let Some(k) = toks[start..]

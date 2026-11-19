@@ -291,6 +291,49 @@ pub fn write(nl: &Netlist) -> String {
                 let _ = write!(l, "{name} {} {model}", nodes.join(" "));
                 params(&mut l, ps);
             }
+            ElementKind::Line { ports, z0, td } => {
+                let _ = write!(
+                    l,
+                    "{name} {} z0={} td={}",
+                    ports.join(" "),
+                    num(*z0),
+                    num(*td)
+                );
+            }
+            ElementKind::Polynomial {
+                p,
+                n,
+                controls,
+                coefficients,
+                ..
+            } => {
+                let _ = write!(l, "{name} {p} {n} poly({})", controls.len());
+                for ctrl in controls {
+                    match ctrl {
+                        crate::SwitchControl::Voltage(a, b) => {
+                            let _ = write!(l, " {a} {b}");
+                        }
+                        crate::SwitchControl::Current(v) => {
+                            let _ = write!(l, " {v}");
+                        }
+                    }
+                }
+                let _ = write!(l, " {}", list(coefficients));
+            }
+            ElementKind::Jfet {
+                d,
+                g,
+                s,
+                model,
+                params: ps,
+                off,
+            } => {
+                let _ = write!(l, "{name} {d} {g} {s} {model}");
+                params(&mut l, ps);
+                if *off {
+                    l += " off";
+                }
+            }
             ElementKind::Coupling { first, second, k } => {
                 let _ = write!(l, "{name} {first} {second} {}", num(*k));
             }

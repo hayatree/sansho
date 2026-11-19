@@ -226,3 +226,198 @@ fn canonical_cards_and_raw_plots_round_trip() {
         );
     }
 }
+
+#[test]
+fn distributed_line_phase_dc_and_sensitivity() {
+    let r = simulate(
+        "isolated ports\nVin a 0 2 ac 1\nR1 a b 50\nT1 b 0 c ref z0=50 f=25meg\nVref ref 0 7\nR2 c ref 50\n.op\n.ac lin 1 25meg 25meg\n.sens v(c,ref) ac lin 1 25meg 25meg\n.noise v(c,ref) Vin lin 1 25meg 25meg\n",
+    );
+    check(first(&r.analyses[0], "v(c)"), 8., 1e-12);
+    let (re, im) = r.analyses[1].complex("v(c)").unwrap()[0];
+    assert!(re.abs() < 1e-15);
+    check(im, -0.5, 1e-13);
+    let (re, im) = r.analyses[2].complex("t1:td").unwrap()[0];
+    check(re, -std::f64::consts::PI * 25e6, 1e-8);
+    assert!(im.abs() < 0.01);
+    check(
+        first(&r.analyses[3], "onoise_spectrum"),
+        (4. * spx_devices::BOLTZMANN * 300.15 * 25.).sqrt(),
+        1e-12,
+    );
+}
+
+#[test]
+fn incident_and_reflected_ramps_land_on_delayed_corners() {
+    let r = simulate(include_str!("../../../verify/decks/line_reflections.cir"));
+    let tran = &r.analyses[1];
+    let at = |ns: f64| {
+        tran.scale_values
+            .iter()
+            .position(|&t| (t - ns * 1e-9).abs() < 1e-20)
+            .unwrap()
+    };
+    for (ns, b, d) in [(7., 0., 0.), (7.5, 0.5, 1.), (17.5, 0.5, 5. / 6.)] {
+        let k = at(ns);
+        assert!((tran.real("v(b)").unwrap()[k] - b).abs() < 1e-10);
+        assert!((tran.real("v(d)").unwrap()[k] - d).abs() < 1e-10);
+    }
+}
+
+#[test]
+fn all_poly_source_types_resolve_nested_controls_and_stamp_derivatives() {
+    let r = simulate(
+        "polynomials\n.subckt pol a b e g f h\nVs a sense 0\nRin sense 0 1\nEp e 0 poly(2) a 0 b 0 0 0 0 0 1\nGp 0 g poly(2) a 0 b 0 0 0 0 0 1\nFp 0 f poly(1) Vs 1 0 0 1\nHp h 0 poly(1) Vs 1 0 0 1\n.ends\nVa a 0 -2 ac 1\nVb b 0 3\nX1 a b e g f h pol\nRg g 0 1\nRf f 0 1\n.op\n.ac lin 1 1 1\n",
+    );
+    for (node, dc, gain) in [
+        ("v(e)", -6., 3.),
+        ("v(g)", -6., 3.),
+        ("v(f)", -7., 12.),
+        ("v(h)", -7., 12.),
+    ] {
+        check(first(&r.analyses[0], node), dc, 1e-13);
+        check(r.analyses[1].complex(node).unwrap()[0].0, gain, 1e-13);
+    }
+}
+
+#[test]
+fn jfet_channel_polarity_noise_and_gate_junction_charge() {
+    for (model, sign) in [("njf", 1.), ("pjf", -1.)] {
+        let r = simulate(&format!(
+            "JFET\nVd d 0 {}\nVg g 0 {} ac 1\nJ1 d g 0 m\n.model m {model}(vto=-2 beta=1m cgs=8p cgd=2p pb=1)\n.options gmin=0\n.op\n.ac lin 1 1meg 1meg\n.sens i(Vd)\n",
+            3. * sign,
+            -sign
+        ));
+        check(first(&r.analyses[0], "i(vd)"), -sign * 1e-3, 1e-9);
+        check(r.analyses[1].complex("i(vd)").unwrap()[0].0, -2e-3, 1e-10);
+        check(first(&r.analyses[2], "m:beta"), -sign, 1e-8);
+        let c = 8e-12 / 2f64.sqrt() + 2e-12 / 5f64.sqrt();
+        check(
+            r.analyses[1].complex("i(vg)").unwrap()[0].1,
+            -std::f64::consts::TAU * 1e6 * c,
+            1e-11,
+        );
+    }
+    let r = simulate(
+        "noise\nVd supply 0 6\nRd supply d 1k noisy=0\nVg g 0 -1\nJ1 d g 0 m\n.model m njf(beta=1m kf=1e-16)\n.noise v(d) Vg lin 1 1000 1000\n",
+    );
+    check(
+        first(&r.analyses[0], "onoise.j1"),
+        1e3 * (4. * spx_devices::BOLTZMANN * 300.15 * (2. / 3.) * 2e-3 + 1e-16 * 1e-3 / 1e3).sqrt(),
+        1e-6,
+    );
+}
+
+#[test]
+fn r3_diagnostics_and_export() {
+    for (card, code) in [
+        ("T1 a 0 b 0 z0=0 td=1n", "E-LINE-PARAM"),
+        ("T1 a 0 b 0 z0=50 nl=.2", "E-LINE-PARAM"),
+        ("E1 a 0 poly(99999999) a 0 1", "E-POLY-ARITY"),
+        ("J1 a b 0 wrong\n.model wrong npn", "E-PARSE-MODEL"),
+    ] {
+        assert!(
+            spx_netlist::parse(&format!("bad\n{card}\n"))
+                .unwrap_err()
+                .iter()
+                .any(|d| d.code == code && d.span.is_some())
+        );
+    }
+    for (card, code) in [
+        ("T1 a 0 b 0 z0=50 td=1n\n.pz a 0 b 0 cur pol", "E-ANALYSIS"),
+        ("Hbad b 0 poly(1) missing 1\n.op", "E-BSOURCE-EXPR"),
+        ("Jbad b a 0 m\n.model m njf pb=0\n.op", "E-ELAB-PARAM"),
+    ] {
+        let nl = spx_netlist::parse(&format!("bad\nV1 a 0 0\nR1 b 0 1k\n{card}\n")).unwrap();
+        assert!(
+            spx_engine::run(&nl)
+                .unwrap_err()
+                .diagnostics
+                .iter()
+                .any(|d| d.code == code)
+        );
+    }
+    for src in [
+        include_str!("../../../verify/decks/line_reflections.cir"),
+        include_str!("../../../verify/decks/jfet_amplifier.cir"),
+        include_str!("../../../verify/decks/poly_sources.cir"),
+    ] {
+        let written = spx_netlist::write(&spx_netlist::parse(src).unwrap());
+        assert_eq!(
+            written,
+            spx_netlist::write(&spx_netlist::parse(&written).unwrap())
+        );
+    }
+}
+
+#[test]
+fn poly_dimension_expression_and_linear_node_named_poly() {
+    let r = simulate(
+        "poly node\n.param n=2\n.subckt gain a b z\nE1 z 0 poly({n}) a 0 b 0 0 0 0 0 1\n.ends\nVa poly 0 2\nVb b 0 3\nElinear y 0 poly 0 4\nX1 poly b z gain\n.op\n",
+    );
+    check(first(&r.analyses[0], "v(y)"), 8., 1e-13);
+    check(first(&r.analyses[0], "v(z)"), 6., 1e-13);
+}
+
+#[test]
+fn mixed_classical_devices_are_bit_identical_across_worker_counts() {
+    use std::fmt::Write;
+    let mut deck = String::from(
+        "mixed devices\nVg g 0 dc 0.8 ac 1 pulse(0.8 1.2 1n 2n 2n 5n 15n)\nVdd vdd 0 3\nRload vdd d 5\nT1 d 0 out 0 z0=50 td=1.5n\nRterm out 0 50\n.model nj njf(vto=-1 is=0 cgs=0.1p)\n.model n2 nmos(level=2 kp=1u vto=0.5 gamma=0.3)\n.model n3 nmos(level=3 kp=1u vto=0.4 gamma=0.4 theta=0.1)\n",
+    );
+    for i in 0..65 {
+        writeln!(deck,"J{i} d 0 0 nj\nMa{i} d g 0 0 n2 w=2u l=1u\nMb{i} d g 0 0 n3 w=2u l=1u\nG{i} d 0 poly(1) g 0 0 0 1u").unwrap();
+    }
+    deck.push_str(".ac lin 3 1meg 100meg\n.tran 0.5n 5n\n.end\n");
+    let nl = spx_netlist::parse(&deck).unwrap();
+    let run = |threads| {
+        let r = run_with(&nl, &RunConfig { threads }).unwrap().results;
+        let mut bits = vec![];
+        for plot in r.analyses {
+            bits.extend(plot.scale_values.into_iter().map(f64::to_bits));
+            match plot.data {
+                spx_output::Data::Real { columns } => {
+                    bits.extend(columns.into_iter().flatten().map(f64::to_bits))
+                }
+                spx_output::Data::Complex { columns } => bits.extend(
+                    columns
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|(a, b)| [a.to_bits(), b.to_bits()]),
+                ),
+            }
+        }
+        bits
+    };
+    let serial = run(1);
+    for threads in [2, 5] {
+        assert_eq!(serial, run(threads));
+    }
+}
+
+#[test]
+fn classical_mos_temperature_noise_sensitivity_and_poles_agree_in_square_law_limit() {
+    let output = |level| {
+        simulate(&format!("classical long channel\nVdd vdd 0 5\nVin g 0 dc 1 ac 1\nRd vdd d 1k\nM1 d g 0 0 n l=5u w=20u ad=4p\n.model n nmos(level={level} kp=20u vto=0.4 gamma=0 tox=30n cj=1m cgdo=200p kf=1e-25)\n.dc temp 0 80 20\n.noise v(d) Vin dec 2 10 1meg\n.sens v(d)\n.pz d 0 d 0 cur pol\n")).analyses
+    };
+    let reference = output(1);
+    for level in [2, 3] {
+        let plots = output(level);
+        for (index, signal) in [
+            (0, "v(d)"),
+            (1, "onoise.m1"),
+            (2, "onoise_total"),
+            (3, "n:kp"),
+        ] {
+            let a = plots[index].real(signal).unwrap();
+            let b = reference[index].real(signal).unwrap();
+            for (&a, &b) in a.iter().zip(b) {
+                check(a, b, 1e-8);
+            }
+        }
+        check(
+            plots[4].complex("pole(1)").unwrap()[0].0,
+            reference[4].complex("pole(1)").unwrap()[0].0,
+            1e-10,
+        );
+    }
+}

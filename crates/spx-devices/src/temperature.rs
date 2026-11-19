@@ -11,7 +11,7 @@ pub struct Temperature {
     pub nominal: f64,
 }
 
-fn gap(t: f64) -> f64 {
+pub(crate) fn gap(t: f64) -> f64 {
     1.16 - 7.02e-4 * t * t / (t + 1108.)
 }
 

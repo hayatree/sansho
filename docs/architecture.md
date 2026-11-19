@@ -86,7 +86,7 @@
 | `spx-elab` | Subcircuit flattening, parameter resolution, model binning, node numbering, topology checks (floating nodes, V loops, I cutsets) | — |
 | `spx-ir` | Post-elaboration circuit IR. JSON schema via serde (also accepted as agent input) | serde, schemars |
 | `spx-sparse` | CSC pattern, AMD/COLAMD, BTF, LU (real & complex), refactor, triangular solves, `LinearSolver` trait | faer (initial backend) |
-| `spx-devices` | `DeviceGroup` trait. Built-ins (R/L/C/K/V/I/E/F/G/H/switches/diode/BJT (GP)/MOS1/BSIM4) | — |
+| `spx-devices` | `DeviceGroup` trait. Built-ins (R/L/C/K/V/I/E/F/G/H/switches/T/JFET/diode/BJT (GP)/MOS1–3/BSIM4) | — |
 | `spx-va` | Clean-room Verilog-A analog subset, binding specialization, register interpretation and optional native evaluation | Cranelift (optional) |
 | `spx-osdi` | OSDI 0.3/0.4 loader (independently implemented from the spec); exposes `.osdi` models as `DeviceGroup` | libloading |
 | `spx-engine` | MNA assembly, Newton, homotopy, time integration, analyses | rayon |
@@ -623,12 +623,28 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
   cards accumulate selections. The independent scale and circuit ordering are preserved, and
   `.save all` exports all vectors. Both deck measurements and later session measurements have
   access to the complete traces. Raw files use the ngspice format readable by Xschem.
-- Built-in MOS levels 1 and 54 use the same nonlinear slot assembly. Level 54 specializes
+- Lossless T lines allocate an entering branch current per differential port.
+  Each port equates its incident wave to the opposite outgoing wave after TD.
+  DC uses a unit propagation factor. AC, noise and AC sensitivity include the
+  complex delay in the matrix. Transient history belongs to each analysis job.
+- SPICE2 POLY controls resolve in subcircuit scope. Their monomials use total
+  degree order and differentiate through the behavioral source stamp.
+- NJF and PJF share a normalized channel, two gate junctions and optional
+  internal drain/source resistances. MOS2 and MOS3 share the classical MOS
+  limiting, junction, temperature, Meyer and noise assembly with MOS1.
+- Built-in MOS levels 1, 2, 3 and 54 use the same nonlinear slot assembly. Level 54 specializes
   the silicon model at binding time and differentiates terminal current and charge during
   evaluation. Its optional resistance networks allocate internal unknowns during setup.
   The parser binds selected geometry bins in the lexical scope of each instance.
   The coverage and SKY130 dialect rules are in [the BSIM4 model notes](bsim4.md).
   Production Verilog-A models are compiled by spx-va.
+
+### Not yet supported
+
+Distributed lossy lines, line IC tuples, pole-zero extraction for distributed
+delays, JFET level two, full MOS2/MOS3 short-channel corrections, the Nutmeg
+control language, XSPICE, CIDER and an OSDI loader remain outside the current
+implementation. [Compatibility and numerical differences](compatibility.md)
 
 ---
 

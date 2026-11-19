@@ -289,9 +289,11 @@ impl Circuit {
     pub fn device_counts(&self) -> Vec<(&'static str, usize)> {
         let mut out: Vec<(&'static str, usize)> = Vec::new();
         for g in &self.groups {
-            match out.last_mut() {
-                Some((t, n)) if *t == g.type_name() => *n += g.len(),
-                _ => out.push((g.type_name(), g.len())),
+            let kind = g.type_name();
+            if let Some((_, count)) = out.iter_mut().find(|(name, _)| *name == kind) {
+                *count += g.len();
+            } else {
+                out.push((kind, g.len()));
             }
         }
         out
@@ -735,8 +737,8 @@ pub(crate) fn compile_cached(
             | ElementKind::Diode { .. } => {
                 dc.union(p, n);
             }
-            ElementKind::Bjt { .. } => {
-                // Collector, base and emitter are connected through junctions (gmin).
+            ElementKind::Jfet { .. } | ElementKind::Bjt { .. } => {
+                // Both intrinsic junctions have a DC conductance.
                 let b = g_id(node(e.kind.nodes()[2]));
                 dc.union(p, n);
                 dc.union(n, b);
@@ -747,7 +749,34 @@ pub(crate) fn compile_cached(
                 dc.union(d, b);
                 dc.union(s, b);
             }
+            ElementKind::Line { ports, .. } => {
+                // Each port carries a differential current; its common mode is independent.
+                let (a, b) = (g_id(node(&ports[2])), g_id(node(&ports[3])));
+                let wire = if n == b {
+                    Some((p, a))
+                } else if p == a {
+                    Some((n, b))
+                } else {
+                    None
+                };
+                if let Some((u, v)) = wire {
+                    dc.union(u, v);
+                    if !vloop.union(u, v) {
+                        diags.push(
+                            Diagnostic::warning(
+                                "W-ELAB-VLOOP",
+                                format!("{} closes a loop of DC voltage constraints", e.name),
+                            )
+                            .with_span(e.span),
+                        );
+                    }
+                } else {
+                    dc.union(p, n);
+                    dc.union(a, b);
+                }
+            }
             ElementKind::Inductor { .. }
+            | ElementKind::Polynomial { voltage: true, .. }
             | ElementKind::Behavioral { voltage: true, .. }
             | ElementKind::VoltageSource { .. }
             | ElementKind::Vcvs { .. }
@@ -1266,7 +1295,7 @@ fn native_groups<'a>(
     let mut h_src = Chunked::<Ccvs>::new(CHUNK_LINEAR);
     let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
     let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
-    let mut mos1 = Chunked::<Mos1s>::new(CHUNK_NONLINEAR);
+    let mut classic_mos = [1, 2, 3].map(|_| Chunked::<Mos1s>::new(CHUNK_NONLINEAR));
     let mut bsim4_models = HashMap::<_, Arc<PreparedModel>>::new();
     let mut bsim4 = Chunked::<Bsim4s>::new(CHUNK_NONLINEAR);
     let mut model_cache = ModelCache::new(&nl.models);
@@ -1300,6 +1329,79 @@ fn native_groups<'a>(
     for e in elements {
         match &e.kind {
             ElementKind::Va { .. } => {}
+            ElementKind::Line { ports, z0, td } => {
+                match spx_devices::line::Line::new(
+                    &e.name,
+                    ports.each_ref().map(|s| node(s)),
+                    *z0,
+                    *td,
+                ) {
+                    Ok(line) => controlled.push(Box::new(line)),
+                    Err(d) => errors.push(d.with_span(e.span)),
+                }
+            }
+            ElementKind::Polynomial {
+                p,
+                n,
+                voltage,
+                controls,
+                coefficients,
+            } => {
+                match spx_devices::behavioral::Behavioral::polynomial(
+                    &e.name,
+                    [node(p), node(n)],
+                    *voltage,
+                    controls,
+                    coefficients,
+                    &node,
+                ) {
+                    Ok(mut g) => {
+                        g.span = Some(e.span);
+                        controlled.push(Box::new(g));
+                    }
+                    Err(d) => errors.push(d.with_span(e.span)),
+                }
+                nonlinear_count += 1;
+            }
+            ElementKind::Jfet {
+                d,
+                g,
+                s,
+                model,
+                params,
+                off,
+            } => {
+                let Some(card) = model_cache.card(model) else {
+                    errors.push(
+                        Diagnostic::error("E-ELAB-MODEL", format!("undefined JFET model {model}"))
+                            .with_span(e.span),
+                    );
+                    continue;
+                };
+                let Some((p, polarity)) = model_cache.prepare(card, &mut errors) else {
+                    continue;
+                };
+                let inst = ModelParams::new(params);
+                let result = instance_temperature(&inst, opts, p.opt(&["tnom"])).and_then(|t| {
+                    spx_devices::jfet::Jfet::new(
+                        &e.name,
+                        [node(d), node(g), node(s)],
+                        &p,
+                        polarity,
+                        t,
+                        inst.get("area", 1.),
+                        inst.opt(&["m", "mult"]).unwrap_or(1.),
+                        *off,
+                    )
+                });
+                match result {
+                    Ok(g) => controlled.push(Box::new(g)),
+                    Err(d) => errors.push(d.with_span(e.span)),
+                }
+                ModelCache::warn_ignored(card, &p.unused(), diags);
+                warn_instance(e, &inst, diags);
+                nonlinear_count += 1;
+            }
             ElementKind::Behavioral {
                 p,
                 n,
@@ -1646,7 +1748,7 @@ fn native_groups<'a>(
                     }
                     continue;
                 }
-                let Some(mut m) = model_cache.mos(model, diags, &mut errors) else {
+                let Some(mut m) = model_cache.mos(model, opts.tnom, diags, &mut errors) else {
                     continue;
                 };
                 let copies = inst.opt(&["m", "mult"]).unwrap_or(1.);
@@ -1667,6 +1769,7 @@ fn native_groups<'a>(
                         continue;
                     }
                 }
+                m.apply_squares(&inst);
                 m.multiply(copies);
                 warn_instance(e, &inst, diags);
                 if let Some(msg) = Mos1s::check_geometry(&m, &geom) {
@@ -1677,8 +1780,13 @@ fn native_groups<'a>(
                     continue;
                 }
                 nonlinear_count += 1;
-                mos1.cur()
-                    .push(&e.name, [node(d), node(g), node(s), node(b)], m, geom, *off);
+                classic_mos[m.level_index()].cur().push(
+                    &e.name,
+                    [node(d), node(g), node(s), node(b)],
+                    m,
+                    geom,
+                    *off,
+                );
             }
         }
     }
@@ -1698,7 +1806,9 @@ fn native_groups<'a>(
     h_src.into_groups(&mut groups);
     diodes.into_groups(&mut groups);
     bjts.into_groups(&mut groups);
-    mos1.into_groups(&mut groups);
+    for devices in classic_mos {
+        devices.into_groups(&mut groups);
+    }
     bsim4.into_groups(&mut groups);
     groups.extend(controlled);
     Ok((groups, nonlinear_count))
@@ -1942,20 +2052,22 @@ impl<'a> ModelCache<'a> {
     ) -> Option<(ModelParams, f64)> {
         let params = ModelParams::new(&card.params);
         let level = params.get("level", 1.0);
-        if level != 1.0 {
+        if !(level == 1.
+            || matches!(card.kind.as_str(), "nmos" | "pmos") && matches!(level, 2. | 3.))
+        {
             let mut d = Diagnostic::error(
                 "E-ELAB-MODEL",
                 format!("model `{}`: level {level} is not supported", card.name),
             )
             .with_span(card.span);
             if matches!(card.kind.as_str(), "nmos" | "pmos") {
-                d = d.with_note("built-in MOSFET levels are 1 and 54");
+                d = d.with_note("built-in MOSFET levels are 1, 2, 3 and 54");
             }
             errors.push(d);
             return None;
         }
         let polarity = match card.kind.as_str() {
-            "pnp" | "pmos" => -1.0,
+            "pnp" | "pmos" | "pjf" => -1.0,
             _ => 1.0,
         };
         Some((params, polarity))
@@ -2018,6 +2130,7 @@ impl<'a> ModelCache<'a> {
     fn mos(
         &mut self,
         name: &str,
+        tnom: f64,
         diags: &mut Vec<Diagnostic>,
         errors: &mut Vec<Diagnostic>,
     ) -> Option<Mos1Model> {
@@ -2026,7 +2139,7 @@ impl<'a> ModelCache<'a> {
         }
         let card = self.card(name)?;
         let m = self.prepare(card, errors).map(|(p, pol)| {
-            let (m, ignored) = Mos1Model::from_params(&p, pol);
+            let (m, ignored) = Mos1Model::from_params_at(&p, pol, tnom);
             Self::warn_ignored(card, &ignored, diags);
             m
         });

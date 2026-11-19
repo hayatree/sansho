@@ -68,6 +68,22 @@ pub const CODES: &[CodeInfo] = &[
         &["Check the parameter scope and the nesting of .if, .elseif, .else and .endif."],
     ),
     e(
+        "E-LINE-PARAM",
+        "Invalid lossless line parameters",
+        "An ideal line requires positive finite characteristic impedance and propagation delay.",
+        &[
+            "Supply Z0 and either TD in seconds or F in hertz with optional NL in wavelengths. Each assignment may occur once.",
+        ],
+    ),
+    e(
+        "E-POLY-ARITY",
+        "Invalid polynomial dimension or controls",
+        "The control list and coefficients must match the dimension of the polynomial.",
+        &[
+            "Give a positive integer dimension, one node pair (E/G) or branch name (F/H) per input, and at least one coefficient.",
+        ],
+    ),
+    e(
         "E-COUPLING-K",
         "Invalid coupling coefficient",
         "A mutual inductance requires distinct windings and a finite coefficient in [-1, 1].",
@@ -165,7 +181,7 @@ pub const CODES: &[CodeInfo] = &[
         "E-PARSE-ELEMENT",
         "Unsupported element type",
         "The first letter of the line does not name a supported element type.",
-        &["Check the element letter; subcircuits (`X`) and some sources are not supported yet."],
+        &["Check the element letter against the supported devices in docs/compatibility.md."],
     ),
     e(
         "E-PARSE-EXPR",
@@ -272,7 +288,9 @@ pub const CODES: &[CodeInfo] = &[
         "E-ELAB-MODEL",
         "Unsupported model",
         "The model level or type is not supported.",
-        &["Use a supported model level. Built-in MOSFETs support levels 1 and 54."],
+        &[
+            "Use NJF/PJF level 1 for J devices. Built-in MOS channels accept levels 1, 2, 3 and 54. See docs/compatibility.md for parameter coverage.",
+        ],
     ),
     e(
         "E-ELAB-NOGROUND",

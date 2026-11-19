@@ -50,7 +50,7 @@ point-by-point listing. The interval has no effect on integration.
 | Resistor | Johnson–Nyquist noise with the effective resistance and instance temperature. `noisy=0` disables it. |
 | Diode | Junction shot noise, KF/AF flicker proportional to the junction current raised to AF, and series-resistance thermal noise. |
 | BJT | Collector and base shot noise, base-current KF/AF flicker, and RC/RB/RE thermal noise at the internal terminals. |
-| MOS1 | Channel thermal noise with conductance 2·abs(gm)/3, gate-referred KF/AF flicker projected through gm, and drain/source series-resistance noise. |
+| MOS1, MOS2 and MOS3 | Channel thermal noise with conductance 2·abs(gm)/3, gate-referred KF/AF flicker projected through gm, and drain/source series-resistance noise. |
 | BSIM4 | Charge-based channel thermal noise (tnoiMod 0), partitioned channel noise (1), empirical KF/AF/EF flicker (fnoiMod 0), and unified trap-density flicker (1). Enabled diffusion, electrode gate and body resistances contribute at their internal nodes. Gate-to-source, gate-to-drain and gate-to-body leakage currents contribute shot noise. |
 | Verilog-A | `white_noise`, `flicker_noise` and numeric `noise_table` pairs in current or voltage contributions. Analog evaluation propagates the source through assignments and arithmetic at the converged bias. Positive table samples interpolate in log frequency and log power, with constant endpoints. |
 
@@ -100,7 +100,7 @@ DC sensitivity solves one transposed DC Jacobian. At fixed bias, central paramet
 perturbations evaluate the change in each individual residual stamp before
 contraction with the adjoint. Each figure is an absolute derivative in output units
 per parameter unit. R, C, L and independent source values use their instance names.
-Ideal C and L values have zero DC derivative. A shared model perturbation affects
+Ideal C and L values have zero DC derivative. At a zero GAMMA, KP, BETA or IS, the perturbation uses the positive side of the physical domain. A shared model perturbation affects
 all its instances together and uses the spx name `model:parameter`.
 
 Supported continuous model-card entries include IS, N, BF, BR, NF, NR, VAF, IKF,
@@ -149,3 +149,22 @@ discarded. Roots beyond the scaled numerical resolution can also be lost.
 The limit is 256 circuit unknowns plus the port constraint. The method retains
 common pole-zero factors, including unobservable modes. A redundant ideal input
 short, identically zero transfer, or singular pencil can prevent extraction.
+
+## Distributed lines and classical FETs
+
+A lossless line enforces equal differential port voltages and opposite entering
+currents at DC. In AC and noise each outgoing wave reaches the other port with
+factor exp(−j2πf TD). The ideal line adds no noise power of its own.
+Transient solutions interpolate the two outgoing waves at the retarded time
+on the accepted grid. The maximum internal step is bounded by the shortest
+line delay. Source corners, delay boundaries and accepted switch transitions
+schedule further arrivals. PZ reports E-ANALYSIS for a distributed delay
+because its exponential cannot be represented by the finite G + sC pencil.
+
+DC and AC sensitivity include `line:z0`, `line:td` and polynomial coefficients
+`instance:p0`, `instance:p1`, etc. The TD derivative is zero at DC. JFET bias,
+gate junction charge and classical MOS linearizations participate in TF, SENS
+and lumped PZ. The JFET noise generators are RD/RS thermal noise, channel
+thermal noise with conductance 2|gm|/3 and drain-current flicker power
+KF·|Id|^AF/f for a single copy. Levels 2 and 3 reuse the MOS1 thermal and
+flicker conventions with the selected channel's gm.

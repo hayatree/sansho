@@ -492,6 +492,50 @@ pub(crate) fn ac_rhs(ckt: &Circuit) -> Vec<c64> {
     b
 }
 
+/// Coefficients of the nonlocal terms in each line's two wave equations.
+pub(crate) struct DelayedStamp {
+    delay: f64,
+    entries: Vec<(usize, f64)>,
+}
+impl DelayedStamp {
+    pub(crate) fn collect(c: &Circuit) -> Vec<Self> {
+        c.groups
+            .iter()
+            .filter_map(|g| g.line())
+            .map(|line| Self {
+                delay: line.delay,
+                entries: line
+                    .delayed_entries()
+                    .filter_map(|(r, col, v)| Some((c.pattern.find(r?, col?)?, v)))
+                    .collect(),
+            })
+            .collect()
+    }
+    pub(crate) fn apply(&self, omega: f64, sign: f64, values: &mut [c64]) {
+        let phase = omega * self.delay;
+        // DC assembly already includes a propagation factor of one.
+        let change = c64::new(-2. * (phase * 0.5).sin().powi(2), -phase.sin());
+        for &(slot, coefficient) in &self.entries {
+            values[slot] += change * (sign * coefficient);
+        }
+    }
+}
+
+pub(crate) fn ac_matrix(
+    g: &[f64],
+    c: &[f64],
+    delayed: &[DelayedStamp],
+    omega: f64,
+    values: &mut [c64],
+) {
+    for ((z, &g), &c) in values.iter_mut().zip(g).zip(c) {
+        *z = c64::new(g, omega * c);
+    }
+    for stamp in delayed {
+        stamp.apply(omega, 1., values);
+    }
+}
+
 /// `.ac`
 pub(crate) fn ac(
     ckt: &Circuit,
@@ -519,11 +563,10 @@ pub(crate) fn ac(
     let freqs = ac_frequencies(sweep, points, fstart, fstop)?;
     let mut cols = vec![Vec::with_capacity(freqs.len()); n];
     let mut vals = vec![c64::new(0.0, 0.0); ckt.pattern.nnz()];
+    let delayed = DelayedStamp::collect(ckt);
     for &f in &freqs {
         let w = 2.0 * std::f64::consts::PI * f;
-        for (k, v) in vals.iter_mut().enumerate() {
-            *v = c64::new(ws.asm.g[k], w * ws.asm.c[k]);
-        }
+        ac_matrix(&ws.asm.g, &ws.asm.c, &delayed, w, &mut vals);
         let mut sol = b.clone();
         if let Some(lu) = &mut batch_lu {
             lu.factor(&vals).and_then(|_| lu.solve(&mut sol))
@@ -765,6 +808,45 @@ fn charge_derivatives(
     }
 }
 
+/// Accepted outgoing waves at both ends. Keep the interval bracketing the
+/// oldest time a new trial can request, including after a rejected step.
+struct LineHistory<'a> {
+    group: usize,
+    line: &'a spx_devices::line::Line,
+    samples: std::collections::VecDeque<(f64, [f64; 2])>,
+}
+impl LineHistory<'_> {
+    fn accept(&mut self, t: f64, x: &[f64]) {
+        self.samples.push_back((t, self.line.outgoing(x)));
+        while self.samples.len() > 1 && self.samples[1].0 <= t - self.line.delay {
+            self.samples.pop_front();
+        }
+    }
+    fn delayed_outgoing(&self, t: f64) -> [f64; 2] {
+        let retarded = t - self.line.delay;
+        let i = self.samples.partition_point(|&(time, _)| time <= retarded);
+        let (t0, left) = self.samples[i.saturating_sub(1)];
+        let Some(&(t1, right)) = self.samples.get(i) else {
+            return left;
+        };
+        if t1 == t0 {
+            return left;
+        }
+        let fraction = (retarded - t0) / (t1 - t0);
+        [0, 1].map(|k| left[k] + fraction * (right[k] - left[k]))
+    }
+}
+
+fn schedule_arrival(bps: &mut Vec<f64>, time: f64, eps: f64, tstop: f64) {
+    if time > tstop || time <= 0. {
+        return;
+    }
+    let i = bps.partition_point(|&t| t < time - eps);
+    if bps.get(i).is_none_or(|&t| t > time + eps) {
+        bps.insert(i, time);
+    }
+}
+
 /// `.tran`
 pub(crate) fn tran(
     ckt: &Circuit,
@@ -845,12 +927,29 @@ pub(crate) fn tran(
     let hmax = tmax
         .filter(|&t| t > 0.0)
         .unwrap_or_else(|| tstep.min((tstop - tstart) / 50.0));
+    let mut lines: Vec<_> = ckt
+        .groups
+        .iter()
+        .enumerate()
+        .filter_map(|(group, g)| {
+            Some(LineHistory {
+                group,
+                line: g.line()?,
+                samples: Default::default(),
+            })
+        })
+        .collect();
+    let hmax = lines.iter().fold(hmax, |h, l| h.min(l.line.delay));
     let hmin = 1e-9 * hmax.min(tstep).min(tstop - tstart);
     let eps = hmin;
 
     let mut bps: Vec<f64> = Vec::new();
     for g in &ckt.groups {
         g.breakpoints(&tp, &mut bps);
+    }
+    for history in &mut lines {
+        history.accept(0., &x);
+        bps.push(history.line.delay);
     }
     bps.push(tstop);
     bps.retain(|&t| t > eps && t <= tstop);
@@ -946,6 +1045,18 @@ pub(crate) fn tran(
         integ.a0 = a0;
         term.write(&mut integ.hist, 0, &hist, &qdot);
         ctx.time = t + h;
+        if ctx.time <= t {
+            return Err(Diagnostic::error(
+                "E-CONV-TRAN",
+                "timestep below floating-point time resolution",
+            ));
+        }
+        for history in &lines {
+            let [from_first, from_second] = history.delayed_outgoing(ctx.time);
+            ws.slots[history.group]
+                .b
+                .copy_from_slice(&[from_second, from_first]);
+        }
         ctx.final_step = ctx.time >= tstop - eps;
         x_new.copy_from_slice(&x);
         let extrapolated = predict && hist.len() >= 2;
@@ -1111,6 +1222,12 @@ pub(crate) fn tran(
         if crossing.is_some() {
             hist.clear();
             grow = grow.min(1.);
+        }
+        for history in &mut lines {
+            history.accept(t, &x_new);
+            if hit_bp || crossing.is_some() {
+                schedule_arrival(&mut bps, t + history.line.delay, eps, tstop);
+            }
         }
         hist.push(t, &mut buffer);
         ws.commit();

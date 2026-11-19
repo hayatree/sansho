@@ -8,6 +8,8 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | Code | Severity | Summary |
 |---|---|---|
 | [`E-PARSE-COND`](#e-parse-cond) | error | Invalid conditional netlist block |
+| [`E-LINE-PARAM`](#e-line-param) | error | Invalid lossless line parameters |
+| [`E-POLY-ARITY`](#e-poly-arity) | error | Invalid polynomial dimension or controls |
 | [`E-COUPLING-K`](#e-coupling-k) | error | Invalid coupling coefficient |
 | [`E-COUPLING-L`](#e-coupling-l) | error | Undefined or invalid winding |
 | [`E-BSOURCE-EXPR`](#e-bsource-expr) | error | Invalid behavioural source expression |
@@ -77,6 +79,18 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Invalid conditional netlist block.** A conditional directive is misplaced, unbalanced or has an invalid expression.
 
 - Check the parameter scope and the nesting of .if, .elseif, .else and .endif.
+
+## E-LINE-PARAM
+
+**Invalid lossless line parameters.** An ideal line requires positive finite characteristic impedance and propagation delay.
+
+- Supply Z0 and either TD in seconds or F in hertz with optional NL in wavelengths. Each assignment may occur once.
+
+## E-POLY-ARITY
+
+**Invalid polynomial dimension or controls.** The control list and coefficients must match the dimension of the polynomial.
+
+- Give a positive integer dimension, one node pair (E/G) or branch name (F/H) per input, and at least one coefficient.
 
 ## E-COUPLING-K
 
@@ -166,7 +180,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 **Unsupported element type.** The first letter of the line does not name a supported element type.
 
-- Check the element letter; subcircuits (`X`) and some sources are not supported yet.
+- Check the element letter against the supported devices in docs/compatibility.md.
 
 ## E-PARSE-EXPR
 
@@ -262,7 +276,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 **Unsupported model.** The model level or type is not supported.
 
-- Use a supported model level. Built-in MOSFETs support levels 1 and 54.
+- Use NJF/PJF level 1 for J devices. Built-in MOS channels accept levels 1, 2, 3 and 54. See docs/compatibility.md for parameter coverage.
 
 ## E-ELAB-NOGROUND
 

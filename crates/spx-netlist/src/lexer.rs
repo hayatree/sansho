@@ -25,6 +25,11 @@ impl Token {
         self.text.to_ascii_lowercase()
     }
 
+    /// A bound parameter may be represented as an integer in scientific notation.
+    pub(crate) fn positive_integer(&self) -> Option<usize> {
+        let value = self.text.parse::<f64>().ok()?;
+        (value > 0. && value.fract() == 0. && value < usize::MAX as f64).then_some(value as usize)
+    }
     /// Whether this token is `=`.
     pub fn is_eq(&self) -> bool {
         self.text == "="
@@ -41,6 +46,22 @@ pub struct Line {
 }
 
 impl Line {
+    /// A linear E/G can legitimately have a control node named `poly`.
+    pub(crate) fn polynomial(&self) -> bool {
+        self.tokens
+            .first()
+            .is_some_and(|t| t.lower().starts_with(['e', 'g', 'f', 'h']))
+            && self
+                .tokens
+                .get(3)
+                .is_some_and(|t| t.text.eq_ignore_ascii_case("poly"))
+            && (self.tokens.len() > 6
+                || self
+                    .raw
+                    .split_whitespace()
+                    .nth(3)
+                    .is_some_and(|w| w.to_ascii_lowercase().starts_with("poly(")))
+    }
     /// Span of the first token.
     pub fn span(&self) -> Span {
         self.tokens.first().map_or(Span::new(0, 0), |t| t.span)

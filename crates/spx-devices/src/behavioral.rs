@@ -12,6 +12,10 @@ type D = Dual<1>;
 #[derive(Debug)]
 enum Term {
     Number(f64),
+    Polynomial {
+        variables: Vec<Term>,
+        coefficients: Vec<f64>,
+    },
     Time,
     Temperature,
     Input(usize),
@@ -128,6 +132,13 @@ impl Term {
         let ev = |t: &Term| t.eval(ctx, x, inputs, seed);
         let truth = |b: bool| D::cst(f64::from(b));
         match self {
+            Self::Polynomial {
+                variables,
+                coefficients,
+            } => {
+                let values: Vec<_> = variables.iter().map(ev).collect();
+                polynomial(&values, coefficients)
+            }
             Self::Number(v) => D::cst(*v),
             Self::Time => D::cst(ctx.time),
             Self::Temperature => D::cst(ctx.temp - 273.15),
@@ -280,6 +291,38 @@ impl Term {
     }
 }
 
+/// Enumerate products by increasing degree, with nondecreasing variable indices
+/// within each product (1, x, y, x², xy, y², ...).
+fn polynomial(variables: &[D], coefficients: &[f64]) -> D {
+    if let [x] = variables {
+        if let [gain] = coefficients {
+            return *x * *gain;
+        }
+
+        return coefficients
+            .iter()
+            .rev()
+            .fold(D::cst(0.), |y, &c| y * *x + c);
+    }
+    let mut factors = Vec::new();
+    let mut sum = D::cst(0.);
+    for &c in coefficients {
+        if c != 0. {
+            sum += factors
+                .iter()
+                .fold(D::cst(c), |term, &i: &usize| term * variables[i]);
+        }
+        if let Some(k) = factors.iter().rposition(|&i| i + 1 < variables.len()) {
+            let next = factors[k] + 1;
+            factors[k..].fill(next);
+        } else {
+            factors.fill(0);
+            factors.push(0);
+        }
+    }
+    sum
+}
+
 fn power(a: D, b: D) -> D {
     if b.d[0] == 0. {
         if b.v == 0. { D::cst(1.) } else { a.powf(b.v) }
@@ -301,6 +344,49 @@ pub struct Behavioral {
     inputs: Vec<Node>,
 }
 impl Behavioral {
+    pub fn polynomial(
+        name: &str,
+        [p, n]: [Node; 2],
+        voltage: bool,
+        controls: &[spx_netlist::SwitchControl],
+        coefficients: &[f64],
+        node: impl Fn(&str) -> Node,
+    ) -> Result<Self, Diagnostic> {
+        if controls.is_empty() || coefficients.is_empty() {
+            return Err(error("empty polynomial"));
+        }
+        let mut probes = Vec::new();
+        let mut input = |probe| {
+            let i = probes.len();
+            probes.push(probe);
+            Term::Input(i)
+        };
+        let variables = controls
+            .iter()
+            .map(|c| match c {
+                spx_netlist::SwitchControl::Voltage(a, b) => Term::Binary(
+                    '-',
+                    Box::new(input(Input::Voltage(node(a)))),
+                    Box::new(input(Input::Voltage(node(b)))),
+                ),
+                spx_netlist::SwitchControl::Current(v) => input(Input::Branch(v.clone())),
+            })
+            .collect();
+        Ok(Self {
+            name: name.into(),
+            span: None,
+            p,
+            n,
+            voltage,
+            branch: None,
+            term: Term::Polynomial {
+                variables,
+                coefficients: coefficients.to_vec(),
+            },
+            probes,
+            inputs: vec![],
+        })
+    }
     pub fn new(
         name: &str,
         [p, n]: [Node; 2],
@@ -339,7 +425,11 @@ impl Behavioral {
 }
 impl DeviceGroup for Behavioral {
     fn type_name(&self) -> &'static str {
-        "behavioral"
+        if matches!(self.term, Term::Polynomial { .. }) {
+            "poly"
+        } else {
+            "behavioral"
+        }
     }
     fn len(&self) -> usize {
         1
@@ -354,6 +444,10 @@ impl DeviceGroup for Behavioral {
         self.span
     }
     fn probe_nodes(&self) -> Vec<usize> {
+        // POLY control terminals already occur in ElementKind::nodes.
+        if matches!(self.term, Term::Polynomial { .. }) {
+            return vec![];
+        }
         self.probes
             .iter()
             .filter_map(|p| if let Input::Voltage(i) = p { *i } else { None })
@@ -468,5 +562,23 @@ mod tests {
                 "{s}: {r:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod polynomial_tests {
+    use super::*;
+
+    #[test]
+    fn graded_products_and_partial_derivatives_at_zero() {
+        let vars = [D::var(0., 0), D::cst(-2.), D::cst(3.)];
+        // Degree three starts at index 10: xxx, xxy, xxz, xyy, xyz, xzz, ...
+        let mut c = [0.; 16];
+        c[5] = 1.; // xy
+        c[14] = 2.; // xyz
+        let value = polynomial(&vars, &c);
+        assert_eq!(value, D { v: 0., d: [-14.] });
+        assert_eq!(polynomial(&[D::var(4., 0)], &[2.]), D { v: 8., d: [2.] });
+        assert_eq!(polynomial(&vars, &[2.]), D::cst(2.));
     }
 }

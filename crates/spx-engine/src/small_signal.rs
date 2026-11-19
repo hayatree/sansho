@@ -2,6 +2,7 @@
 //! Provenance: original MNA formulation from Director & Rohrer (1969), Rohrer,
 //! Nagel, Meyer & Weber (1971) and Vlach & Singhal, Computer Methods for Circuit Analysis.
 
+use crate::analysis::{DelayedStamp, ac_matrix};
 use crate::{
     Circuit, SimOptions,
     analysis::linearize,
@@ -198,12 +199,11 @@ pub(super) fn noise(
     let mut totals = vec![[0.; 2]; generators.len()];
     let mut previous = totals.clone();
     let mut lu = SerialLu::new(&c.pattern).map_err(solver)?;
+    let delayed = DelayedStamp::collect(c);
     let mut matrix = vec![c64::default(); c.nnz()];
     for (k, &f) in freq.iter().enumerate() {
         let omega = TAU * f;
-        for (i, z) in matrix.iter_mut().enumerate() {
-            *z = c64::new(ws.asm.g[i], omega * ws.asm.c[i]);
-        }
+        ac_matrix(&ws.asm.g, &ws.asm.c, &delayed, omega, &mut matrix);
         let mut adj = vec![c64::default(); c.dim()];
         inject(&mut adj, out);
         lu.factor(&matrix)
@@ -303,10 +303,39 @@ pub(super) fn noise(
 enum Parameter {
     Element(usize),
     Model(usize, usize),
+    LineImpedance(usize),
+    LineDelay(usize),
+    Polynomial(usize, usize),
 }
 impl Parameter {
+    fn perturbations(self, nl: &Netlist, value: f64) -> (f64, f64) {
+        let h = if value == 0. {
+            1e-6
+        } else {
+            value.abs() * 1e-5
+        };
+        let lower_bound = value == 0.
+            && matches!(self, Self::Model(m,p) if matches!(nl.models[m].params[p].0.as_str(),"gamma"|"kp"|"beta"|"is"));
+        (value + h, if lower_bound { value } else { value - h })
+    }
+
     fn set(self, nl: &mut Netlist, v: f64) {
         match self {
+            Self::LineImpedance(i) => {
+                if let ElementKind::Line { z0, .. } = &mut nl.elements[i].kind {
+                    *z0 = v;
+                }
+            }
+            Self::LineDelay(i) => {
+                if let ElementKind::Line { td, .. } = &mut nl.elements[i].kind {
+                    *td = v;
+                }
+            }
+            Self::Polynomial(i, j) => {
+                if let ElementKind::Polynomial { coefficients, .. } = &mut nl.elements[i].kind {
+                    coefficients[j] = v;
+                }
+            }
             Self::Model(m, p) => nl.models[m].params[p].1 = v,
             Self::Element(i) => match &mut nl.elements[i].kind {
                 ElementKind::Resistor { value, .. }
@@ -324,6 +353,30 @@ fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
     let mut params = vec![];
     for (i, e) in nl.elements.iter().enumerate() {
         let value = match &e.kind {
+            ElementKind::Line { z0, td, .. } => {
+                params.push((format!("{}:z0", e.name), Parameter::LineImpedance(i), *z0));
+                params.push((format!("{}:td", e.name), Parameter::LineDelay(i), *td));
+                continue;
+            }
+            ElementKind::Polynomial {
+                coefficients,
+                controls,
+                ..
+            } => {
+                for (j, &v) in coefficients.iter().enumerate() {
+                    let term = if coefficients.len() == 1 && controls.len() == 1 {
+                        1
+                    } else {
+                        j
+                    };
+                    params.push((
+                        format!("{}:p{term}", e.name),
+                        Parameter::Polynomial(i, j),
+                        v,
+                    ));
+                }
+                continue;
+            }
             ElementKind::Resistor { value, .. }
             | ElementKind::Capacitor { value, .. }
             | ElementKind::Inductor { value, .. } => *value,
@@ -341,6 +394,7 @@ fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
             .map_or(1., |(_, v)| *v);
         let defaults: &[(&str, f64)] = match m.kind.as_str() {
             "d" => &[("is", 1e-14), ("n", 1.)],
+            "njf" | "pjf" => &[("vto", -2.), ("beta", 1e-4), ("lambda", 0.)],
             "npn" | "pnp" => &[("is", 1e-16), ("bf", 100.), ("br", 1.)],
             "nmos" | "pmos" if level == 1. => &[("gamma", 0.), ("lambda", 0.), ("phi", 0.6)],
             _ => &[],
@@ -397,7 +451,26 @@ fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
                     | "tnom"
                     | "tc1"
                     | "tc2"
-            ) || (*v > 0. && matches!(key.as_str(), "rs" | "rd" | "rb" | "rc" | "re"))
+            ) || (matches!(m.kind.as_str(), "nmos" | "pmos")
+                && matches!(level, 2. | 3.)
+                && *v > 0.
+                && matches!(
+                    key.as_str(),
+                    "theta"
+                        | "eta"
+                        | "vmax"
+                        | "delta"
+                        | "nsub"
+                        | "nfs"
+                        | "ucrit"
+                        | "uexp"
+                        | "kappa"
+                        | "xj"
+                ))
+                || (matches!(m.kind.as_str(), "njf" | "pjf")
+                    && matches!(key.as_str(), "beta" | "b" | "pb" | "cgs" | "cgd")
+                    && *v != 0.)
+                || (*v > 0. && matches!(key.as_str(), "rs" | "rd" | "rb" | "rc" | "re"))
             {
                 params.push((format!("{}:{key}", m.name), Parameter::Model(i, j), *v));
             }
@@ -446,11 +519,11 @@ pub(super) fn sens(
     };
     let mut values = vec![];
     for (name, param, v) in params {
-        let h = if v == 0. { 1e-6 } else { v.abs() * 1e-5 };
+        let (upper, lower) = param.perturbations(&nominal, v);
         let mut deck = nominal.clone();
-        param.set(&mut deck, v + h);
+        param.set(&mut deck, upper);
         let plus = evaluate(&deck)?;
-        param.set(&mut deck, v - h);
+        param.set(&mut deck, lower);
         let minus = evaluate(&deck)?;
         let mut derivative = 0.;
         for ((a, b), layout) in plus.iter().zip(&minus).zip(&c.layouts) {
@@ -463,7 +536,7 @@ pub(super) fn sens(
                 }
             }
         }
-        let value = derivative / ((v + h) - (v - h));
+        let value = derivative / (upper - lower);
         if !value.is_finite() {
             return Err(error(format!("non-finite sensitivity for {name}")));
         }
@@ -480,6 +553,11 @@ pub(super) fn pz(
     poles: bool,
     zeros: bool,
 ) -> Result<AnalysisResult, Diagnostic> {
+    if c.groups.iter().any(|g| g.line().is_some()) {
+        return Err(error(
+            "pole-zero analysis requires lumped elements; a distributed line has an exponential delay",
+        ));
+    }
     if c.dim() > 256 {
         return Err(error(
             "pole-zero analysis supports at most 256 circuit unknowns",
@@ -554,12 +632,11 @@ pub(super) fn ac_sens(
     let freq = crate::analysis::ac_frequencies(grid.sweep, grid.points, grid.fstart, grid.fstop)?;
     let mut states = Vec::with_capacity(freq.len());
     let mut lu = SerialLu::new(&c.pattern).map_err(solver)?;
+    let delayed = DelayedStamp::collect(c);
     let mut matrix = vec![c64::default(); c.nnz()];
     for &f in &freq {
         let omega = TAU * f;
-        for (i, z) in matrix.iter_mut().enumerate() {
-            *z = c64::new(ws.asm.g[i], omega * ws.asm.c[i]);
-        }
+        ac_matrix(&ws.asm.g, &ws.asm.c, &delayed, omega, &mut matrix);
         let mut forward = excitation.clone();
         let mut adjoint = vec![c64::default(); c.dim()];
         inject(&mut adjoint, port);
@@ -573,28 +650,46 @@ pub(super) fn ac_sens(
     let mut variables = vec![];
     let mut columns = vec![];
     for (name, param, value) in params {
-        let h = if value == 0. {
-            1e-6
-        } else {
-            value.abs() * 1e-5
-        };
+        let (upper, lower) = param.perturbations(&nominal, value);
         let mut deck = nominal.clone();
         let mut sample = |v| {
             param.set(&mut deck, v);
             let other = bind(&deck, c, opts)?;
             let (_, mut ws, _) = linearize(&other, opts, Mode::Ac)?;
-            Ok::<_, Diagnostic>((std::mem::take(&mut ws.asm.g), std::mem::take(&mut ws.asm.c)))
+            let delayed = if matches!(param, Parameter::LineImpedance(_) | Parameter::LineDelay(_))
+            {
+                DelayedStamp::collect(&other)
+            } else {
+                Vec::new()
+            };
+            Ok::<_, Diagnostic>((
+                std::mem::take(&mut ws.asm.g),
+                std::mem::take(&mut ws.asm.c),
+                delayed,
+            ))
         };
-        let (g1, c1) = sample(value + h)?;
-        let (g0, c0) = sample(value - h)?;
-        let dp = (value + h) - (value - h);
+        let (g1, c1, d1) = sample(upper)?;
+        let (g0, c0, d0) = sample(lower)?;
+        let dp = upper - lower;
         let mut column = Vec::with_capacity(freq.len());
         for (&f, (forward, adjoint)) in freq.iter().zip(&states) {
+            let omega = TAU * f;
+            for (k, z) in matrix.iter_mut().enumerate() {
+                *z = c64::new(g1[k] - g0[k], omega * (c1[k] - c0[k]));
+            }
+            for (sign, stamps) in [(1., &d1), (-1., &d0)] {
+                for stamp in stamps {
+                    stamp.apply(omega, sign, &mut matrix);
+                }
+            }
             let mut delta = c64::default();
             for (j, &u) in forward.iter().enumerate() {
-                for k in c.pattern.col_ptr()[j]..c.pattern.col_ptr()[j + 1] {
-                    let row = c.pattern.row_idx()[k];
-                    delta -= adjoint[row] * c64::new(g1[k] - g0[k], TAU * f * (c1[k] - c0[k])) * u;
+                let range = c.pattern.col_ptr()[j]..c.pattern.col_ptr()[j + 1];
+                for (&row, &entry) in c.pattern.row_idx()[range.clone()]
+                    .iter()
+                    .zip(&matrix[range])
+                {
+                    delta -= adjoint[row] * entry * u;
                 }
             }
             let derivative = delta / dp;

@@ -39,7 +39,7 @@ fn alter_error(msg: String) -> Diagnostic {
 /// Instance parameters accepted per device letter.
 fn device_params(kind: &ElementKind) -> &'static [&'static str] {
     match kind {
-        ElementKind::Diode { .. } | ElementKind::Bjt { .. } => &["area"],
+        ElementKind::Jfet { .. } | ElementKind::Diode { .. } | ElementKind::Bjt { .. } => &["area"],
         ElementKind::Mosfet { .. } => &["l", "w", "ad", "as", "pd", "ps"],
         _ => &[],
     }
@@ -90,6 +90,17 @@ pub(crate) fn apply(nl: &mut Netlist, c: &Change) -> Result<Applied, Diagnostic>
     if let Some(e) = nl.elements.iter_mut().find(|e| e.name == target) {
         let allowed = device_params(&e.kind);
         let old = match &mut e.kind {
+            ElementKind::Line { z0, td, .. } => {
+                let field = match param.as_str() {
+                    "z0" => z0,
+                    "td" => td,
+                    _ => return Err(alter_error(format!("use z0 or td for {target}"))),
+                };
+                if value <= 0. {
+                    return Err(alter_error(format!("{target}.{param} must be positive")));
+                }
+                Some(std::mem::replace(field, value))
+            }
             ElementKind::Va { params, .. } => return Ok(done(set_param(params, &param, value))),
             ElementKind::Resistor { value: v, .. }
                 if matches!(param.as_str(), "value" | "r" | "resistance") =>
@@ -126,7 +137,8 @@ pub(crate) fn apply(nl: &mut Netlist, c: &Change) -> Result<Applied, Diagnostic>
             {
                 Some(std::mem::replace(g, value))
             }
-            ElementKind::Diode { params, .. }
+            ElementKind::Jfet { params, .. }
+            | ElementKind::Diode { params, .. }
             | ElementKind::Bjt { params, .. }
             | ElementKind::Mosfet { params, .. }
                 if allowed.contains(&param.as_str()) =>

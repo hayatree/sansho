@@ -17,10 +17,13 @@ pub mod bsim4;
 pub mod controlled;
 pub mod diode;
 pub mod dual;
+pub mod jfet;
 pub mod junction;
+pub mod line;
 mod linear;
 pub mod model;
 pub mod mos1;
+mod mos23;
 mod sources;
 pub mod temperature;
 pub mod va;
@@ -575,6 +578,10 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
 
     /// Whether `f` and `q` are linear in `x` (enables single-solve Newton).
     fn is_linear(&self) -> bool;
+    /// Distributed element whose delayed waves require accepted transient samples.
+    fn line(&self) -> Option<&line::Line> {
+        None
+    }
 
     /// Supply UIC branch currents and differential voltage constraints.
     fn initial_values(&self, _x: &mut [f64], _voltages: &mut Vec<(Node, Node, f64)>) {}

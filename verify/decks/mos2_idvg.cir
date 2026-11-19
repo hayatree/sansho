@@ -1,0 +1,13 @@
+Level 2 transfer characteristics at three drain biases
+* Provenance: original R3 verification circuit.
+Vg gate 0 0
+Vd1 d1 0 0.05
+M1 d1 gate 0 0 nch w=20u l=5u
+Vd2 d2 0 0.5
+M2 d2 gate 0 0 nch w=20u l=5u
+Vd3 d3 0 2.0
+M3 d3 gate 0 0 nch w=20u l=5u
+.model nch nmos(level=2 vto=0.55 kp=80u phi=0.65 gamma=0.45 tox=30n lambda=0.018)
+.save i(Vd1) i(Vd2) i(Vd3)
+.dc Vg 0 2.5 0.05
+.end

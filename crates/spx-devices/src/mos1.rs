@@ -1,4 +1,4 @@
-//! MOSFET level 1 (Shichman–Hodges) with Meyer gate capacitances.
+//! Classical MOSFET terminal and charge assembly, with a Shichman–Hodges level-one channel.
 //!
 //! Terminals: drain, gate, source, bulk. Constant series resistances `RD`, `RS` add internal
 //! nodes. Equations are written for an n-channel device; p-channel devices flip all voltages
@@ -34,13 +34,18 @@ use crate::{
 /// Permittivity of SiO2 (F/m).
 const EPS_OX: f64 = 3.9 * 8.854_187_812_8e-12;
 
-/// Level-1 model parameters.
+/// Parameters shared by the classical MOS terminal and charge models.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(missing_docs)]
 pub struct Mos1Model {
     /// Prepared operating temperature in kelvin.
     pub temperature: Option<f64>,
     copies: f64,
+    channel: crate::mos23::Channel,
+    mobility: f64,
+    surface_states: f64,
+    sheet: [Option<f64>; 2],
+    width_reduction: f64,
     pub kf: f64,
     pub af: f64,
     pub tnom: Option<f64>,
@@ -73,6 +78,25 @@ pub struct Mos1Model {
 }
 
 impl Mos1Model {
+    /// Group index for the three classical channel models.
+    pub fn level_index(&self) -> usize {
+        match self.channel {
+            crate::mos23::Channel::SquareLaw => 0,
+            crate::mos23::Channel::ChargeSheet { .. } => 1,
+            crate::mos23::Channel::SemiEmpirical { .. } => 2,
+        }
+    }
+
+    /// Apply sheet resistance only at ends without an explicit model resistance.
+    pub fn apply_squares(&mut self, inst: &ModelParams) {
+        if let Some(sheet) = self.sheet[0] {
+            self.rd = sheet * inst.get("nrd", 1.);
+        }
+        if let Some(sheet) = self.sheet[1] {
+            self.rs = sheet * inst.get("nrs", 1.);
+        }
+    }
+
     /// Combine parallel copies with identical terminal voltages and geometry.
     pub fn multiply(&mut self, copies: f64) {
         self.copies *= copies;
@@ -101,6 +125,7 @@ impl Mos1Model {
                 * (0.5 * (phi - self.phi) + self.gamma * (phi.sqrt() - self.phi.sqrt()));
         self.phi = phi;
         self.kp /= t.ratio().powf(1.5);
+        self.mobility /= t.ratio().powf(1.5);
         self.is *= t.mos_saturation();
         self.js *= t.mos_saturation();
         let bottom = t.capacitance(self.pb, self.mj);
@@ -112,27 +137,75 @@ impl Mos1Model {
     }
     /// Build from `.model` parameters. Returns the model and the names of ignored parameters.
     pub fn from_params(p: &ModelParams, polarity: f64) -> (Self, Vec<String>) {
-        let cox = p.get("tox", 0.0);
+        Self::from_params_at(p, polarity, 27.)
+    }
+    pub fn from_params_at(
+        p: &ModelParams,
+        polarity: f64,
+        default_tnom: f64,
+    ) -> (Self, Vec<String>) {
+        let level = p.get("level", 1.);
+        let cox = p.get("tox", if level == 1. { 0. } else { 1e-7 });
         let cox = if cox > 0.0 { EPS_OX / cox } else { 0.0 };
         let u0 = p.opt(&["u0", "uo"]).unwrap_or(600.0);
         let kp = p
             .opt(&["kp"])
             .unwrap_or(if cox > 0.0 { u0 * 1e-4 * cox } else { 2e-5 });
+        let nsub = if level == 1. { None } else { p.opt(&["nsub"]) };
+        let tnom = p.opt(&["tnom"]);
+        let nominal = tnom.unwrap_or(default_tnom) + 273.15;
+        let vt = thermal_voltage(nominal);
+        let gap = crate::temperature::gap(nominal);
+        let ni = 1.45e10
+            * (nominal / crate::REFTEMP).powf(1.5)
+            * (crate::temperature::gap(crate::REFTEMP) / (2. * thermal_voltage(crate::REFTEMP))
+                - gap / (2. * vt))
+                .exp();
+        let phi = p
+            .opt(&["phi"])
+            .unwrap_or_else(|| nsub.map_or(0.6, |n| (2. * vt * (n / ni).ln()).max(0.1)));
+        let gamma = p
+            .opt(&["gamma"])
+            .unwrap_or_else(|| nsub.map_or(0., |n| crate::mos23::body_coefficient(n, cox)));
+        let vto = p.opt(&["vto", "vt0"]).unwrap_or_else(|| {
+            nsub.map_or(0., |_| {
+                let gate = p.get("tpg", 1.);
+                let work = if gate == 0. {
+                    -0.05 - gap * 0.5 - polarity * phi * 0.5
+                } else {
+                    -polarity * (gate * gap + phi) * 0.5
+                };
+                work - crate::CHARGE * p.get("nss", 0.) * 1e4 / cox
+                    + polarity * (gamma * phi.sqrt() + phi)
+            })
+        });
+        let rd = p.opt(&["rd"]);
+        let rs = p.opt(&["rs"]);
+        let sheet = if level == 1. { None } else { p.opt(&["rsh"]) };
         let m = Self {
+            channel: crate::mos23::Channel::bind(level, p, cox, nsub),
+            sheet: [rd, rs].map(|r| sheet.filter(|_| r.is_none())),
+            width_reduction: if level == 3. { p.get("wd", 0.) } else { 0. },
+            mobility: u0 * 1e-4,
+            surface_states: if level == 1. {
+                0.
+            } else {
+                crate::CHARGE * 1e4 * p.get("nfs", 0.) / cox
+            },
             temperature: None,
             copies: 1.,
             kf: p.get("kf", 0.),
             af: p.get("af", 1.),
-            tnom: p.opt(&["tnom"]),
+            tnom,
 
             polarity,
-            vto: p.opt(&["vto", "vt0"]).unwrap_or(0.0),
+            vto,
             kp,
-            gamma: p.get("gamma", 0.0),
-            phi: p.get("phi", 0.6),
-            lambda: p.get("lambda", 0.0),
-            rd: p.get("rd", 0.0),
-            rs: p.get("rs", 0.0),
+            gamma,
+            phi,
+            lambda: if level == 3. { 0. } else { p.get("lambda", 0.) },
+            rd: rd.unwrap_or(0.),
+            rs: rs.unwrap_or(0.),
             cbd: p.opt(&["cbd"]),
             cbs: p.opt(&["cbs"]),
             is: p.get("is", 1e-14),
@@ -188,6 +261,8 @@ impl Default for Mos1Geometry {
 /// Per-instance derived constants.
 #[derive(Debug, Clone)]
 struct Derived {
+    width: f64,
+    length: f64,
     noise_gate_cap: f64,
     has_storage: bool,
     sqrt_phi: f64,
@@ -221,7 +296,7 @@ impl Derived {
     }
 }
 
-/// All level-1 MOSFET instances.
+/// A batch of MOSFET instances with the same classical channel model.
 #[derive(Debug, Default)]
 pub struct Mos1s {
     names: Vec<String>,
@@ -250,8 +325,11 @@ impl Mos1s {
         off: bool,
     ) {
         let leff = geom.l - 2.0 * model.ld;
+        let width = geom.w - 2. * model.width_reduction;
         let mut d = Derived {
-            noise_gate_cap: geom.w
+            width,
+            length: leff,
+            noise_gate_cap: width
                 * leff
                 * if model.cox > 0. {
                     model.cox
@@ -260,10 +338,10 @@ impl Mos1s {
                 },
             has_storage: false,
             sqrt_phi: model.phi.sqrt(),
-            beta: model.kp * geom.w / leff,
-            cox_total: model.cox * geom.w * leff,
-            cgs_ov: model.cgso * geom.w,
-            cgd_ov: model.cgdo * geom.w,
+            beta: model.kp * width / leff,
+            cox_total: model.cox * width * leff,
+            cgs_ov: model.cgso * width,
+            cgd_ov: model.cgdo * width,
             cgb_ov: model.cgbo * leff,
             isd: if model.js > 0.0 && geom.ad > 0.0 {
                 model.js * geom.ad
@@ -291,8 +369,38 @@ impl Mos1s {
 
     /// Validate geometry; returns an error message for non-physical values.
     pub fn check_geometry(model: &Mos1Model, geom: &Mos1Geometry) -> Option<String> {
-        if geom.w <= 0.0 {
-            Some(format!("W must be positive (got {})", geom.w))
+        if model.level_index() != 0
+            && (![
+                model.cox,
+                model.phi,
+                model.pb,
+                model.mobility,
+                geom.w,
+                geom.l,
+            ]
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.)
+                || ![
+                    model.gamma,
+                    model.kp,
+                    model.rd,
+                    model.rs,
+                    model.width_reduction,
+                    model.surface_states,
+                ]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0.)
+                || !model.vto.is_finite()
+                || !model.channel.valid()
+                || !(0. ..1.).contains(&model.fc))
+        {
+            return Some("invalid classical MOS channel, junction or geometry parameter".into());
+        }
+        if geom.w - 2. * model.width_reduction <= 0.0 {
+            Some(format!(
+                "effective W must be positive (drawn width {})",
+                geom.w
+            ))
         } else if geom.l - 2.0 * model.ld <= 0.0 {
             Some(format!(
                 "effective channel length L - 2*LD must be positive (L = {}, LD = {})",
@@ -383,7 +491,7 @@ impl DeviceGroup for Mos1s {
         self.names.get(index).map(String::as_str)
     }
     fn type_name(&self) -> &'static str {
-        "mos1"
+        self.model.first().map_or("mos1", |m| m.channel.name())
     }
     fn len(&self) -> usize {
         self.names.len()
@@ -552,17 +660,19 @@ impl Mos1s {
                 }
             };
             let vth = (sarg - sqrt_phi) * m.gamma + vto;
-            let vgst = vgs_e - vth;
-            let ids = if vgst.v <= 0.0 {
-                Dual::cst(0.0)
-            } else {
-                let clm = vds_e * m.lambda + 1.0;
-                if vgst.v <= vds_e.v {
-                    vgst.sq() * (0.5 * dv.beta) * clm
-                } else {
-                    vds_e * (vgst - vds_e * 0.5) * dv.beta * clm
-                }
-            };
+            let (ids, vgst, vdsat) = m.channel.evaluate(
+                vgs_e - vth,
+                vds_e,
+                sarg,
+                m.gamma,
+                dv.beta,
+                m.lambda,
+                dv.width,
+                dv.length,
+                m.mobility,
+                m.surface_states,
+                vt,
+            );
             // Current flowing from drain to source (n-normalized).
             let ids = if reverse { -ids } else { ids };
 
@@ -575,7 +685,12 @@ impl Mos1s {
                 + depletion_charge(vbs, dv.cbs_sw, m.pb, m.mjsw, m.fc);
 
             // Meyer gate capacitances, incrementally integrated from the accepted state.
-            let (mut cgs, mut cgd, cgb) = meyer(vgst.v, vds_e.v, m.phi, dv.cox_total);
+            let (mut cgs, mut cgd, cgb) = meyer(
+                if vgst > 0. { vdsat } else { vgst },
+                vds_e.v,
+                m.phi,
+                dv.cox_total,
+            );
             if reverse {
                 std::mem::swap(&mut cgs, &mut cgd);
             }
