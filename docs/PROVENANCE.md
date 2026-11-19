@@ -226,7 +226,7 @@ circuits are original work from Accellera Verilog-AMS LRM 2.4, the repository's
 modified nodal equations and the forward-mode chain rule. BSIM-CMG 111.2.1
 (ECL-2.0) served as external compiler input. The known-difference directive and
 the SKY130 terminal-waveform replay are original verification work using local
-black-box results. The KU0 decision follows the BSIM4 4.8.2 manual, equation 14.5.
+black-box results. R6 revised the original equation 14.5 choice using the cached ngspice 44.2 KU0 control and layout sweeps.
 
 ### M5-3 single-worker BSIM4
 
@@ -354,3 +354,8 @@ directly. Diode recombination, high injection, breakdown and perimeter charge us
 Massobrio and Antognetti, chapter 1 (especially §§1.1, 1.8.1 and 1.9.1), and
 the ngspice manual, §7.2.2 (area/perimeter scaling, Algorithm 7.1 and equations
 7.1–7.3). The modulation waveforms follow §§4.1.5–4.1.6 of the same manual. The stamp derivatives use the repository's dual numbers.
+
+
+### R6 compact-model compatibility
+
+The NOIC default, KU0 mobility response, BSIM3 gate–bulk overlap default, accumulation-centroid doping and area-only junction current derive from black-box comparisons with ngspice 44.2 and independently authored Sansho control decks. The device notes give the measured quantities and scope. The original noise and breakdown probes establish the BSIM3 channel-density endpoints, weak/strong flicker blend, EM switch and capMod 3 weak-inversion smoothing, and the SPICE3 diode bottom-current knee match, sidewall prefactor and low-IBV clamp. [BSIM3](bsim3.md#verification-status) · [BSIM4](bsim4.md#mobility-stress) · [Probe measurements](../verify/probes/README.md)

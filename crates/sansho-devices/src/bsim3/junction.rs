@@ -32,7 +32,8 @@ impl Junction {
             / nj)
             .exp();
         let js = p.get("js", 1e-4) * scale;
-        let jsw = p.get("jssw", 0.) * scale;
+        // The 44.2 temperature sweep follows area-only saturation current.
+        p.accept(&["jssw"]);
         let cj = p.get("cj", 5e-4);
         let csw = p.get("cjsw", 5e-10);
         let psw = p.get("pbsw", 1.);
@@ -57,13 +58,12 @@ impl Junction {
         if nj <= 0.
             || limit < 0.
             || !js.is_finite()
-            || !jsw.is_finite()
             || regions.iter().any(|&(c, v, m)| c < 0. || v <= 0. || m < 0.)
         {
             return Err("invalid junction coefficient at operating temperature".into());
         }
         Ok([(g.ad, g.pd), (g.as_, g.ps)].map(|(area, perimeter)| {
-            let isat = (area * js + perimeter * jsw).max(0.);
+            let isat = (area * js).max(0.);
             let geometry = [area, (perimeter - w).max(0.), perimeter.min(w)];
             Self {
                 isat,

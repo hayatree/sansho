@@ -1,0 +1,14 @@
+BSIM3 unified flicker noise versus TEMP
+* Provenance: original Sansho black-box experiment for ngspice 44.2.
+* sweep: -25 0 27 75 125
+.temp 27
+Vgate g 0 DC 1.05 AC 1
+Vdrain d 0 1.7
+Hread out 0 Vdrain 1k
+M1 d g 0 0 nch L=0.65u W=2.8u
+.model nch nmos level=8 version=3.3 tox=8n xj=0.13u nch=2.1e17
++ vth0=0.54 k1=0.52 k2=-0.023 u0=460 vsat=92000 rdsw=85 pclm=1.15
++ lint=9n wint=15n mobmod=2 a0=1.15 pdiblc2=0.013 tnom=27
++ noimod=2 ef=1 noia=8e19 noib=3e4 noic=2e-13 em=4.1e7
+.noise v(out) Vgate dec 4 1 100meg
+.end

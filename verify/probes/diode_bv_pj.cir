@@ -1,0 +1,12 @@
+Junction breakdown versus PJ
+* Provenance: original Sansho black-box experiment for ngspice 44.2.
+* sweep: 0 5u 10u 20u
+.param probe=10u
+Vbias d 0 0
+D1 d 0 dut area=2 pj={probe}
+.model dut d(is=1e-14 n=1 bv=3 ibv=1m nbv=1.2
++ jsw=1e-10 isr=5p nr=1.8 ikf=1m)
+.options temp=27 gmin=1e-18 abstol=1e-18 reltol=1e-7
+.dc Vbias -3.04 -1.8 0.002
+.save i(Vbias)
+.end

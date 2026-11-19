@@ -194,6 +194,14 @@ fn noise_selectors_choose_independent_channel_and_flicker_laws() {
 }
 
 #[test]
+fn strong_inversion_still_depends_on_the_weak_noise_branch() {
+    let m = model(&[("noimod", 2.), ("noia", 0.), ("noib", 3e4)], 1.);
+    let [thermal, flicker] = m.noise.powers(&m, 1.5, 1.7, 0.);
+    assert!(thermal > 0.);
+    assert_eq!(flicker, 0.);
+}
+
+#[test]
 fn junction_capacitance_and_current_limiting() {
     let m = model(
         &[
@@ -250,4 +258,45 @@ fn unlimited_junction_retains_exponential_above_eighty_thermal_voltages() {
     let (i, _) = j.evaluate(D::var(85. * j.nvt, 0), 0.);
     close(i.v, isat * 85f64.exp_m1(), 1e-13, 0.);
     close(i.d[0], i.v / j.nvt, 1e-13, 0.);
+}
+
+#[test]
+fn gate_bulk_overlap_uses_cv_width_correction_unless_explicit() {
+    for (params, dwc) in [
+        (vec![("wint", 15e-9)], 15e-9),
+        (vec![("wint", 15e-9), ("dwc", 7e-9)], 7e-9),
+    ] {
+        let m = model(&params, 1.);
+        close(m.overlap[2], m.lcv * 2. * dwc * m.cox, 1e-14, 0.);
+        let mut explicit = params;
+        explicit.push(("cgbo", 0.));
+        assert_eq!(model(&explicit, 1.).overlap[2], 0.);
+    }
+}
+
+#[test]
+fn accumulation_centroid_uses_channel_doping() {
+    let m = model(&[("nch", 3.2e17), ("nsub", 2e16), ("acde", 0.8)], 1.);
+    // (NCH / 2e16)^(-1/4) = 1/2 for this channel.
+    close(m.centroid_acde, 0.4, 1e-14, 0.);
+}
+
+#[test]
+fn perimeter_contributes_junction_capacitance_with_area_only_current() {
+    let m = model(
+        &[
+            ("js", 0.003),
+            ("jssw", 1e-8),
+            ("cj", 0.),
+            ("cjsw", 4e-10),
+            ("cjswg", 7e-10),
+            ("tnom", 43.),
+        ],
+        1.,
+    );
+    let j = &m.junction[0];
+    let (reverse, _) = j.evaluate(D::cst(-3.), 0.);
+    close(reverse.v, -0.003 * 1e-12, 1e-14, 0.);
+    let (_, q) = j.evaluate(D::var(0., 0), 0.);
+    close(q.d[0], 1e-6 * 4e-10 + 2e-6 * 7e-10, 1e-14, 0.);
 }

@@ -2,6 +2,8 @@
 
 Provenance: Original implementation of the UC Berkeley BSIM Group's *BSIM4 4.8.2 Technical Manual*, chapters 1–15 and Appendix A, with the published 4.8.2 update notes. The reference waveforms come from the maintainer's ngspice 44.2 runs.
 
+BSIM4 cards are extracted against the Berkeley reference implementation. For departures from the manual, Sansho follows behavior established solely by black-box observation of ngspice 44.2. That release embeds the Berkeley model and may include ngspice-specific changes. [Compact-model policy](compatibility.md#compact-model-compatibility)
+
 Use a four-terminal MOS instance in drain, gate, source, bulk order and a model of type `nmos` or `pmos` with `level=54`. The channel sign convention changes with the type. DC, AC and transient analyses share a quasi-static terminal-current and charge model. The implementation is in `crates/sansho-devices/src/bsim4/`. It uses the existing fixed-size forward-mode dual numbers and the engine's ordinary device-group interface.
 
 ## Terminal evaluation and bypass
@@ -50,7 +52,7 @@ measure the accuracy and work counts for both bypass settings. [Performance meas
 | 11, junctions | Bottom, isolation-sidewall and gate-edge leakage and charge, dioMod 0–2, avalanche and limiting currents, trap-assisted reverse current. |
 | 12, layout | Supplied or derived drain/source area, perimeter and squares, finger count, gate contacts and electrode resistance. Shared/contact diffusion resistances use a rectangular approximation. |
 | 13, temperature | Threshold, mobility, velocity, resistance, diode current and junction capacitance specialization for tempMod 0–3. Circuit TEMP and model TNOM are converted from °C to kelvin. |
-| 14–15, stress and well proximity | Per-finger inverse isolation distances, reference-normalized mobility and velocity, threshold, K2 and ETA0 shifts. WPE uses supplied SCA, SCB and SCC with WPEMOD enabled. |
+| 14–15, stress and well proximity | Per-finger inverse isolation distances, reference-normalized saturation velocity, threshold, K2 and ETA0 shifts. WPE uses supplied SCA, SCB and SCC with WPEMOD enabled. |
 | Appendix A | The public `bsim4::catalog::PARAMETERS` table gives the card name, nominal value and unit, binning flag, model/instance scope and printed manual page. A derived default refers to its input parameters or equation. The table also lists dialect aliases. Material-model selectors, SC-only WPE and NQS are outside the evaluated scope. |
 
 The numerical comparison suite exercises fewer combinations than this table. In particular, the high mobility selectors, velocity overshoot, trap-assisted leakage, all RF reductions and cvchargeMod 1 lack dedicated ngspice reference sweeps. The unit tests compare analytic AD derivatives with numerical perturbations independently of the reference decks.
@@ -82,9 +84,9 @@ The numerical comparison suite exercises fewer combinations than this table. In 
 
 ### Mobility stress
 
-Equations 14.3–6 and §14.1.3 specify the ratio `(1 + rho) / (1 + rho_ref)`. Both rhos use KU0 divided by the same size and temperature factor. Only the actual inverse isolation distances are averaged over fingers. For `b4_n_lod_ku0` the inverse-distance sum is 2.948505 per µm, compared with 1.886792 per µm for the reference geometry. Its U0 multiplier is 1.039488. For `b4_n_lod_nf` the four-finger average gives 0.958365 as the U0 multiplier. The unit tests exercise the size factor, reference normalization, nonzero TKU0 and distinct mobility and velocity ratios.
+Equation 14.5 predicts a U0 multiplier of 1.039488 in the one-finger KU0 deck and 0.958365 in the four-finger deck. All 121 points of the cached KU0-only sweep equal the zero-KU0 control. In the independent mobility-control deck at Vg = 1.2 V, the reference-spacing and close-spacing devices both draw 77.4561 µA. A device with U0 explicitly multiplied by 1.039488 draws 80.0302 µA. The circuit can resolve a mobility shift of the predicted size.
 
-All saved values in the 121-point KU0-only reference are identical to the zero-KU0/KVSAT control reference. With KU0 zero, equation 14.6 also gives unit velocity scaling in the control. As a separate experiment, suppressing only the U0 multiplier in Sansho produced scores of 0.220 for KU0, 0.237 for NF and 0.017 for the combined bin/layout deck. Velocity scaling, threshold shifts and the spacing average were active in that experiment. The maintainer selected equation 14.5 for Sansho. In a separate ngspice 44.2 black-box probe, Id was identical with KU0 omitted and with KU0 enabled at SA = SB = 0.3 µm and SAREF = SBREF = 1 µm. The verifier reports the KU0, NF and combined bin/layout decks as `KNOWN` with their measured scores. The cached traces establish the missing measurable mobility response, but do not identify its cause inside the reference run.
+Sansho therefore leaves U0 at its pre-LOD value. KU0 still enters the equation 14.6 saturation-velocity ratio, including size, temperature, reference spacing and the average over fingers. The KVTH0, STK2 and STETA0 shifts and separate well-proximity model apply as before. Zeroing KU0 altogether in Sansho gives maximum current errors of 2.535 µA for the four-finger deck and 0.998 µA for the binned deck. Suppressing just the LOD mobility multiplier reduces those to 0.729 and 0.065 µA, respectively. The three previously marked decks pass at their original tolerances.
 
 ### Body-network transients
 
@@ -108,27 +110,27 @@ To isolate the body equations, we replayed each saved trajectory on its own time
 
 Across all five stages the largest reference-driven error was 1.32 µV, within the ordinary tolerance for every body trace. On the reference trajectory we also evaluated the fourth NMOS discrete KCL directly, using `f[n] + f[n−1] + 2(q[n]−q[n−1])/h` on trapezoidal steps. Peak residuals at body, sbody and dbody were 57.6, 0.0015 and 33.3 nA against peak charge terms of 18.64, 0.0484 and 35.98 µA. This checks the individual junction connections as well as the intrinsic body charge.
 
-Halving the Sansho step from 2 to 1, 0.5 and 0.25 ps moved the last D crossing from +0.081 ps relative to the fixed reference to −1.079, −1.369 and −1.441 ps. Successive shifts decreased roughly fourfold. Refining Sansho alone therefore moves it away from this coarse reference. The terminal-driven replay and the passing NFET/PFET charge and generic RBODY controls localize the out-of-tolerance error to the free-running switching trajectory and its sampled body response. A small fixed-trajectory discrepancy remains. These measurements do not establish an error in the body conductance or junction charge partition. The free-running deck keeps its ordinary score and failure status.
+Halving the Sansho step from 2 to 1, 0.5 and 0.25 ps moved the last D crossing from +0.081 ps relative to the fixed reference to −1.079, −1.369 and −1.441 ps. Successive shifts decreased roughly fourfold. Refining Sansho alone therefore moves it away from this coarse reference. The terminal-driven replay and the passing NFET/PFET charge and generic RBODY controls localize the out-of-tolerance error to the free-running switching trajectory and its sampled body response. A small fixed-trajectory discrepancy remains. These measurements do not establish an error in the body conductance or junction charge partition. The verifier reports this free-running deck as a known difference at the original tolerance.
 
 ### Cached deck results
 
-Worst signal and maximum absolute difference use the ordinary verification harness. A score at or below 1 passes. All 30 cached decks ran. Three KU0 comparisons report a known difference, and one free-running transient exceeds tolerance.
+Worst signal and maximum absolute difference use the ordinary verification harness. A score at or below 1 passes. All 30 cached decks ran. The 22 generic BSIM4 decks pass. One free-running SKY130 transient exceeds tolerance.
 
 | Deck | Worst signal | Score | Maximum absolute difference |
 |---|---|---:|---:|
 | `b4_cs_ac` | `v(d)` | 0.038 | 1.672e-4 V |
 | `b4_inverter_tran` | `v(out)` | 0.015 | 1.930e-4 V |
-| `b4_n_bin_layout` | `i(vd)` | **8.235** | 3.080e-5 A |
+| `b4_n_bin_layout` | `i(vd)` | 0.017 | 6.501e-8 A |
 | `b4_n_capmod` | `i(vg)` | 0.036 | 2.744e-7 A |
 | `b4_n_diode` | `i(vb)` | 0.487 | 1.022e-5 A |
 | `b4_n_idvd` | `i(vd)` | 0.375 | 4.186e-7 A |
 | `b4_n_idvg_lin` | `i(vd)` | 0.250 | 2.885e-8 A |
 | `b4_n_idvg_sat` | `i(vd)` | 0.216 | 2.407e-7 A |
 | `b4_n_igate` | `i(vd)` | 0.031 | 4.984e-8 A |
-| `b4_n_lod_ku0` | `i(vd)` | **12.886** | 1.895e-5 A |
+| `b4_n_lod_ku0` | `i(vd)` | 0.220 | 3.233e-7 A |
 | `b4_n_lod_kvsat` | `i(vd)` | 0.220 | 3.233e-7 A |
 | `b4_n_lod_kvth0` | `i(vd)` | 0.777 | 2.336e-6 A |
-| `b4_n_lod_nf` | `i(vd)` | **14.234** | 4.383e-5 A |
+| `b4_n_lod_nf` | `i(vd)` | 0.237 | 7.287e-7 A |
 | `b4_n_mobmod` | `i(vd)` | 0.135 | 3.309e-8 A |
 | `b4_n_nf_geo` | `i(vd)` | 0.220 | 6.427e-7 A |
 | `b4_n_rbody_tran` | `v(m1#dbody)` | 0.012 | 6.013e-8 V |
@@ -147,7 +149,7 @@ Worst signal and maximum absolute difference use the ordinary verification harne
 | `sky_pfet_iv` | `i(vs)` | 0.173 | 2.918e-7 A |
 | `sky_ring5` | `v(m.x4.xn.msky130_fd_pr__nfet_01v8#body)` | **2.079** | 1.057e-5 V |
 
-The original 14 decks and ten JIT Verilog-A decks passed and all 24 Sansho raw files matched their pre-change SHA-256 digests. The ten Verilog-A decks also passed in the interpreter. Two additional inputs in `verify/diag-decks` have cached maintainer references. The mobility control measures separate drain currents for two spacings on one model card alongside a device with the hand-calculated mobility. The close-spacing and explicit-mobility currents agree at every Sansho sweep point. The tight-tolerance ring keeps the 2 ps maximum timestep and the initial UIC jump.
+The original 14 decks and ten JIT Verilog-A decks passed and all 24 Sansho raw files matched their pre-change SHA-256 digests. The ten Verilog-A decks also passed in the interpreter. Two additional inputs in `verify/diag-decks` have cached maintainer references. The mobility control measures separate drain currents for two spacings on one model card alongside a device with the hand-calculated mobility. The close-spacing and reference-spacing currents agree throughout the sweep. The tight-tolerance ring keeps the 2 ps maximum timestep and the initial UIC jump.
 
 In B4-1, median check / run times in seconds for three warm release CLI invocations were 0.154 / 0.167 for `sky_cs_ac`, 0.188 / 0.217 for `sky_inverter_tran`, 0.163 / 0.154 for `sky_nfet_idvd`, 0.164 / 0.158 for `sky_nfet_iv`, 0.158 / 0.209 for `sky_pfet_iv` and 0.169 / 0.220 for `sky_ring5`.
 
@@ -155,9 +157,4 @@ The B4-1 release microbenchmark measured 431.3 ns per intrinsic current, charge 
 
 ## Noise defaults
 
-The NOIC default follows the BSIM4 4.8.2 manual (Appendix A: 8.75). ngspice 44 behaves
-as if the default were 8.75e9 (black-box comparison,
-`verify/decks/noise_bsim4_noic_default.cir`, a known difference). With NOIC given
-explicitly the flicker and thermal noise agree with ngspice
-(`verify/decks/noise_bsim4_cs.cir`). Production PDK cards such as SKY130 set NOIC
-explicitly, so the default rarely applies.
+The unified flicker model defaults NOIC to 8.75e9. The cached explicit-8.75e9 and omitted-NOIC spectra agree at all 31 frequencies. On the omitted-NOIC deck, the 44.2 input spectrum is 4.82368 µV/√Hz at 10 Hz. In Sansho the printed Appendix A value of 8.75 gives 4.51146 µV/√Hz and an explicit 8.75e9 gives 4.82238 µV/√Hz. The omitted-value deck now passes with a worst score of 0.225. An explicit NOIC on a model card takes precedence, including zero. [Noise decks](../verify/README.md#r2-noise-audit)

@@ -34,7 +34,7 @@ impl Parameters {
             traps: [
                 p.get("noia", if sign > 0. { 6.25e41 } else { 6.188e40 }),
                 p.get("noib", if sign > 0. { 3.125e26 } else { 1.5e25 }),
-                p.get("noic", 8.75),
+                p.get("noic", 8.75e9),
             ],
             kf: p.get("kf", 0.),
             af: p.get("af", 1.),
@@ -235,5 +235,22 @@ impl Instance {
             emit(self.nodes[1], node, thermal * g, 0.);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn noic_uses_the_reference_default_unless_explicit() {
+        let zero = ModelParams::new(&[("noic".into(), 0.)]);
+        for sign in [-1., 1.] {
+            assert_eq!(
+                Parameters::new(&ModelParams::default(), sign).traps[2],
+                8.75e9
+            );
+            assert_eq!(Parameters::new(&zero, sign).traps[2], 0.);
+        }
     }
 }

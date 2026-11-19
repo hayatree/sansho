@@ -294,11 +294,11 @@ fn bjt_external_collector_charge_bypasses_base_resistance() {
 #[test]
 fn diode_breakdown_slope_and_perimeter_capacitance() {
     let r = simulate(
-        "avalanche\nV1 d 0\nD1 d 0 dd area=2\n.model dd d(bv=3 ibv=2m nbv=1.4 isr=1u)\n.dc v1 -3.05 -3 0.05\n",
+        "avalanche\nV1 d 0\nD1 d 0 dd area=2 pj=10u m=3\n.model dd d(jsw=1e-10 bv=3 ibv=2m nbv=1.4 isr=1u)\n.dc v1 -3.05 -3 0.05\n",
     );
     let current = r.analyses[0].real("i(v1)").unwrap();
     let vt = sansho_devices::thermal_voltage(sansho_devices::REFTEMP);
-    assert!(close(current[1], 0.004, 1e-8, 0.));
+    assert!(close(current[1], 3. * 1.05 * 0.002, 1e-8, 0.));
     assert!(close(
         current[0] / current[1],
         (0.05 / (1.4 * vt)).exp(),
@@ -310,6 +310,19 @@ fn diode_breakdown_slope_and_perimeter_capacitance() {
     );
     let (_, b) = r.analyses[0].complex("i(v1)").unwrap()[0];
     assert!(close(-b, std::f64::consts::TAU * 1e6 * 21e-12, 1e-10, 0.));
+}
+
+#[test]
+fn small_breakdown_targets_match_the_bottom_current() {
+    // Direct bias at -BV in the 44.2 IBV sweep. The 1 pA target clamps
+    // even though it exceeds the combined 21 fA saturation current.
+    for (ibv, expected) in [("1p", 21e-15), ("1n", 1.047858e-9)] {
+        let r = simulate(&format!(
+            "knee\nV1 d 0 -3\nD1 d 0 dd area=2 pj=10u\n.model dd d(bv=3 ibv={ibv} nbv=1.2 is=1e-14 jsw=1e-10 isr=5p)\n.options gmin=1e-18\n.op\n"
+        ));
+        let current = r.analyses[0].real("i(v1)").unwrap()[0];
+        assert!(close(current - 3e-18, expected, 1e-5, 0.));
+    }
 }
 
 #[test]

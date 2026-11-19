@@ -1,10 +1,9 @@
 # Verification decks
 
-Every `.cir` file here is simulated by Sansho and by ngspice (run in Docker as a black-box
-reference, see `tools/ngspice`), and the results are compared:
+The default suite compares circuits in `verify/decks` with ngspice running as a black-box reference. CI also selects the model suites explicitly. Standalone experiments live in `verify/probes`. [Probe measurements](probes/README.md)
 
 ```sh
-cargo run -p sansho-verify            # all decks
+cargo run -p sansho-verify            # default suite
 cargo run -p sansho-verify -- --cached -v verify/decks/bjt_dc.cir
 ```
 
@@ -28,9 +27,7 @@ and a `known_difference` reason. The `pass` field records the tolerance result.
 Missing inputs retain their `SKIP` status. Simulation errors, unreadable cached
 references and problems that prevent comparison produce `FAIL`.
 
-The three marked BSIM4 layout decks cover KU0 mobility stress. ngspice 44.2
-returned identical Id with and without KU0 in the black-box control. Sansho uses
-BSIM4 manual equation 14.5 by maintainer decision.
+For compact devices, the maintainer uses black-box behavior from ngspice 44.2 as the reference for extracted model cards. The three BSIM4 KU0 layout decks pass with the measured mobility behavior. [Compatibility policy](../docs/compatibility.md#compact-model-compatibility)
 
 All decks are original circuits written for this project. Raw files go to `verify/out/`
 (ignored by git).
@@ -52,9 +49,7 @@ and waveform interpolation as the existing suites. Current discrepancies and the
 coverage are recorded in [the BSIM4 model notes](../docs/bsim4.md).
 
 The B4-2 diagnostic inputs are `verify/diag-decks/b4_lod_mobility_control.cir`
-and `verify/diag-decks/sky130/sky_ring5_uic_tight.cir`. Pass both paths to the harness
-to generate their first references. The SKY130 input shares the TT suite's
-deck-local reference settings.
+and `verify/diag-decks/sky130/sky_ring5_uic_tight.cir`. Both have cached references. The mobility control passes (score 0.317). The tight UIC ring exceeds tolerance at 10 fs on the fourth NMOS body (score 66.290 in both the pre-R6 and R6 replays). The SKY130 input shares the TT suite's deck-local reference settings.
 
 ## Production Verilog-A decks
 
@@ -185,6 +180,8 @@ The comparison of the shared name R1 includes all nine samples.
 
 ### R2 noise audit
 
+The decomposition below used the printed NOIC value of 8.75. R6 also checked the omitted parameter against the 44.2 spectrum.
+
 For `noise_bsim4_cs`, NF and M are both one, the effective geometry is
 4 µm × 0.5 µm and the operating temperature is 300.15 K. At the Sansho bias,
 Ids = 112.971 µA, Vds = 1.57406 V, Vdseff = 0.281767 V, Vgsteff = 0.292150 V
@@ -221,14 +218,7 @@ Nₗ = 2.060e15 and N* = 2.070e15 m⁻². At 1 Hz the two inversion terms
 in equation 10.2 are 6.933e−17 and 3.644e−17 A²/Hz. The subthreshold
 term is 3.858e−16 A²/Hz, giving 8.301e−17 A²/Hz after blending.
 A diagnostic run with explicit NOIC=8.75e9 gives 6.02971 µV/√Hz at 10 Hz.
-The 4.8.2 manual prints 8.75 and the cached raw does not record the
-oracle's parameter value. The model retains the published default and
-the deck retains the residual failure.
-
-`noise_bsim4_cs.cir` sets NOIC explicitly and passes. `noise_bsim4_noic_default.cir`
-keeps the manual default and is a known difference (see `docs/bsim4.md`, Noise
-defaults). `sens_rc_ac.cir` is a known difference for the reference's R1 vector
-described above.
+The omitted-NOIC R6 deck gives an input amplitude of 4.82238 µV/√Hz versus 4.82368 in the cache at 10 Hz with the 8.75e9 default. Both the omitted and explicit NOIC decks pass. The AC sensitivity deck retains its known difference for the R1 vector. [Noise defaults](../docs/bsim4.md#noise-defaults)
 
 ## R3 element and model decks
 
@@ -296,7 +286,7 @@ The 50 Ω series resistor makes source bias and junction voltage different.
 To isolate the effects, small DC decks drove the diode directly at junction
 voltages taken from the cached curve. Each used IS=10 fA, N=1, AREA=2 and
 PJ=10 µm at 27 °C. The entries are signed anode currents including GMIN.
-Only the last row comes from ngspice.
+The first five rows record the R4 implementation before the probe-based revision. The last row comes from ngspice.
 
 | Enabled beyond the base junction | At −1.550000 V (pA) | At +0.627408 V (µA) |
 |---|---:|---:|
@@ -304,7 +294,7 @@ Only the last row comes from ngspice.
 | JSW=100 pA | −1.571 | 719.36 |
 | ISR=5 pA, NR=1.8 | −17.542 | 689.49 |
 | IKF=1 mA | −1.570 | 432.17 |
-| Full R4 model | −17.543 | 451.90 |
+| Prior R4 model | −17.543 | 451.90 |
 | Cached full model | −1.571 | 451.84 |
 
 Doubling AREA from 1 to 2 doubled the bottom current. Changing PJ from zero
@@ -313,8 +303,7 @@ that increment. The ISR branch uses the R4 depletion-width factor
 `((1 − Vd/VJ)² + 0.005)^(M/2)` on the NR exponential. Massobrio and
 Antognetti discuss the width dependence and generation current in chapter 1,
 §§1.1 and 1.9.1. At −1.55 V the reference is consistent with just the
-bottom and sidewall leakage plus GMIN. The manual gives no reverse-bias
-switch for ISR that explains this difference.
+bottom and sidewall leakage plus GMIN. The new ISR sweeps also give identical currents throughout deep reverse bias.
 
 For positive total junction current I, equation 7.3 gives
 `I / (1 + sqrt(I / (AREA × IKF)))`. Applying it before adding GMIN gives
@@ -322,27 +311,14 @@ For positive total junction current I, equation 7.3 gives
 cache and 537.6 µA before the correction. At the +0.6 V AC bias, both AC
 output vectors pass across 1 MHz to 1 GHz. [ngspice user manual, §7.2.2](https://ngspice.sourceforge.io/docs/ngspice-manual.pdf#page=139)
 
-With only BV, IBV and NBV enabled, a direct −3 V bias draws 2.000 mA in
-reverse. The manual scales IBV by AREA. Algorithm 7.1 moves the avalanche
-knee toward zero by `NBV × Vt × ln(IBVeff / Ileak)` when the target exceeds
-the leakage at −BV. NBV defaults to N. When the target lies below the leakage,
-the knee stays at −BV and the leakage sets the minimum current.
-
-| Source bias | Sansho reverse current | Cached reverse current | Cached junction voltage |
-|---|---:|---:|---:|
-| −3.10 V | 2.0000 mA | 1.70066 mA | −3.014967 V |
-| −2.85 V | 15.535 µA | 8.25196 µA | −2.849587 V |
-
-Using the two cached junction voltages and log current ratio gives an
-exponential slope of 1.2000 thermal voltages, in agreement with NBV.
-Extrapolation to −3 V gives 1.0500 mA. Section 7.2.2 gives 2 mA for this
-card. The combined cache cannot establish an alternative geometry rule.
-The deck retains its DC failure and its original tolerances.
-
-`diode_extended.cir` stops the sweep at −2.5 V and passes. The breakdown region moved to
-`diode_breakdown.cir`, a known difference: Sansho follows the manual's area scaling of IBV,
-while ngspice 44.2 produces about half that current at −BV for this card. The textbook
-treatment of BV adjustment (Massobrio & Antognetti) is a follow-up item.
+The 44.2 area, perimeter and IS sweeps resolve the high-current intercept.
+For AREA = 2, IS = 10 fA and PJ × JSW = 1 fA, the 20 fA bottom current sets
+the knee and 21 fA of total diffusion current sets the avalanche prefactor.
+At −BV this gives 1.0500 mA. NBV sets the exponential voltage scale.
+The 10 fA and 1 pA IBV sweeps clamp to a 21 fA intercept. At 1 nA the
+linear term in the knee match gives 1.047858 nA. The loaded
+`diode_breakdown` and `diode_extended` decks both pass with a worst
+score of 0.113 at +0.85 V. [Measured diode probes](probes/README.md#spice3-diode-breakdown)
 
 ## R5 BSIM3v3.3
 
@@ -358,23 +334,14 @@ The thirteen decks in `verify/bsim3-decks/` contain original, self-contained mod
 | `b3_noise1`, `b3_noise2` | Common-source output and input spectral densities and integrated noise with multiplicity and diffusion resistance. |
 | `b3_inverter`, `b3_ring5` | Loaded complementary inverter transitions and a five-stage autonomous ring with asymmetric initial voltages. |
 
-The cached ngspice 44.2 comparison has **7 passes, 5 failures and 1 missing reference**. The passing decks are the four DC I–V families, `b3_gm_gds`, `b3_inverter` and `b3_noise1`. The scores below use the original deck tolerances. Diagnostic controls changed one effect at a time on Sansho copies and used the original raw files for comparison. [Terminal values, noise normalization and temperature calculations](../docs/bsim3.md#verification-status)
+The R6 replay of all thirteen cached ngspice 44.2 decks gives **13 PASS**. The corrected bin deck passes with a score of 0.002. Scores below use the original tolerances. [Measured values and control experiments](../docs/bsim3.md#verification-status)
 
-| Deck | Worst score | What the controls isolate |
+| Deck | R6 score | Quantity tested |
 |---|---:|---|
-| `b3_cap2` | 5.402 | All three gates show a 0.0753–0.0754 fF offset. An explicit overlap equal to the oxide capacitance of the two excluded width edges brings the worst score to 0.002. Appendix A.3 specifies zero for omitted CGBO. |
-| `b3_cap3` | 5.783 | The same overlap accounts for the depletion and inversion offsets. At −1.3 V the accumulation thickness is sensitive to the doping in equation 4.4.2. Setting NSUB equal to the card's NCH in addition to the overlap control gives a worst score of 0.010. |
-| `b3_noise2` | 102.619 | At 1 Hz Sansho gives 16.839 µV/√Hz output versus 21.188 in the reference. The independently evaluated Chapter 8 strong-inversion expression reproduces the Sansho result under the documented R5 conventions. The input thermal floors agree within 0.02%. |
-| `b3_temp` | 132.815 | At 125 °C, the two-junction sidewall contribution is 1.737 mA. An area-only Sansho run gives a score of 0.401. Chapter 9 includes both contributions. The channel-current score is 0.004. |
-| `b3_ring5` | 4.576 | Node A has a 3.40552 ns period versus 3.41698 ns. The overlap-only control gives 3.41689 ns and a worst waveform score of 0.036. |
+| `b3_cap2` | 0.002 | Omitted CGBO contributes 0.075365 fF to each gate at these dimensions. |
+| `b3_cap3` | 0.041 | The overlap default and NCH-dependent accumulation centroid account for the three gate admittances. |
+| `b3_temp` | 0.401 | Area-only junction saturation current across −25 to 125 °C. |
+| `b3_ring5` | 0.020 | Node A period is 3.416931 ns versus 3.416982 ns. |
+| `b3_noise2` | 0.074 | The unified flicker law fits all ten one-variable probe families. The loaded deck passes both spectra and RMS integrals. [One-variable noise probes](probes/README.md#bsim3-noimod-2) |
 
-**Only `verify/out/b3_bins.ref.raw` needs generation.** Both numbered cards now give all four drawn-geometry bounds. Length ranges in µm are [0.3, 0.7) and [0.7, 5), both with widths [1, 3). The original 0.52 and 0.82 µm instances exercise their respective L/W/cross coefficients. In Sansho controls the 0.699 µm trace matched an explicit `cell.1` selection point for point, and 0.700 and 0.701 µm matched `cell.2`. The 1 µm lower width was accepted and the 3 µm upper width was excluded. The corrected deck retains its pending marker until its first 44.2 raw is available.
-
-Generate just the missing reference with the repository's reference image. Replay the full suite with the second command.
-
-```sh
-cargo run --release -p sansho-verify --features jit -- verify/bsim3-decks/b3_bins.cir
-cargo run --release -p sansho-verify --features jit -- --cached -v verify/bsim3-decks
-```
-
-`tools/ci.sh --cached` exits at the five BSIM3 failures. Formatting, workspace Clippy and tests with default and all features, cargo-deny and the main cached deck suite passed. The remaining cached suites also passed when run individually, including their existing known differences. The 1.98 MSRV toolchain was unavailable. All thirteen BSIM3 decks produced byte-identical binary raw output with one and two Sansho workers.
+Replay the BSIM3 corpus with `cargo run --release -p sansho-verify --features jit -- --cached verify/bsim3-decks`.

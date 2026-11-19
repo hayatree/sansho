@@ -1,7 +1,7 @@
 //! Names, scope, binning and nominal values of the level-54 parameter interface.
 //! Provenance: factual parameter data from the Berkeley BSIM4 4.8.2 technical manual,
 //! Appendix A.1–A.18 and the update note for GIDLCLAMP. Page zero denotes an instance
-//! convention or an addition to the appendix. Derived defaults follow the cited equations.
+//! convention or an addition to the appendix. NOIC follows the ngspice 44.2 black-box default.
 
 /// Locations at which a parameter can be supplied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,7 +241,7 @@ pub const PARAMETERS: &[Parameter] = &[
     ("noff", "1.0", true, Model, 152),
     ("noia", "6.25e41 (NMOS), 6.188e40 (PMOS), eV^-1 s^(1-EF) m^-3", false, Model, 157),
     ("noib", "3.125e26 (NMOS), 1.5e25 (PMOS), eV^-1 s^(1-EF) m^-1", false, Model, 157),
-    ("noic", "8.75 eV^-1 s^(1-EF) m", false, Model, 157),
+    ("noic", "8.75e9 eV^-1 s^(1-EF) m", false, Model, 157),
     ("nrd", "layout-derived squares", false, Instance, 146),
     ("nrs", "layout-derived squares", false, Instance, 146),
     ("nsd", "1.0e20cm^-3", true, Model, 138),

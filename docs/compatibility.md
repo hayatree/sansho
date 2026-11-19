@@ -2,6 +2,12 @@
 
 The scope below applies to the built-in parser and engine used by the CLI, session API and MCP. **Supported** covers the forms named in the row. **Partial** identifies the implemented subset. Numerical comparison with ngspice 44 is tracked separately in the [verification notes](../verify/README.md).
 
+## Compact-model compatibility
+
+BSIM3, BSIM4 and SPICE3 diode model cards are extracted against the Berkeley reference implementation. Where its observed behavior differs from the printed manual, Sansho follows the behavior established by black-box experiments with ngspice 44.2, which embeds the Berkeley models. ngspice may carry its own modifications. A measured curve establishes external behavior for the tested conditions. An ambiguous result stays documented until an independent probe distinguishes the candidate laws. Model source code is never consulted.
+
+Language and analysis conventions follow the manual. SFFM argument order, E-table corner interpolation and the anomalous AC sensitivity vector remain known differences. The model-specific measurements are in the [BSIM3 notes](bsim3.md#verification-status) and [BSIM4 notes](bsim4.md#mobility-stress).
+
 ## Elements and models
 
 | Feature | Status | Scope |
@@ -75,9 +81,9 @@ Sansho uses the manual's order. The dedicated SFFM deck records this known diffe
 
 ## Numerical differences
 
-- With AREA=2 and IBV=1 mA, the manual scales the breakdown target to 2 mA. The cached R4 diode curve gives the specified NBV slope and extrapolates to 1.05 mA at the nominal breakdown voltage. [Extended diode comparison](../verify/README.md#extended-diode-comparison-with-ngspice-442)
+- The Berkeley diode in ngspice 44.2 matches the avalanche knee to the bottom saturation current. Bottom and sidewall diffusion share the resulting exponential. At AREA=2 the R4 card draws 1.0500 mA at −BV. The six probe families also resolve the low-IBV clamp and the NBV slope. [Measured diode currents and matching law](../verify/probes/README.md#spice3-diode-breakdown)
+- The BSIM3 unified flicker and thermal spectra agree within 0.018% across ten probe families. At the two weakest gate biases, integrated input RMS differs by 13.85% and 5.09%. Sansho integrates input-referred power using the gain at each endpoint. The 44.2 integrals use the upper endpoint's gain across the interval. [Spectra and integration measurements](../verify/probes/README.md#bsim3-noimod-2)
 - E TABLE uses straight segments and the right-hand slope at an interior knot. ngspice 44 smooths the corners. This affects values and incremental gains near a breakpoint.
-- BSIM4 KU0 mobility stress follows manual equation 14.5. The cached 44.2 control gave the same drain current with and without KU0. For unified flicker noise, Sansho uses the appendix NOIC default of 8.75. The reference spectrum behaves like an explicit 8.75e9. Explicit NOIC removes that discrepancy. [BSIM4 comparisons](bsim4.md)
 - A switch changes state after the continuous solution crosses a threshold. Sansho interpolates a bracketed crossing, retries the step and restarts integration history. Different accepted grids can shift switching time. A small TMAX resolves narrow pulses. [Switch verification](../verify/README.md#r1-device-and-temperature-decks)
 - In the cached RC AC sensitivity deck the ngspice R1 vector is zero above the first frequency. Sansho reports the complex derivative of the RC transfer at every frequency. The SKY130 free-running ring also shows phase drift in the body-node traces. [Reference comparisons](../verify/README.md)
 - Geometry binning also applies to classical MOS models. The classical MOS noise implementation uses the existing MOS1 gate-referred flicker convention. Differential-equation integration and waveform interpolation use the Sansho solver tolerances. [Analysis conventions](analyses.md)

@@ -140,6 +140,28 @@ fn complex_sensitivity_of_rc_lowpass() {
     }
 }
 #[test]
+fn bsim3_weak_inversion_noise_spectrum() {
+    // The 44.2 Vgs = 0.35 V probe isolates flicker at 1 Hz and the
+    // inversion-charge thermal floor at 100 MHz through a 1 kΩ readout.
+    let r = simulate(
+        "weak-inversion channel noise
+Vgate g 0 DC 0.35 AC 1
+Vdrain d 0 1.7
+Hread out 0 Vdrain 1k
+M1 d g 0 0 nch L=0.65u W=2.8u
+.model nch nmos level=8 version=3.3 tox=8n xj=0.13u nch=2.1e17
++ vth0=0.54 k1=0.52 k2=-0.023 u0=460 vsat=92000 rdsw=85 pclm=1.15
++ lint=9n wint=15n mobmod=2 a0=1.15 pdiblc2=0.013 tnom=27
++ noimod=2 noia=8e19 noib=3e4 noic=2e-13 em=4.1e7
+.noise v(out) Vgate lin 2 1 100meg
+.end",
+    );
+    let density = r.analyses[0].real("onoise_spectrum").unwrap();
+    check(density[0], 2.88131446e-11, 2e-3);
+    check(density[1], 3.66985173e-12, 2e-3);
+}
+
+#[test]
 fn bsim4_thermal_and_flicker_selectors() {
     let base = include_str!("../../../verify/decks/noise_bsim4_cs.cir");
     let mut spectra = vec![];

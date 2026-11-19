@@ -79,7 +79,7 @@ pub struct Model {
     pub(super) body_temp: f64,
     pub(super) flat: f64,
     pub(super) flat_cv: f64,
-    pub(super) nsub: f64,
+    pub(super) centroid_acde: f64,
     pub(super) debye: f64,
     pub(super) dsub: f64,
     pub(super) mobmod: u8,
@@ -141,7 +141,8 @@ impl Model {
         };
         let dlc = bin.get("dlc", lint);
         let lcv = g.l - 2. * (dlc + dimension_correction(c, "l", g.l, g.w, true));
-        let wcv = g.w - 2. * (bin.get("dwc", wint) + dimension_correction(c, "w", g.l, g.w, true));
+        let dwc = bin.get("dwc", wint);
+        let wcv = g.w - 2. * (dwc + dimension_correction(c, "w", g.l, g.w, true));
         let tox = c.get("tox", 1.5e-8);
         let toxm = c.get("toxm", tox);
         let temp = b.temp + 273.15;
@@ -246,7 +247,7 @@ impl Model {
         let overlap = [
             overlap_sd("cgdo", ldd[0]),
             overlap_sd("cgso", ldd[1]),
-            lcv * c.get("cgbo", 0.),
+            lcv * c.get("cgbo", 2. * dwc * cox),
         ];
         let resistance =
             [b.instance.get("nrd", 1.), b.instance.get("nrs", 1.)].map(|n| n * c.get("rsh", 0.));
@@ -260,6 +261,7 @@ impl Model {
         let junction = Junction::pair(&bin, g, w, temp, nominal)?;
         let noise = Noise::new(c, noimod, sign, l)?;
         let dsub = bin.get("dsub", p.drout);
+        let centroid_acde = p.acde * (nch / 2e16).powf(-0.25);
         let mut m = Self {
             p,
             l,
@@ -282,7 +284,7 @@ impl Model {
             body_temp: bin.get("kt2", 0.022) * tr,
             flat,
             flat_cv: 0.,
-            nsub,
+            centroid_acde,
             debye: (EPS_SI * vt0 / (CHARGE * nch * 1e6)).sqrt(),
             dsub,
             mobmod,

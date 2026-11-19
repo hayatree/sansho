@@ -234,11 +234,15 @@ fn selector_diagnostics_and_layout_shift() {
     assert_eq!(bind(&[("trnqsmod", 1.)]).unwrap_err().code, "E-UNSUPPORTED");
     assert_eq!(bind(&[("capmod", 1.5)]).unwrap_err().code, "E-ELAB-MODEL");
     let (original, _) = bind(&[]).unwrap();
-    let (shifted, _) = bind(&[("wpemod", 1.), ("kvth0we", 0.1), ("ku0", 2e-8)]).unwrap();
+    let (shifted, _) = bind(&[
+        ("wpemod", 1.),
+        ("kvth0we", 0.1),
+        ("ku0we", 0.2),
+        ("ku0", 2e-8),
+    ])
+    .unwrap();
     assert!((shifted.model.size.vth0 - original.model.size.vth0 - 0.002).abs() < 1e-12);
-    let inv = (1. / 0.5e-6 + 1. / 1.4e-6 + 1. / 0.8e-6 + 1. / 1.7e-6) / 2.;
-    let ratio = (1. + 2e-8 * inv) / (1. + 2e-8 * 2. / 1.2e-6);
-    assert!((shifted.model.size.u0 / original.model.size.u0 - ratio).abs() < 1e-12);
+    assert!((shifted.model.size.u0 / original.model.size.u0 - 1.004).abs() < 1e-12);
 }
 
 #[test]
@@ -414,7 +418,7 @@ fn junction_with_only_a_gate_edge_and_a_signed_perimeter_correction() {
 }
 
 #[test]
-fn mobility_stress_uses_reference_distances_and_kelvin_temperature_ratio() {
+fn lod_preserves_mobility_and_scales_velocity_with_spacing_and_temperature() {
     let model = params(&[
         ("ku0", 4e-8),
         ("kvsat", 0.2),
@@ -459,7 +463,7 @@ fn mobility_stress_uses_reference_distances_and_kelvin_temperature_ratio() {
                 / f64::from(nf);
             let reference = 1. / 0.8e-6 + 1. / 1e-6;
             let ratio = |k: f64| (1. + k * average) / (1. + k * reference);
-            assert!((size.u0 / mobility - ratio(k)).abs() < 1e-14);
+            assert_eq!(size.u0, mobility);
             assert!((size.vsat / velocity - ratio(0.2 * k)).abs() < 1e-14);
         }
     }

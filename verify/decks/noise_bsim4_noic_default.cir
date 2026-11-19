@@ -1,7 +1,6 @@
 Level-54 common-source noise with the default NOIC
 * verify: atol_v=1e-18 atol_i=1e-21
 * Provenance: original R2 verification circuit.
-* sansho-verify: known-difference BSIM4 4.8.2 manual Appendix A lists the NOIC default as 8.75; ngspice 44 behaves as 8.75e9
 Vdd rail 0 1.8
 Vin g 0 dc 0.8 ac 1
 Rd rail out 2k

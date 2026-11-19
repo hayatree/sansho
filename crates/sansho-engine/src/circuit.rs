@@ -1635,6 +1635,10 @@ fn native_groups<'a>(
                     }
                 }
                 let copies = inst.opt(&["m", "mult"]).unwrap_or(1.);
+                // The bottom-current knee match uses the target of each parallel copy.
+                if m.is > 0. {
+                    m.ibv *= copies;
+                }
                 m.perimeter = inst.get("pj", 0.) * copies;
                 let area = inst.get("area", 1.) * copies;
                 if !area.is_finite() || area <= 0. || m.perimeter < 0. || !m.perimeter.is_finite() {

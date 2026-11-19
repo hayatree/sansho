@@ -51,7 +51,7 @@ impl Model {
                 let cap = if ctm {
                     let xmax = self.debye / 3.;
                     let field = (vgb - self.flat_cv) / (self.tox * 1e8);
-                    let xdc = xmax * safe_exp(p.acde * (self.nsub / 2e16).powf(-0.25) * field);
+                    let xdc = xmax * safe_exp(self.centroid_acde * field);
                     let thickness = smooth_min(D::cst(xmax), xdc, 0.001 * self.tox);
                     oxide / (1. + thickness * (self.cox / EPS_SI))
                 } else {
@@ -71,7 +71,9 @@ impl Model {
             let k = self.k1.max(1e-8);
             let phi_delta = self.vt
                 * (drive * (drive + 2. * k * self.phi.sqrt()) / (p.moin * k * k * self.vt)).ln_1p();
-            drive = floor(drive - phi_delta, 0.);
+            // The 44.2 weak-inversion thermal floor resolves a 1 mV transition
+            // between the surface-potential correction and the available drive.
+            drive = drive - smooth_min(phi_delta, drive, 0.001);
         }
         if drive.v < 1e-35 {
             return [D::cst(0.), -qb, D::cst(0.), qb];

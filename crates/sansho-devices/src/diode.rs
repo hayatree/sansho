@@ -1,12 +1,12 @@
 //! Junction diode (SPICE level-1 diode model).
 //!
 //! Forward current, including sidewall and recombination, rolls off at IKF. Recombination
-//! depends on depletion width. At breakdown the reverse branch reaches IBV at BV
-//! with exponential slope set by NBV. RS adds an internal anode.
+//! depends on depletion width. The avalanche knee is matched to bottom diffusion current.
+//! Bottom and sidewall currents share the NBV exponential. RS adds an internal anode.
 //!
 //! Provenance: Massobrio & Antognetti, *Semiconductor Device Modeling with SPICE*,
 //! chapter 1, and the ngspice user manual, section 7.2.2, equations 7.1–7.3.
-//! See `docs/PROVENANCE.md`.
+//! Breakdown matching also uses the ngspice 44.2 black-box measurements in `verify/probes`.
 
 use sansho_diag::Diagnostic;
 
@@ -124,6 +124,69 @@ fn diffusion_current(v: Dual<2>, saturation: f64, nvt: f64) -> Dual<2> {
     }
 }
 
+/// Avalanche knee (signed junction voltage) and reverse current at nominal BV.
+#[derive(Debug, Clone, Copy)]
+struct Breakdown {
+    knee: f64,
+    at_bv: f64,
+}
+
+impl DiodeModel {
+    fn breakdown(&self, area: f64, vt: f64) -> Breakdown {
+        let bottom = self.is * area;
+        let total = bottom + self.jsw * self.perimeter;
+        let slope = self.nbv * vt;
+        if bottom <= 0. {
+            // The measured matching law requires a positive bottom current.
+            // Preserve the area-scaled target for a sidewall-only junction.
+            let at_bv = (self.ibv * area).max(total);
+            let knee = if total > 0. {
+                -self.bv + slope * (at_bv.ln() - total.ln())
+            } else {
+                0.
+            };
+            return Breakdown { knee, at_bv };
+        }
+
+        // Measured 44.2 matching condition for positive knee magnitude B:
+        // IBV / Ibottom = exp((BV - B)/slope) - 1 + B/(N Vt).
+        let nvt = self.n * vt;
+        let minimum = bottom * (self.bv / nvt);
+        if self.ibv <= minimum {
+            return Breakdown {
+                knee: -self.bv,
+                at_bv: total,
+            };
+        }
+
+        // Solve for the bottom contribution at BV in amperes. Taking the
+        // difference of logs keeps even a very small positive IS usable.
+        let excess = self.ibv - minimum;
+        let log_bottom = bottom.ln();
+        let rhs = |current: f64| {
+            bottom + excess + bottom * (self.nbv / self.n) * (current.ln() - log_bottom)
+        };
+        let mut lo = bottom;
+        let mut hi = self.ibv.max(bottom * 2.);
+        while rhs(hi) > hi {
+            hi *= 2.;
+        }
+        for _ in 0..54 {
+            let mid = lo + 0.5 * (hi - lo);
+            if rhs(mid) > mid {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let current = lo + 0.5 * (hi - lo);
+        Breakdown {
+            knee: -self.bv + slope * (current.ln() - log_bottom),
+            at_bv: current * (total / bottom),
+        }
+    }
+}
+
 /// All diode instances.
 #[derive(Debug, Default)]
 pub struct Diodes {
@@ -134,6 +197,7 @@ pub struct Diodes {
     area: Vec<f64>,
     off: Vec<bool>,
     model: Vec<DiodeModel>,
+    breakdown: Vec<Option<Breakdown>>,
     at: Vec<SlotOffsets>,
 }
 
@@ -146,6 +210,12 @@ impl Diodes {
         self.ai.push(a);
         self.area.push(area);
         self.off.push(off);
+        self.breakdown.push(
+            model
+                .temperature
+                .filter(|_| model.bv.is_finite())
+                .map(|t| model.breakdown(area, thermal_voltage(t))),
+        );
         self.model.push(model);
     }
 }
@@ -227,6 +297,9 @@ impl DeviceGroup for Diodes {
             let (va, vk) = (volt(x, self.ai[i]), volt(x, self.k[i]));
             let nvt = m.n * vt;
             let is = m.is * area;
+            let avalanche =
+                m.bv.is_finite()
+                    .then(|| self.breakdown[i].unwrap_or_else(|| m.breakdown(area, vt)));
             let vc = vcrit(is, nvt);
             let vd_act = va - vk;
             let vd = if ctx.init_junctions {
@@ -235,12 +308,12 @@ impl DeviceGroup for Diodes {
                 let old = st.current[i];
                 let (mut v, mut lim) = limit_junction(vd_act, old, nvt, vc);
                 let breakdown_vt = m.nbv * vt;
-                if m.bv.is_finite() && v < (-m.bv + 10. * breakdown_vt).min(0.) {
+                if let Some(b) = avalanche.filter(|_| v < (-m.bv + 10. * breakdown_vt).min(0.)) {
                     let (vr, limited) = limit_junction(
                         -(v + m.bv),
                         -(old + m.bv),
                         breakdown_vt,
-                        vcrit(m.ibv * area, breakdown_vt),
+                        vcrit(b.at_bv, breakdown_vt),
                     );
                     v = -(vr + m.bv);
                     lim |= limited;
@@ -256,33 +329,15 @@ impl DeviceGroup for Diodes {
             let v = Dual::<2>::var(vd, 0);
             let diffusion = diffusion_current(v, is, nvt)
                 + diffusion_current(v, m.jsw * m.perimeter, m.ns * vt);
-            let generation = if m.isr > 0. {
+            let generation = if m.isr > 0. && vd >= -3. * nvt {
                 let width = ((1. - v / m.vj).sq() + 0.005).powf(m.m * 0.5);
                 ideal_current(v, m.isr * area, m.nr * vt) * width
             } else {
                 Dual::cst(0.)
             };
             let mut id = diffusion + generation;
-            if m.bv.is_finite() {
-                // Algorithm 7.1: match the reverse exponential to the leakage
-                // at nominal BV. NBV sets the avalanche voltage scale.
-                let leakage = -is * (-m.bv / nvt).exp_m1()
-                    - m.jsw * m.perimeter * (-m.bv / (m.ns * vt)).exp_m1();
-                let target = (area * m.ibv).max(leakage);
-                let breakdown_vt = m.nbv * vt;
-                let knee = if leakage > 0. {
-                    -m.bv + breakdown_vt * (target.ln() - leakage.ln())
-                } else {
-                    0.
-                };
-                if vd < 0. && vd <= knee {
-                    let avalanche = -target * crate::junction::safe_exp(-(v + m.bv) / breakdown_vt);
-                    // Generation can exceed the diffusion floor at the knee.
-                    // Switch where avalanche overtakes the full reverse current.
-                    if avalanche.v < id.v {
-                        id = avalanche;
-                    }
-                }
+            if let Some(b) = avalanche.filter(|b| vd < 0. && vd <= b.knee) {
+                id = -b.at_bv * crate::junction::safe_exp(-(v + m.bv) / (m.nbv * vt));
             }
             if m.ikf > 0. && id.v > 0. {
                 // Equation 7.3 acts on the total forward junction current.

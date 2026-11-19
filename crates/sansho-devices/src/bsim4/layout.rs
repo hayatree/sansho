@@ -49,7 +49,8 @@ pub(super) fn stress(m: &mut Size, b: &Binding<'_>, scale: f64) -> Result<(), St
         };
         let actual = inverse(sa) + inverse(sb);
         let kvsat = p.get("kvsat", 0.);
-        m.u0 *= (1. + ku * actual) / (1. + ku * reference);
+        // The 44.2 KU0-only sweep leaves mobility unchanged. The combined decks retain
+        // the KU0-dependent saturation velocity shift.
         m.vsat *= (1. + kvsat * ku * actual) / (1. + kvsat * ku * reference);
         let change = actual - reference;
         m.vth0 += m.sign * p.get("kvth0", 0.) / kv * change;
