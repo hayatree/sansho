@@ -52,6 +52,18 @@ impl<const N: usize> Dual<N> {
         self.chain(e, e)
     }
 
+    /// exp(x) - 1 with full relative precision near zero.
+    #[inline]
+    pub fn exp_m1(self) -> Self {
+        self.chain(self.v.exp_m1(), self.v.exp())
+    }
+
+    /// ln(1 + x) with full relative precision near zero.
+    #[inline]
+    pub fn ln_1p(self) -> Self {
+        self.chain(self.v.ln_1p(), 1. / (1. + self.v))
+    }
+
     /// Natural logarithm.
     #[inline]
     pub fn ln(self) -> Self {

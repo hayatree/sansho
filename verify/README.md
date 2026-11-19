@@ -343,3 +343,38 @@ The deck retains its DC failure and its original tolerances.
 `diode_breakdown.cir`, a known difference: spx follows the manual's area scaling of IBV,
 while ngspice 44.2 produces about half that current at −BV for this card. The textbook
 treatment of BV adjustment (Massobrio & Antognetti) is a follow-up item.
+
+## R5 BSIM3v3.3
+
+The thirteen decks in `verify/bsim3-decks/` contain original, self-contained model cards. Levels 8 and 49 exercise the same built-in evaluator.
+
+| Deck stems | Quantities compared |
+|---|---|
+| `b3_{n,p}_idvg`, `b3_{n,p}_idvd` | Nested bias families at 0.38 and 2.2 µm, with separate sense currents for both lengths and a bulk-current trace. |
+| `b3_gm_gds` | Common-source voltage gain and the independently driven drain admittance of a second transistor. |
+| `b3_cap2`, `b3_cap3` | Total gate currents measured by three AC voltage sources at accumulation, depletion and inversion biases. The imaginary input admittance divided by angular frequency gives gate capacitance. |
+| `b3_temp` | Separate channel and forward junction currents from −25 to 125 °C. |
+| `b3_bins` | Separate drain currents for two lengths straddling the model-bin boundary, with nonzero L, W and cross terms. |
+| `b3_noise1`, `b3_noise2` | Common-source output and input spectral densities and integrated noise with multiplicity and diffusion resistance. |
+| `b3_inverter`, `b3_ring5` | Loaded complementary inverter transitions and a five-stage autonomous ring with asymmetric initial voltages. |
+
+The cached ngspice 44.2 comparison has **7 passes, 5 failures and 1 missing reference**. The passing decks are the four DC I–V families, `b3_gm_gds`, `b3_inverter` and `b3_noise1`. The scores below use the original deck tolerances. Diagnostic controls changed one effect at a time on spx copies and used the original raw files for comparison. [Terminal values, noise normalization and temperature calculations](../docs/bsim3.md#verification-status)
+
+| Deck | Worst score | What the controls isolate |
+|---|---:|---|
+| `b3_cap2` | 5.402 | All three gates show a 0.0753–0.0754 fF offset. An explicit overlap equal to the oxide capacitance of the two excluded width edges brings the worst score to 0.002. Appendix A.3 specifies zero for omitted CGBO. |
+| `b3_cap3` | 5.783 | The same overlap accounts for the depletion and inversion offsets. At −1.3 V the accumulation thickness is sensitive to the doping in equation 4.4.2. Setting NSUB equal to the card's NCH in addition to the overlap control gives a worst score of 0.010. |
+| `b3_noise2` | 102.619 | At 1 Hz spx gives 16.839 µV/√Hz output versus 21.188 in the reference. The independently evaluated Chapter 8 strong-inversion expression reproduces the spx result under the documented R5 conventions. The input thermal floors agree within 0.02%. |
+| `b3_temp` | 132.815 | At 125 °C, the two-junction sidewall contribution is 1.737 mA. An area-only spx run gives a score of 0.401. Chapter 9 includes both contributions. The channel-current score is 0.004. |
+| `b3_ring5` | 4.576 | Node A has a 3.40552 ns period versus 3.41698 ns. The overlap-only control gives 3.41689 ns and a worst waveform score of 0.036. |
+
+**Only `verify/out/b3_bins.ref.raw` needs generation.** Both numbered cards now give all four drawn-geometry bounds. Length ranges in µm are [0.3, 0.7) and [0.7, 5), both with widths [1, 3). The original 0.52 and 0.82 µm instances exercise their respective L/W/cross coefficients. In spx controls the 0.699 µm trace matched an explicit `cell.1` selection point for point, and 0.700 and 0.701 µm matched `cell.2`. The 1 µm lower width was accepted and the 3 µm upper width was excluded. The corrected deck retains its pending marker until its first 44.2 raw is available.
+
+Generate just the missing reference with the repository's reference image. Replay the full suite with the second command.
+
+```sh
+cargo run --release -p spx-verify --features jit -- verify/bsim3-decks/b3_bins.cir
+cargo run --release -p spx-verify --features jit -- --cached -v verify/bsim3-decks
+```
+
+`tools/ci.sh --cached` exits at the five BSIM3 failures. Formatting, workspace Clippy and tests with default and all features, cargo-deny and the main cached deck suite passed. The remaining cached suites also passed when run individually, including their existing known differences. The 1.98 MSRV toolchain was unavailable. All thirteen BSIM3 decks produced byte-identical binary raw output with one and two spx workers.

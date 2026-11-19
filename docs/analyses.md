@@ -96,6 +96,7 @@ point-by-point listing. The interval has no effect on integration.
 | Diode | Junction shot noise, KF/AF flicker proportional to the junction current raised to AF, and series-resistance thermal noise. |
 | BJT | Collector and base shot noise, base-current KF/AF flicker, and RC/RB/RE thermal noise at the internal terminals. |
 | MOS1, MOS2 and MOS3 | Channel thermal noise with conductance 2·abs(gm)/3, gate-referred KF/AF flicker projected through gm, and drain/source series-resistance noise. |
+| BSIM3v3.3 | noiMod 1–4 select SPICE2 or inversion-charge thermal noise and empirical or trap-density flicker. Diffusion sheet resistances contribute independent thermal sources. [Mode mapping and units](bsim3.md) |
 | BSIM4 | Charge-based channel thermal noise (tnoiMod 0), partitioned channel noise (1), empirical KF/AF/EF flicker (fnoiMod 0), and unified trap-density flicker (1). Enabled diffusion, electrode gate and body resistances contribute at their internal nodes. Gate-to-source, gate-to-drain and gate-to-body leakage currents contribute shot noise. |
 | Verilog-A | `white_noise`, `flicker_noise` and numeric `noise_table` pairs in current or voltage contributions. Analog evaluation propagates the source through assignments and arithmetic at the converged bias. Positive table samples interpolate in log frequency and log power, with constant endpoints. |
 

@@ -2,6 +2,7 @@
 //! Provenance: original numerical tests of the Berkeley BSIM4 4.8.2 manual, chapters 2–7 and 13.
 
 use super::*;
+use crate::ModelParams;
 use crate::mos1::Mos1Geometry;
 
 fn params(entries: &[(&str, f64)]) -> ModelParams {

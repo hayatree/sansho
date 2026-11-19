@@ -1,0 +1,14 @@
+BSIM3 common-source input and output noise
+* spx-verify: known-difference noiMod 2 flicker noise follows manual eq. 8.2; ngspice 44.2 input noise is 26 % higher at 1 Hz, cause not identified from the manual
+* Provenance: original spx circuit and parameter choices from the BSIM3v3.3 parameter list.
+* verify: atol_v=1e-18 atol_i=1e-21
+.model nch nmos level=8 version=3.3
++ tox=8n xj=0.13u nch=2.1e17 vth0=0.54 k1=0.52 k2=-0.023
++ u0=460 vsat=92000 rdsw=85 pclm=1.15
++ lint=9n wint=15n cgso=170p cgdo=150p cf=65p noimod=2 kf=4e-25 af=1 ef=1 noia=8e19 noib=3e4 noic=2e-13 rsh=14 mobmod=2 a0=1.15 pdiblc2=0.013
+Vdd supply 0 2.2
+Vin gate 0 dc 1.05 ac 1
+Rload supply out 5.6k
+Mamp out gate 0 0 nch l=0.65u w=2.8u ad=0.9p as=0.8p nrd=1.5 nrs=2 m=2 pd=5u ps=4.5u
+.noise v(out) Vin dec 5 1 100meg
+.end

@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use spx_devices::bjt::BjtModel;
+use spx_devices::bsim3::Bsim3s;
 use spx_devices::bsim4::{Binding, Bsim4s, PreparedModel};
 use spx_devices::diode::DiodeModel;
 use spx_devices::mos1::{Mos1Geometry, Mos1Model};
@@ -1275,6 +1276,12 @@ fn passive_value(
     Ok(result)
 }
 
+#[derive(Clone)]
+enum PreparedMos {
+    Bsim3(Arc<spx_devices::bsim3::Model>),
+    Bsim4(Arc<PreparedModel>),
+}
+
 fn native_groups<'a>(
     elements: impl IntoIterator<Item = &'a Element>,
     nl: &Netlist,
@@ -1297,7 +1304,8 @@ fn native_groups<'a>(
     let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
     let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
     let mut classic_mos = [1, 2, 3].map(|_| Chunked::<Mos1s>::new(CHUNK_NONLINEAR));
-    let mut bsim4_models = HashMap::<_, Arc<PreparedModel>>::new();
+    let mut bsim3 = Chunked::<Bsim3s>::new(CHUNK_NONLINEAR);
+    let mut compact_models = HashMap::<_, PreparedMos>::new();
     let mut bsim4 = Chunked::<Bsim4s>::new(CHUNK_NONLINEAR);
     let mut model_cache = ModelCache::new(&nl.models);
     let mut controlled: Groups = Vec::new();
@@ -1699,12 +1707,13 @@ fn native_groups<'a>(
                     ps: scaled("ps", 0.0, 1),
                 };
                 if let Some(card) = model_cache.card(model)
+                    && matches!(card.kind.as_str(), "nmos" | "pmos")
                     && card
                         .params
                         .iter()
                         .rev()
                         .find(|(k, _)| k == "level")
-                        .is_some_and(|(_, v)| *v == 54.)
+                        .is_some_and(|(_, v)| matches!(*v, 8. | 49. | 54.))
                 {
                     // Temperature, scale and geometry defaults are fixed for this compile.
                     // Preserve parameter order (later aliases/duplicates can override).
@@ -1716,39 +1725,51 @@ fn native_groups<'a>(
                             .collect::<Vec<_>>(),
                     );
                     let nodes = [node(d), node(g), node(s), node(b)];
-                    if let Some(prepared) = bsim4_models.get(&key) {
-                        bsim4
-                            .cur()
-                            .push_prepared(&e.name, nodes, *off, Arc::clone(prepared));
-                        nonlinear_count += 1;
-                        continue;
-                    }
-                    let p = ModelParams::new(&card.params);
-                    let binding = Binding {
-                        model: &p,
-                        instance: &inst,
-                        geometry: geom,
-                        polarity: if card.kind == "pmos" { -1. } else { 1. },
-                        temp: inst.get("temp", opts.temp + inst.get("dtemp", 0.)),
-                        tnom: opts.tnom,
-                        scale: opts.scale,
-                    };
-                    match PreparedModel::new(&e.name, binding) {
-                        Ok((prepared, warnings)) => {
-                            let before = diags.len();
-                            diags.extend(warnings.into_iter().map(|d| d.with_span(e.span)));
-                            ModelCache::warn_ignored(card, &p.unused(), diags);
-                            warn_instance(e, &inst, diags);
-                            // Re-evaluate exceptional bindings so each diagnostic retains
-                            // its instance name and source span.
-                            if diags.len() == before {
-                                bsim4_models.insert(key, Arc::clone(&prepared));
+                    let prepared = if let Some(cached) = compact_models.get(&key) {
+                        cached.clone()
+                    } else {
+                        let p = ModelParams::new(&card.params);
+                        let binding = Binding {
+                            model: &p,
+                            instance: &inst,
+                            geometry: geom,
+                            polarity: if card.kind == "pmos" { -1. } else { 1. },
+                            temp: inst.get("temp", opts.temp + inst.get("dtemp", 0.)),
+                            tnom: opts.tnom,
+                            scale: opts.scale,
+                        };
+                        let prepared = if p.get("level", 0.) == 54. {
+                            PreparedModel::new(&e.name, binding)
+                                .map(|(m, w)| (PreparedMos::Bsim4(m), w))
+                        } else {
+                            spx_devices::bsim3::Model::bind(
+                                &e.name,
+                                &binding,
+                                card.version.as_deref(),
+                            )
+                            .map(|(m, w)| (PreparedMos::Bsim3(m), w))
+                        };
+                        let (prepared, warnings) = match prepared {
+                            Ok(result) => result,
+                            Err(d) => {
+                                errors.push(d.with_span(e.span));
+                                continue;
                             }
-                            bsim4.cur().push_prepared(&e.name, nodes, *off, prepared);
-                            nonlinear_count += 1;
+                        };
+                        let before = diags.len();
+                        diags.extend(warnings.into_iter().map(|d| d.with_span(e.span)));
+                        ModelCache::warn_ignored(card, &p.unused(), diags);
+                        warn_instance(e, &inst, diags);
+                        if diags.len() == before {
+                            compact_models.insert(key, prepared.clone());
                         }
-                        Err(d) => errors.push(d.with_span(e.span)),
+                        prepared
+                    };
+                    match prepared {
+                        PreparedMos::Bsim3(m) => bsim3.cur().push_prepared(&e.name, nodes, *off, m),
+                        PreparedMos::Bsim4(m) => bsim4.cur().push_prepared(&e.name, nodes, *off, m),
                     }
+                    nonlinear_count += 1;
                     continue;
                 }
                 let Some(mut m) = model_cache.mos(model, opts.tnom, diags, &mut errors) else {
@@ -1812,6 +1833,7 @@ fn native_groups<'a>(
     for devices in classic_mos {
         devices.into_groups(&mut groups);
     }
+    bsim3.into_groups(&mut groups);
     bsim4.into_groups(&mut groups);
     groups.extend(controlled);
     Ok((groups, nonlinear_count))
@@ -2055,7 +2077,7 @@ impl<'a> ModelCache<'a> {
             )
             .with_span(card.span);
             if matches!(card.kind.as_str(), "nmos" | "pmos") {
-                d = d.with_note("built-in MOSFET levels are 1, 2, 3 and 54");
+                d = d.with_note("built-in MOSFET levels are 1, 2, 3, 8, 49 and 54");
             }
             errors.push(d);
             return None;

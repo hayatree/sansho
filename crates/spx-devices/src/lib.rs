@@ -13,6 +13,7 @@
 
 pub mod behavioral;
 pub mod bjt;
+pub mod bsim3;
 pub mod bsim4;
 pub mod controlled;
 pub mod diode;
@@ -40,6 +41,24 @@ use std::collections::HashMap;
 
 use spx_diag::Diagnostic;
 
+/// Elaboration inputs for one transistor. Temperatures in degrees Celsius.
+#[derive(Debug)]
+pub struct MosBinding<'a> {
+    /// Evaluated model card.
+    pub model: &'a ModelParams,
+    /// Evaluated instance parameters.
+    pub instance: &'a ModelParams,
+    /// Geometry after the netlist scale factor.
+    pub geometry: mos1::Mos1Geometry,
+    /// +1 for NMOS, -1 for PMOS.
+    pub polarity: f64,
+    /// Circuit temperature.
+    pub temp: f64,
+    /// Geometric scale for additional layout distances.
+    pub scale: f64,
+    /// Global nominal temperature.
+    pub tnom: f64,
+}
 /// Index of an unknown in the solution vector; `None` is the ground node.
 pub type Node = Option<usize>;
 

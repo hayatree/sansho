@@ -48,6 +48,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`W-ELAB-NODE`](#w-elab-node) | warning | Unknown node in `.ic` / `.nodeset` |
 | [`W-ELAB-VLOOP`](#w-elab-vloop) | warning | Loop of voltage sources or inductors |
 | [`E-UNSUPPORTED`](#e-unsupported) | error | Unsupported device selector |
+| [`W-BSIM3-PARAM`](#w-bsim3-param) | warning | BSIM3 parameter check |
 | [`W-BSIM4-PARAM`](#w-bsim4-param) | warning | BSIM4 parameter check |
 | [`W-MODEL-IGNORED`](#w-model-ignored) | warning | Model parameter ignored |
 | [`W-MODEL-TEMP`](#w-model-temp) | warning | Temperature not applied |
@@ -276,7 +277,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 **Unsupported model.** The model level or type is not supported.
 
-- Use NJF/PJF level 1 for J devices. Built-in MOS channels accept levels 1, 2, 3 and 54. See docs/compatibility.md for parameter coverage.
+- Use NJF/PJF level 1 for J devices. Built-in MOS channels accept levels 1, 2, 3, 8, 49 and 54. See docs/compatibility.md for parameter coverage.
 
 ## E-ELAB-NOGROUND
 
@@ -318,7 +319,13 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 **Unsupported device selector.** The selected device equation or analysis mode is unavailable.
 
-- See docs/bsim4.md for the available BSIM4 selectors.
+- See docs/bsim3.md and docs/bsim4.md for the available MOS selectors.
+
+## W-BSIM3-PARAM
+
+**BSIM3 parameter check.** A binned BSIM3 coefficient falls outside a recommended range in Appendix A.10.
+
+- Check the reported value and its geometry coefficients.
 
 ## W-BSIM4-PARAM
 

@@ -1,0 +1,16 @@
+Common-source small-signal gain and drain conductance
+* Provenance: original spx circuit and parameter choices from the BSIM3v3.3 parameter list.
+.model nch nmos level=8 version=3.3
++ tox=8n xj=0.13u nch=2.1e17 vth0=0.54 k1=0.52 k2=-0.023
++ u0=460 vsat=92000 rdsw=85 pclm=1.15
++ lint=9n wint=15n cgso=170p cgdo=150p cf=65p mobmod=2 a0=1.15 pdiblc2=0.013
+Vdd supply 0 2.2
+Vin gate 0 dc 1.05 ac 1
+Rload supply out 5.6k
+Mamp out gate 0 0 nch l=0.65u w=2.8u ad=0.9p as=0.8p pd=5u ps=4.5u
+Vprobe vd 0 dc 0.75 ac 1
+Vbias gb 0 1.05
+Mprobe vd gb 0 0 nch w=2.8u l=0.65u
+.ac dec 4 1k 1g
+.save v(out) i(Vprobe)
+.end

@@ -421,3 +421,66 @@ fn classical_mos_temperature_noise_sensitivity_and_poles_agree_in_square_law_lim
         );
     }
 }
+
+#[test]
+fn bsim3_common_source_tf_sens_and_pole() {
+    let deck = "BSIM3 loaded common source\n.model chip nmos level=49 version=3.3.0 vth0=0.52 k1=0.5 k2=0\nVd rail 0 1.8\nVg g 0 dc 1.15 ac 1\nRd rail out 4k\nM1 out g 0 0 chip l=0.5u w=2u\nCl out 0 1n\n.tf v(out) Vg\n.sens v(out)\n.pz out 0 out 0 cur pol\n.end";
+    let r = simulate(deck);
+    let gain = first(&r.analyses[0], "transfer_function");
+    assert!(gain < -0.1);
+    check(first(&r.analyses[1], "vg"), gain, 1e-5);
+    assert!(first(&r.analyses[1], "chip:vth0") > 0.);
+    let resistance = first(&r.analyses[0], "output_impedance_at_v(out)");
+    check(
+        r.analyses[2].complex("pole(1)").unwrap()[0].0,
+        -1. / (resistance * 1e-9),
+        1e-4,
+    );
+}
+
+#[test]
+fn bsim3_versions_selectors_and_invalid_dimensions() {
+    let deck = |level: u8, opts: &str| {
+        format!(
+            "BSIM3 binding\n.model n nmos level={level} {opts}\nM1 d g 0 0 n w=2u l=0.5u\nVd d 0 1\nVg g 0 1\n.op\n"
+        )
+    };
+    let nominal = simulate(&deck(8, ""));
+    for level in [8, 49] {
+        for v in ["3.3", "3.3.0", "3.30"] {
+            let r = simulate(&deck(level, &format!("version={v}")));
+            assert_eq!(nominal.analyses, r.analyses);
+        }
+    }
+    for (opts, code) in [
+        ("version=3.2", "E-UNSUPPORTED"),
+        ("version=3.3.1", "E-UNSUPPORTED"),
+        ("nqsmod=1", "E-UNSUPPORTED"),
+        ("acnqsmod=1", "E-UNSUPPORTED"),
+        ("lint=1u", "E-ELAB-MODEL"),
+        ("capmod=3.5", "E-ELAB-MODEL"),
+    ] {
+        let nl = spx_netlist::parse(&deck(49, opts)).unwrap();
+        let err = spx_engine::run(&nl).unwrap_err();
+        assert!(err.diagnostics.iter().any(|d| d.code == code));
+    }
+}
+
+#[test]
+fn bsim3_parallel_chunks_are_bit_deterministic() {
+    use std::fmt::Write;
+    let mut deck =
+        String::from("MOS array\nVg g 0 1\nVd d 0 1\n.model m nmos level=8 vth0=0.5 k1=0.45\n");
+    for k in 0..257 {
+        writeln!(deck, "M{k} d g 0 0 m w={}u l=0.55u", 1 + k % 5).unwrap();
+    }
+    deck.push_str(".dc Vg 0 1.5 0.25\n.end");
+    let nl = spx_netlist::parse(&deck).unwrap();
+    let raw = |threads| {
+        let out = run_with(&nl, &RunConfig { threads }).unwrap();
+        let mut raw = Vec::new();
+        spx_output::write_raw_binary(&out.results, &mut raw).unwrap();
+        raw
+    };
+    assert_eq!(raw(1), raw(2));
+}

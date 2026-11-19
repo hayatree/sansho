@@ -1,0 +1,20 @@
+Drawn length model selection with L, W and cross coefficients
+* Provenance: original spx circuit and parameter choices from the BSIM3v3.3 parameter list.
+.model cell.1 nmos level=8 version=3.3
++ lmin=0.3u lmax=0.7u wmin=1u wmax=3u
++ tox=8n xj=0.13u nch=2.1e17 vth0=0.54 k1=0.52 k2=-0.023
++ u0=460 vsat=92000 rdsw=85 pclm=1.15
++ lint=9n wint=15n cgso=170p cgdo=150p cf=65p lvth0=0.025 wvth0=-0.04 pvth0=0.006
+.model cell.2 nmos level=8 version=3.3
++ lmin=0.7u lmax=5u wmin=1u wmax=3u
++ tox=8n xj=0.13u nch=2.1e17 vth0=0.54 k1=0.52 k2=-0.023
++ u0=460 vsat=92000 rdsw=85 pclm=1.15
++ lint=9n wint=15n cgso=170p cgdo=150p cf=65p lvth0=-0.04 wvth0=0.015 pu0=20
+V1 d1 0 1.25
+V2 d2 0 1.25
+Vg g 0 0
+M1 d1 g 0 0 cell w=2u l=0.52u
+M2 d2 g 0 0 cell w=1.4u l=0.82u
+.dc Vg 0 1.8 0.025
+.save i(V1) i(V2)
+.end

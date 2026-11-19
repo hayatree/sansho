@@ -4,7 +4,7 @@ A fast, agent-native SPICE circuit simulator written in Rust.
 
 > **Status:** pre-alpha. R, C, L, coupled windings (K), independent and controlled sources
 > (V/I/E/F/G/H/B, including POLY), lossless T lines, SW/CSW switches, diodes,
-> Gummel–Poon BJTs, level-one JFETs, MOS1, partial MOS2/MOS3 and built-in BSIM4.
+> Gummel–Poon BJTs, level-one JFETs, MOS1, partial MOS2/MOS3, built-in BSIM3v3.3 and BSIM4. [BSIM3 level 8/49 coverage](docs/bsim3.md)
 > Supports operating and nominal temperatures, nested DC source and temperature sweeps, SFFM and AM modulation, scaled MOS geometry,
 > capacitor and inductor initial conditions, `.op`, `.dc`, `.ac`, `.tran` (trapezoidal or BDF2 with LTE control),
 > `.noise`, `.tf`, DC/AC `.sens`, `.four`, small-circuit `.pz`, `.meas` derivatives and derived scalar expressions, `.model`,

@@ -293,7 +293,7 @@ pub const CODES: &[CodeInfo] = &[
         "Unsupported model",
         "The model level or type is not supported.",
         &[
-            "Use NJF/PJF level 1 for J devices. Built-in MOS channels accept levels 1, 2, 3 and 54. See docs/compatibility.md for parameter coverage.",
+            "Use NJF/PJF level 1 for J devices. Built-in MOS channels accept levels 1, 2, 3, 8, 49 and 54. See docs/compatibility.md for parameter coverage.",
         ],
     ),
     e(
@@ -337,7 +337,13 @@ pub const CODES: &[CodeInfo] = &[
         "E-UNSUPPORTED",
         "Unsupported device selector",
         "The selected device equation or analysis mode is unavailable.",
-        &["See docs/bsim4.md for the available BSIM4 selectors."],
+        &["See docs/bsim3.md and docs/bsim4.md for the available MOS selectors."],
+    ),
+    w(
+        "W-BSIM3-PARAM",
+        "BSIM3 parameter check",
+        "A binned BSIM3 coefficient falls outside a recommended range in Appendix A.10.",
+        &["Check the reported value and its geometry coefficients."],
     ),
     w(
         "W-BSIM4-PARAM",

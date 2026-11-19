@@ -1,0 +1,17 @@
+BSIM3 gate admittance in accumulation, depletion and inversion
+* spx-verify: known-difference omitted CGBO is zero per Appendix A and accumulation charge uses NSUB per eq. 4.4.2; ngspice 44.2 behaves as CGBO = 2*DWC*Cox and NCH
+* Provenance: original spx circuit and parameter choices from the BSIM3v3.3 parameter list.
+.model nch nmos level=8 version=3.3
++ tox=8n xj=0.13u nch=2.1e17 vth0=0.54 k1=0.52 k2=-0.023
++ u0=460 vsat=92000 rdsw=85 pclm=1.15
++ lint=9n wint=15n cgso=170p cgdo=150p cf=65p capmod=3 noff=1.12 voffcv=-0.03 acde=0.85 moin=12 cgsl=50p cgdl=30p
+Vd d 0 0.55
+Va ga 0 dc -1.3 ac 1
+Vb gb 0 dc -0.1 ac 1
+Vi gi 0 dc 1.35 ac 1
+Ma d ga 0 0 nch w=5u l=0.6u
+Mb d gb 0 0 nch w=5u l=0.6u
+Mi d gi 0 0 nch w=5u l=0.6u
+.ac dec 4 1meg 1g
+.save i(Va) i(Vb) i(Vi)
+.end

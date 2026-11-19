@@ -15,11 +15,8 @@ mod terminal_stamp;
 #[cfg(test)]
 mod tests;
 use crate::{
-    DeviceGroup, EvalCtx, ModelParams, Node, SlotOffsets, Slots, StampBuilder, StateRef, Unknowns,
-    dual::Dual,
-    junction::limit_junction,
-    mos1::{Mos1Geometry, limit_step},
-    volt,
+    DeviceGroup, EvalCtx, Node, SlotOffsets, Slots, StampBuilder, StateRef, Unknowns, dual::Dual,
+    junction::limit_junction, mos1::limit_step, volt,
 };
 use charges::ChargeModel;
 use junction::Junction;
@@ -133,24 +130,8 @@ pub struct Bsim4s {
     compact: Option<terminal_stamp::Batch>,
 }
 
-/// Elaboration inputs for one transistor. Temperatures in degrees Celsius.
-#[derive(Debug)]
-pub struct Binding<'a> {
-    /// Evaluated model card.
-    pub model: &'a ModelParams,
-    /// Evaluated instance parameters.
-    pub instance: &'a ModelParams,
-    /// Geometry after the netlist scale factor.
-    pub geometry: Mos1Geometry,
-    /// +1 for NMOS, -1 for PMOS.
-    pub polarity: f64,
-    /// Circuit temperature.
-    pub temp: f64,
-    /// Geometric scale for additional layout distances.
-    pub scale: f64,
-    /// Global nominal temperature.
-    pub tnom: f64,
-}
+pub use crate::MosBinding as Binding;
+
 impl Bsim4s {
     /// Bind an instance and validate its model before registering stamp slots.
     pub fn push(

@@ -53,6 +53,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: docker build -t spx-ngspice:latest tools/ngspice
       - run: cargo run --release -p spx-verify -- --json > verify-report.json || (cat verify-report.json; exit 1)
+      - run: cargo run --release -p spx-verify -- verify/bsim3-decks
       - run: cargo run --release -p spx-verify -- verify/bsim4-decks
       - uses: actions/upload-artifact@v4
         if: always()
