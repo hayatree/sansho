@@ -1,3 +1,4 @@
+# Provenance: original GitHub checks for Sansho.
 name: CI
 
 # Runs only when changes land on main (and on demand). Day-to-day checks run
@@ -42,6 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fetch --locked
+      - run: python3 tools/third_party_licenses.py --check
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   verify:

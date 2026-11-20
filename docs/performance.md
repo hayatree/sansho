@@ -330,6 +330,8 @@ vertical resistors, a feed resistor and three pulsed loads.
 
 ### Reproduction
 
+Generate the five large decks in a fresh checkout before running the benchmark or accuracy drivers.
+
 ```sh
 python3 benches/large/gen.py
 cargo build --offline --release -p sansho-cli

@@ -1443,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "sansho-api"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "rayon",
  "sansho-diag",
@@ -1455,7 +1455,7 @@ dependencies = [
 
 [[package]]
 name = "sansho-cli"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "sansho-diag",
@@ -1468,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "sansho-devices"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "sansho-diag",
  "sansho-netlist",
@@ -1477,14 +1477,14 @@ dependencies = [
 
 [[package]]
 name = "sansho-diag"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "sansho-engine"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "rayon",
  "sansho-devices",
@@ -1498,7 +1498,7 @@ dependencies = [
 
 [[package]]
 name = "sansho-mcp"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "sansho-api",
  "sansho-diag",
@@ -1508,7 +1508,7 @@ dependencies = [
 
 [[package]]
 name = "sansho-netlist"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "sansho-diag",
  "serde",
@@ -1516,14 +1516,14 @@ dependencies = [
 
 [[package]]
 name = "sansho-output"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "sansho-sparse"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "faer",
  "rayon",
@@ -1531,7 +1531,7 @@ dependencies = [
 
 [[package]]
 name = "sansho-va"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -1547,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "sansho-verify"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "sansho-engine",

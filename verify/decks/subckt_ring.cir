@@ -1,4 +1,5 @@
 Ring oscillator built from parameterized subcircuits
+* Provenance: original Sansho verification fixture.
 * verify: rtol_tran=3e-2
 * Exercises .param, .func, nested .subckt with params:, X instances and .ic.
 .param vsup=1.8 lmin=0.5u

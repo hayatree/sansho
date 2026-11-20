@@ -45,6 +45,8 @@ step "clippy" cargo clippy --workspace --all-targets -- -D warnings
 step "test" cargo test --workspace
 
 if (( !quick )); then
+  step "fetch locked release dependencies" cargo fetch --locked
+  step "third-party notices" python3 tools/third_party_licenses.py --check
   step "clippy (all features)" cargo clippy --workspace --all-targets --all-features -- -D warnings
   step "test (all features)" cargo test --workspace --all-features
 

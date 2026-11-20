@@ -1,84 +1,90 @@
 # Sansho
 
-Sansho (山椒) is a fast, agent-native SPICE circuit simulator written in Rust.
+A fast, agent-native SPICE circuit simulator in Rust
 
-> **Status:** pre-alpha. R, C, L, coupled windings (K), independent and controlled sources
-> (V/I/E/F/G/H/B, including POLY), lossless T lines, SW/CSW switches, diodes,
-> Gummel–Poon BJTs, level-one JFETs, MOS1, partial MOS2/MOS3, built-in BSIM3v3.3 and BSIM4. [BSIM3 level 8/49 coverage](docs/bsim3.md)
-> Supports operating and nominal temperatures, nested DC source and temperature sweeps, SFFM and AM modulation, scaled MOS geometry,
-> capacitor and inductor initial conditions, `.op`, `.dc`, `.ac`, `.tran` (trapezoidal or BDF2 with LTE control),
-> `.noise`, `.tf`, DC/AC `.sens`, `.four`, small-circuit `.pz`, `.meas` derivatives and derived scalar expressions, `.model`,
-> `.options`, `.param`/expressions/`.func`, `.subckt`, `.include`/`.lib`, model binning, `.ic`,
-> `.nodeset`, UIC; compiled Verilog-A modules through `.hdl` and `N` instances (VA-3). Results are checked against ngspice (`verify/`). Session API and MCP server for
-> AI agents; pre-run lint and structured diagnostics ([`docs/diagnostics.md`](docs/diagnostics.md));
-> bit-deterministic multithreading. [ngspice compatibility](docs/compatibility.md) · [Analysis cards and outputs](docs/analyses.md) · [Architecture](docs/architecture.md).
+Sansho (山椒) takes its name from Japanese pepper. It runs analog circuit netlists from the command line, from Rust through a session API, or from an agent through the Model Context Protocol (MCP).
 
-```sh
-cargo run -p sansho-cli -- run examples/rc_lowpass.cir            # summary
-cargo run -p sansho-cli -- run examples/rc_lowpass.cir -r out.raw  # ngspice-compatible raw file
-cargo run -p sansho-cli -- run examples/rc_lowpass.cir -r out.raw --raw-format binary
-cargo run -p sansho-cli -- run examples/rc_lowpass.cir --json      # machine-readable output
-cargo run -p sansho-cli -- check examples/rc_lowpass.cir           # parse + elaborate + lint
-cargo run -p sansho-cli -- batch a.cir b.cir -j 8                   # parallel runs, JSON lines
-cargo run -p sansho-cli -- mc -n 200 --seed 1 verify/mc-decks/rc_delay.cir --json
-cargo run -p sansho-cli -- run --mc-seed 1 --mc-run 37 verify/mc-decks/rc_delay.cir
-cargo run -p sansho-verify                                          # compare with ngspice (Docker)
-```
+**Status.** v0.1.0 is the first public release. Interfaces, file formats and model coverage may change before v1.0.
 
-### Use from an AI agent (MCP)
+## Highlights
+
+- **Large circuits.** In the documented 16-bit MOS1 multiplier transient benchmark, Sansho took 8.307 s with five workers, including setup, profiling and ASCII waveform output. The separately measured ngspice 44.2 default run took 82 s. Performance depends on the circuit. On the 1,000-stage BSIM4 inverter chain in the same table, the times were 0.349 s and 0.33 s, respectively. [Benchmark conditions and results](docs/performance.md#m5-2-wall-time-and-profile)
+- **Reproducible parallel runs.** Fixed device accumulation order makes results bit-identical across worker counts on the same build and platform. In the Monte Carlo validation, scalar JSON matched byte for byte with one and two workers on each of three decks of 200 samples. A seed and run index reproduce an individual draw. [Architecture](docs/architecture.md) · [Monte Carlo measurements](docs/monte-carlo.md#m5-5-validation-and-cost)
+- **Agent access.** The stdio MCP server can validate a deck, estimate its cost, simulate it and return measurements with units. An agent can request individual waveforms, alter parameters or run a sweep in the same session. Simulation jobs carry input and result hashes. [Diagnostics](docs/diagnostics.md)
+- **Compact models.** Built-in quasi-static models cover BSIM3v3.3 and silicon BSIM4.8.2. The Verilog-A analog subset supports user-supplied models through `.hdl` and `N` instances, with a register interpreter and optional Cranelift JIT. [BSIM3 coverage](docs/bsim3.md) · [BSIM4 coverage](docs/bsim4.md) · [Verilog-A coverage](docs/verilog-a.md)
+
+## Install
+
+Download the archive for your system, check it against `SHA256SUMS`, extract it, and put `sansho` and `sansho-mcp` on your PATH. Archives target Linux (x86-64 and Arm64), macOS (Apple silicon) and Windows (x86-64). Binaries are distributed through [GitHub Releases](https://github.com/hayatree/sansho/releases).
+
+To build from source, use Rust 1.98 or later. These commands install the CLI and MCP server from the release tag with the locked dependencies and JIT enabled. crates.io publication is deferred.
 
 ```sh
-cargo build --release -p sansho-mcp
-claude mcp add sansho -- "$PWD/target/release/sansho-mcp"   # or any MCP client, stdio transport
+cargo install --git https://github.com/hayatree/sansho sansho-cli --tag v0.1.0 --locked --features jit
+cargo install --git https://github.com/hayatree/sansho sansho-mcp --tag v0.1.0 --locked --features jit
 ```
 
-Tools: `validate_netlist`, `load_netlist`, `estimate_cost`, `simulate`, `get_waveform`, `measure`,
-`alter_and_rerun`, `sweep`, `monte_carlo`, `explain_failure`, `export_deck`. Results are summary-first, carry
-units, and include input/result hashes for simulation jobs. Statistical batches carry the seed and run index. See [Monte Carlo analysis](docs/monte-carlo.md).
+## Quick start
 
-## Goals
+Save this voltage divider as `divider.cir`. The operating point should give 0.5 V at `out`.
 
-- **Accuracy** on par with ngspice and Xyce, preserving SPICE tolerance semantics
-- **Speed**: single-core performance at least on par with ngspice + KLU, plus multithreading
-- **Agent native**: structured JSON I/O, machine-readable diagnostics, deterministic results,
-  session API and a built-in MCP server
-- **Parallel and GPU**: bit-deterministic multithreading; GPU batch evaluation for sweeps and Monte Carlo
-- **Compatibility**: ngspice-dialect netlists, open PDKs (SKY130, GF180MCU, IHP SG13G2),
-  Verilog-A models through the built-in clean-room compiler (VA-1–VA-3 implemented; `.hdl` / `N` instances)
+```spice
+Voltage divider
+V1 in 0 1
+R1 in out 1k
+R2 out 0 1k
+.op
+.end
+```
 
-## Repository layout
+```sh
+sansho check divider.cir
+sansho run divider.cir
+sansho run divider.cir -r divider.raw --raw-format binary
+sansho run divider.cir --json
+```
 
-| Path | Contents |
-|---|---|
-| `crates/sansho-diag` | Structured diagnostics |
-| `crates/sansho-netlist` | Netlist lexer and parser |
-| `crates/sansho-sparse` | Sparse linear solvers |
-| `crates/sansho-devices` | Device model interface and built-in models |
-| `crates/sansho-engine` | MNA assembly, Newton, analyses |
-| `crates/sansho-output` | Result types, raw writer |
-| `crates/sansho-api` | Session / job API for embedding and agents |
-| `crates/sansho-mcp` | MCP server (`sansho-mcp`, stdio) |
-| `crates/sansho-cli` | `sansho` command-line tool |
-| `crates/sansho-verify` | Comparison against a reference simulator |
-| `tools/ngspice` | ngspice in Docker, used as a black-box reference |
-| `verify/decks` | Verification circuits |
-| `examples/` | Example netlists |
-| `docs/` | Design documents and provenance records |
+For an MCP client with a JSON configuration, register the executable as a stdio server. Use its absolute path if the client's PATH differs from your shell's.
 
-## Contributing
+```json
+{
+  "mcpServers": {
+    "sansho": { "command": "sansho-mcp", "args": [] }
+  }
+}
+```
 
-Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) first. This project follows a strict
-clean-room policy regarding copyleft sources.
+Ask the client to validate the divider, load it, simulate the operating point and report the voltage at `out`. Paths resolve on the server. Self-contained decks can also be passed as netlist text.
+
+## Supported features
+
+| Area | Available in v0.1 |
+| --- | --- |
+| Analyses | Operating point, nested DC and temperature sweeps, AC, adaptive trapezoidal and Gear transients, noise, transfer function, DC/AC sensitivity, Fourier and small lumped-circuit pole-zero analysis |
+| Devices | R, L, C, mutual inductance, independent and controlled sources, behavioral and polynomial sources, switches, lossless transmission lines, junction diodes, Gummel–Poon BJTs, JFETs and MOS models |
+| Netlists and output | Includes, library sections, parameterized subcircuits, functions, conditional expansion, model bins, initial conditions, `.save`, `.meas`, ASCII/binary raw plots and JSON |
+| Statistical runs | Seeded Monte Carlo batches with per-instance mismatch, shared parameter draws, measurement statistics and single-run replay |
+
+Support varies by model selector and analysis. The compatibility table distinguishes implemented forms, partial coverage and gaps such as Nutmeg control scripts. [ngspice compatibility](docs/compatibility.md) · [Analysis cards and outputs](docs/analyses.md)
+
+## Accuracy and verification
+
+Analytic tests check equations and derivatives. Original verification decks compare waveforms and measurements against ngspice as a black-box reference. The verifier reports tolerance scores and distinguishes passing comparisons from documented differences, such as E-table interpolation near a knot and the RC resistor's AC sensitivity vector. [Verification method and decks](verify/README.md)
+
+For extracted BSIM3, BSIM4 and SPICE3 diode cards, Sansho follows Berkeley model behavior as observed through controlled ngspice experiments when it differs from the printed equations. Each probe establishes behavior for the conditions tested. Ambiguous results remain documented. [Compact-model compatibility policy](docs/compatibility.md#compact-model-compatibility)
+
+## Clean-room development and PDKs
+
+Sansho implements published equations, papers and public language specifications. Contributors do not consult copyleft simulator source or copy reference decks. Permissively licensed ports require attribution in both the notice and provenance record. [Contributing](CONTRIBUTING.md) · [Provenance](docs/PROVENANCE.md)
+
+PDKs are installed separately. The SKY130 verification decks use the TT library from a local Volare installation of sky130A. The verification guide gives the expected directory layout for the checkout. [SKY130 setup](verify/README.md#built-in-bsim4-and-sky130)
+
+## Roadmap
+
+Planned work includes GPU batch evaluation for Monte Carlo and corners. M6 covers periodic steady-state and harmonic balance (PSS/HB), the HSPICE dialect and Python bindings. [Architecture and roadmap](docs/architecture.md)
 
 ## License
 
-Licensed under either of
+Sansho is available under the [Apache License 2.0](LICENSE-APACHE) or the [MIT License](LICENSE-MIT), at your option. Binary distributions include the notices for their dependencies. [Third-party licenses](THIRD-PARTY-LICENSES.md)
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
-
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
-this work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without
-any additional terms or conditions.
+The name SPICE originated at the University of California, Berkeley. Sansho is unaffiliated with Berkeley, ngspice and simulator vendors. Trademarks belong to their respective owners. [Notice](NOTICE)

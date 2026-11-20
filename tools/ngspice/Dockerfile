@@ -1,3 +1,4 @@
+# Provenance: original container recipe for the Sansho verification harness.
 # Reference tools used only as black-box oracles for result comparison.
 # ngspice and OpenVAF-Reloaded are invoked as external programs; their sources are never read,
 # linked or vendored. OpenVAF is used solely to compile user-supplied Verilog-A models to OSDI

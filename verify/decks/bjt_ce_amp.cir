@@ -1,4 +1,5 @@
 Common-emitter amplifier (Gummel-Poon)
+* Provenance: original Sansho verification fixture.
 VCC vcc 0 12
 VIN in 0 DC 0 AC 1 SIN(0 10m 10k)
 C1 in b 10u

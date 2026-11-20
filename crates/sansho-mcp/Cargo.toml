@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
 
 [lints]
 workspace = true
@@ -22,3 +26,6 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sansho-api = { path = "../sansho-api" }
 sansho-diag = { path = "../sansho-diag" }
+
+[features]
+jit = ["sansho-api/jit"]

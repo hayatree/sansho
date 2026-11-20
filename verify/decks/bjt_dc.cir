@@ -1,4 +1,5 @@
 BJT output characteristic (PNP and NPN)
+* Provenance: original Sansho verification fixture.
 VCE c 0 5
 IB 0 b 10u
 Q1 c b 0 qn

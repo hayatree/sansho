@@ -1,4 +1,5 @@
 NMOS output characteristic with body effect and series resistance
+* Provenance: original Sansho verification fixture.
 VDS d 0 3
 VGS g 0 2
 VBS b 0 -1

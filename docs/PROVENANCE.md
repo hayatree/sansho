@@ -12,6 +12,35 @@ that introduces the code.
 |---|---|---|---|
 | — | — | — | No third-party code yet |
 
+The generated [binary license inventory](../THIRD-PARTY-LICENSES.md) records
+Cargo dependencies separately, including additional notices supplied by a crate.
+
+## Module coverage
+
+The paths below include all nested modules and their tests under `crates/`. Each
+source header identifies its specific origin. The algorithm records below give
+the references for numerical methods and model equations.
+
+| Crate | Origin and scope |
+| --- | --- |
+| `sansho-diag` | Original structured diagnostic types, codes, suggestions and registry tests. |
+| `sansho-netlist` | Original SPICE frontend, expression and measurement parsers, preprocessing, statistical bindings and writer. |
+| `sansho-devices` | Original model equations, automatic differentiation and terminal stamps from the device references below. The Verilog-A adapter uses the local compiler. |
+| `sansho-sparse` | Original matrix layout, ordering, refactorization, scheduling and solver adapters. The faer backend calls the public library API. |
+| `sansho-engine` | Original circuit elaboration, analyses, nonlinear solve, parallel assembly, lint, measurements and statistical runs. |
+| `sansho-output` | Original results, waveform serialization and raw reader/writer from the public SPICE raw layout. |
+| `sansho-va` | Original analog compiler, interpreter, JIT lowering, private cache, fingerprint and tests. Standard headers are locally authored declarations from the LRM and published constants. |
+| `sansho-api` | Original Rust sessions, job management, hashes, summaries, alterations and waveform queries. |
+| `sansho-cli` | Original argument handling, reporting, batch execution, raw/JSON export and process-level tests. |
+| `sansho-mcp` | Original stdio transport, tool schemas, session adapter and protocol tests from the MCP and JSON-RPC specifications. |
+| `sansho-verify` | Original raw comparison, interpolation, reference-process drivers and harness tests. |
+
+The examples, verification circuits, model cards, include wrappers, black-box
+probe drivers and benchmark generators are original project fixtures. External
+PDKs and production Verilog-A models are supplied locally. The CI scripts,
+Docker recipe, release workflow and Cargo metadata notice generator are project
+tooling. Upstream legal texts in the notice inventory retain their attribution.
+
 ## Algorithms and references
 
 | Area | Implementation | References |

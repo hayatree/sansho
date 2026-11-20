@@ -1,4 +1,5 @@
 BJT differential pair with current-mirror load
+* Provenance: original Sansho verification fixture.
 * verify: rtol=5e-3
 VCC vcc 0 5
 VEE vee 0 -5

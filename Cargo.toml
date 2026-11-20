@@ -3,7 +3,12 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
+description = "A fast, agent-native SPICE circuit simulator in Rust"
+repository = "https://github.com/hayatree/sansho"
+keywords = ["spice", "circuit", "simulation", "verilog-a", "mcp"]
+categories = ["science", "simulation", "command-line-utilities"]
+readme = "README.md"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
