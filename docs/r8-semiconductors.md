@@ -12,7 +12,7 @@ In the output sweep, subtracting I·RS from gate drive and I·(RS+RD) from drain
 
 The defaults resolved by the gate and recovery decks are CJO=500 pF, CGDMIN=20 pF, CGDMAX=2 nF and A=1/V. With the gate card's explicit Miller values, subtracting gate–source current from gate current gives the Miller current. At 12 V reverse bias the gate sweep then gives 18.8214 pF of Miller capacitance and 125.000 pF from drain to source. The latter equals 500 pF / sqrt(1+12/0.8). A constant 125 pF also matches that AC bias, but gives an 85 mV maximum drain error during turn-on, versus 12 mV with depletion charge. In the recovery deck, dividing the integrated reverse current by the drain voltage increment gives about 1.04 nF at 0.31 V and 234 pF near 4 V. Subtracting the explicit depletion capacitance reveals the negative-Vgd atan branch of the default Miller curve. This accounts for the multi-volt error with the original TT and junction current law.
 
-Instance M scales current and charge and divides the series resistances. TEMP, DTEMP and TNOM use the common temperature binding. KP scales by the absolute temperature ratio raised to MU. The normalized threshold changes by −TCVTH·ΔT. EG and XTI scale the junction saturation current. These sign and normalization choices need reference checks, particularly for p-channel cards. Unsupported features include the PHI-dependent threshold translation, SUBSHIFT/KSUBTHRES, RQ/VQ, additional temperature laws including TEXP0/1, and thermal terminals with RTHJC/CTHJC. Electrical self-heating is outside this implementation.
+Instance M scales current and charge and divides the series resistances. TEMP, DTEMP and TNOM use the common temperature binding. KP scales by the absolute temperature ratio raised to MU. TCVTH contributes −TCVTH·ΔT to the normalized threshold. EG and XTI scale the junction saturation current. These sign and normalization choices need reference checks, particularly for p-channel cards. The R9 extensions and remaining temperature limits are described below.
 
 ## Level-one MESFET
 
@@ -40,4 +40,32 @@ TCV defaults to zero and adjusts the positive breakdown voltage before avalanche
 
 ## Further model gaps
 
-JFET level 2 requires the Parker–Skellern current, charge, temperature and dispersion laws and their level-two parameter definitions. A level-two NJF/PJF card gives E-ELAB-MODEL. MOS level 6 also remains unsupported.
+JFET level 2 requires the Parker–Skellern current, charge, temperature and dispersion laws and their level-two parameter definitions. A level-two NJF/PJF card gives E-ELAB-MODEL. The available offline references did not establish the level-two current and dispersion equations well enough to implement and test them.
+
+## R9 power-law MOSFET
+
+For MOS level 6 the saturation voltage is KV·u^NV and the saturation current before output modulation is KC·W/Leff·u^NC. The normalized effective overdrive u includes the classical body threshold, a GAMMA1·Vbs term and a SIGMA·Vds term. Below threshold the channel is off. In the linear region, the ratio x = Vds/Vdsat gives the current multiplier x(2−x). Above the knee this multiplier is one. The output modulation factor is 1 + (LAMBDA0 − LAMBDA1·Vbs)·Vds. Reverse bias exchanges the channel terminals and PMOS uses polarity-normalized voltages. The transistor shares the classical MOS body junctions, Meyer charge, overlaps, access resistances, temperature binding and operating-point probes. Defaults used here are KC=50 µA/V^NC, NC=1, KV=2 and NV=0.5. The current law follows Sakurai and Newton. The parameter mapping, defaults and inherited temperature translation require comparison with 44.2.
+
+## R9 VDMOS extensions
+
+KSUBTHRES sets the softplus voltage scale (default 0.1 V). Its gate intercept is the polarity-normalized VTO − TCVTH·(T − TNOM) + SUBSHIFT. The measured SUBSHIFT translation is one volt per volt. Varying PHI alone gives identical 55 °C transfers. Sansho reports PHI, TEXP0 and TEXP1 as unused.
+
+The drain access branch uses `RD + RQ·(T/TNOM)^0.3·u/(VQ + u)`, where u is the magnitude of the **external** drain–source voltage. The finite-RS drain sweeps distinguish that voltage from either intrinsic terminal drop. The paired temperature sweeps confirm the exponent from 0 to 90 °C. The branch equation also handles RD = 0 at zero bias, and its thermal voltage noise density squared is 4kTR.
+
+### Thermal terminals
+
+`M1 d g s tj tcase model thermal` exposes junction and case voltages in thermal units of 1 V/K and currents in units of 1 A/W. Let j and c be those voltages. In the electrical equations the absolute junction temperature is `Tj = Tamb_K + j`. At j = 0 the clamped transfer equals the isothermal control. At a fixed nonzero j it depends on ambient. The isothermal mobility factor is `(Tamb_K/TNOM_K)^MU`. Sansho applies a further `(Tj/Tamb_K)^(2·MU)` to KP under self-heating. The heated transfer at a 30 K rise confirms the exponent for MU = 0, −0.75 and −1.5 and the threshold shift of −TCVTH·j. The same transfer gives RS = 0.020 Ω and a drain access resistance of 0.092289 Ω for RD = 0.080 Ω. Sansho uses the inferred multiplier `(Tj/Tamb_K)^1.5` on RD under self-heating.
+
+For one device the port equations implemented in Sansho are
+
+```text
+flow = (j − c) / RTHJC
+junction current into device = flow + 2·CTHJ·dj/dt − Pheat − Tamb_C/RTHCA
+case current into device     = c/RTHCA − flow
+```
+
+RTHJC connects junction to case. The case has a shunt to thermal ground and the ambient drive enters the junction. The 100, 400 and 1000 K/W RTHCA sweeps confirm both inverse-resistance terms. An open case reaches `Tamb_C + RTHCA·Pheat` in DC when the device supplies all the junction heat. A case tied to node 0 holds c at zero. A case step reaches the junction through RTHJC. The measured pole with a clamped case is 2·RTHJC·CTHJ. Thermal resistances are in K/W and CTHJ is in J/K. Defaults used by Sansho are RTHJC = 1, RTHCA = 1000 and CTHJ = 10 µJ/K. CTHJC produces the standard ignored-model-parameter warning.
+
+In forward DC operation the junction receives terminal power less the source access loss I²RS, including the drain access loss. Sansho uses the static electrical stamp for heat and omits stored electrical energy from that term. In forward body-diode operation the terminal power heats the junction, including the I²RB loss. Under a fast gate ramp the integrator samples the crossing of the heated gate threshold to resolve the onset of conduction.
+
+With M parallel copies Sansho divides both resistances by M and multiplies storage by M. The thermal measurements used one device per junction. THERMAL requires exactly five nodes in drain, gate, source, junction and case order. Supplying three or four gives E-PARSE-ARITY. The three-node electrical form omits THERMAL. [Measured voltages, currents and verifier scores](../verify/probes/README.md#r9d-thermal-probe-results)

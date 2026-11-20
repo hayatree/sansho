@@ -1,6 +1,7 @@
 //! Classical strong-inversion MOS2 charge-sheet and MOS3 mobility models.
 //! Provenance: Vladimirescu & Liu, The Simulation of MOS Integrated Circuits
-//! Using SPICE2 (1980), and Massobrio & Antognetti, MOS device modeling.
+//! Using SPICE2 (1980); Massobrio & Antognetti, MOS device modeling; Sakurai
+//! & Newton, n-th power MOSFET model, IEEE TED 38 (1991), 887–894.
 
 use crate::{dual::Dual, model::ModelParams};
 
@@ -9,6 +10,14 @@ const EPS_SI: f64 = 11.7 * 8.854_187_812_8e-12;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Channel {
     SquareLaw,
+    PowerLaw {
+        kv: f64,
+        nv: f64,
+        nc: f64,
+        gamma1: f64,
+        sigma: f64,
+        lambda1: f64,
+    },
     ChargeSheet {
         narrow: f64,
         auto_length: bool,
@@ -35,6 +44,16 @@ impl Channel {
     pub(crate) fn bind(level: f64, p: &ModelParams, cox: f64, nsub: Option<f64>) -> Self {
         if level == 1. {
             return Self::SquareLaw;
+        }
+        if level == 6. {
+            return Self::PowerLaw {
+                kv: p.get("kv", 2.),
+                nv: p.get("nv", 0.5),
+                nc: p.get("nc", 1.),
+                gamma1: p.get("gamma1", 0.),
+                sigma: p.get("sigma", 0.),
+                lambda1: p.get("lambda1", 0.),
+            };
         }
         let narrow = p.get("delta", 0.) * std::f64::consts::FRAC_PI_4 * EPS_SI / cox;
         let depletion = nsub.map_or(0., |n| (2. * EPS_SI / (crate::CHARGE * n * 1e6)).sqrt());
@@ -67,6 +86,21 @@ impl Channel {
         let valid = |x: f64| x.is_finite() && x >= 0.;
         match *self {
             Self::SquareLaw => true,
+            Self::PowerLaw {
+                kv,
+                nv,
+                nc,
+                gamma1,
+                sigma,
+                lambda1,
+            } => {
+                kv.is_finite()
+                    && kv > 0.
+                    && valid(nv)
+                    && nc.is_finite()
+                    && nc > 0.
+                    && [gamma1, sigma, lambda1].into_iter().all(f64::is_finite)
+            }
             Self::ChargeSheet {
                 critical,
                 neff,
@@ -104,6 +138,7 @@ impl Channel {
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::SquareLaw => "mos1",
+            Self::PowerLaw { .. } => "mos6",
             Self::ChargeSheet { .. } => "mos2",
             Self::SemiEmpirical { .. } => "mos3",
         }
@@ -116,6 +151,7 @@ impl Channel {
         overdrive: Dual<N>,
         vd: Dual<N>,
         root: Dual<N>,
+        body: Dual<N>,
         gamma: f64,
         beta: f64,
         lambda: f64,
@@ -126,7 +162,7 @@ impl Channel {
         vt: f64,
     ) -> (Dual<N>, f64, f64) {
         let (narrow, dibl) = match self {
-            Self::SquareLaw => (0., 0.),
+            Self::SquareLaw | Self::PowerLaw { .. } => (0., 0.),
             Self::ChargeSheet { narrow, .. } => (*narrow / width, 0.),
             Self::SemiEmpirical { narrow, eta, .. } => (*narrow / width, *eta / length.powi(3)),
         };
@@ -159,7 +195,10 @@ impl Channel {
             }
             _ => Dual::cst(0.),
         };
-        let u = overdrive + root * sharing * gamma - root.sq() * narrow + vd * dibl;
+        let mut u = overdrive + root * sharing * gamma - root.sq() * narrow + vd * dibl;
+        if let Self::PowerLaw { gamma1, sigma, .. } = self {
+            u = u + body * (*gamma1) + vd * (*sigma);
+        }
         // Match the exponential weak-inversion characteristic at one
         // subthreshold swing voltage above the strong-inversion threshold.
         let swing = if surface_states > 0. {
@@ -184,6 +223,19 @@ impl Channel {
         let clip = |sat: Dual<N>| if vd.v < sat.v { vd } else { sat };
         let clm = vd * lambda + 1.;
         match *self {
+            Self::PowerLaw {
+                kv,
+                nv,
+                nc,
+                lambda1,
+                ..
+            } => {
+                let sat = u.powf(nv) * kv;
+                let peak = u.powf(nc) * beta;
+                let v = clip(sat) / sat;
+                let id = peak * v * (2. - v) * (1. + vd * (lambda - body * lambda1));
+                (id, u.v, sat.v)
+            }
             Self::SquareLaw => {
                 let id = if u.v <= vd.v {
                     u.sq() * (0.5 * beta) * clm
@@ -356,6 +408,7 @@ mod tests {
                 Dual::var(gate, 0),
                 Dual::var(drain, 1),
                 Dual::cst(0.8),
+                Dual::cst(-0.04),
                 0.6,
                 2e-4,
                 0.,
@@ -421,6 +474,10 @@ mod tests {
         for m in [
             channel(2., &[("vmax", 8e4), ("ucrit", 2e3), ("uexp", 0.4)]),
             channel(3., &[("theta", 0.2), ("vmax", 8e4)]),
+            channel(
+                6.,
+                &[("kv", 0.7), ("nv", 0.85), ("nc", 1.4), ("sigma", 0.03)],
+            ),
         ] {
             for (vg, vd) in [(0.8, 0.1), (1.1, 1.8)] {
                 let id = evaluate(&m, vg, vd);

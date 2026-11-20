@@ -155,6 +155,22 @@ fn interp(xs: &[f64], ys: &[f64], x: f64) -> f64 {
 
 /// A raw writer may wrap special vector names according to the output units.
 fn vector_name(kind: AnalysisKind, name: &str) -> &str {
+    if kind == AnalysisKind::Sp {
+        if let Some(inner) = name.get(2..).and_then(|s| s.strip_suffix(')'))
+            && name[..2].eq_ignore_ascii_case("v(")
+        {
+            let lower = inner.to_ascii_lowercase();
+            let mut parts = lower.split('_');
+            let matrix = matches!(parts.next(), Some("s" | "y" | "z" | "cy"))
+                && parts.next().is_some_and(|s| s.parse::<usize>().is_ok())
+                && parts.next().is_some_and(|s| s.parse::<usize>().is_ok())
+                && parts.next().is_none();
+            if matrix || matches!(lower.as_str(), "nf" | "sopt" | "nfmin" | "rn") {
+                return inner;
+            }
+        }
+        return name;
+    }
     if matches!(
         kind,
         AnalysisKind::Noise
@@ -302,6 +318,17 @@ fn compare_analysis(
         }
         return;
     }
+    if reference.kind == AnalysisKind::Sp
+        && (reference.scale_values.len() != ours.scale_values.len()
+            || reference
+                .scale_values
+                .iter()
+                .zip(&ours.scale_values)
+                .any(|(&r, &o)| !r.is_finite() || !o.is_finite() || (r - o).abs() > 1e-9 * r.abs()))
+    {
+        out.problems.push("Sp: frequency grids differ".into());
+        return;
+    }
     let start = out.vars.len();
     let tran = reference.kind == AnalysisKind::Tran;
     for (vi, var) in reference.variables.iter().enumerate() {
@@ -317,7 +344,7 @@ fn compare_analysis(
             .position(|v| vector_name(ours.kind, &v.name).eq_ignore_ascii_case(name))
         else {
             if name.starts_with('@')
-                || reference.kind == AnalysisKind::Tf
+                || matches!(reference.kind, AnalysisKind::Sp | AnalysisKind::Tf)
                 || (reference.kind == AnalysisKind::IntegratedNoise
                     && ["onoise_total", "inoise_total"]
                         .iter()
@@ -329,6 +356,8 @@ fn compare_analysis(
             continue;
         };
         let atol = match var.quantity {
+            // The oracle labels Cy as voltage. A voltage floor hides an all-zero matrix.
+            _ if ours.variables[oi].quantity == Quantity::CurrentNoisePower => f64::MIN_POSITIVE,
             Quantity::Current => tol.atol_i,
             _ => tol.atol_v,
         };
@@ -635,6 +664,26 @@ mod tests {
         let rep = compare(&r, &o, &Tolerances::default());
         assert!(!rep.pass());
         assert_eq!(rep.vars[0].at, 1.0);
+    }
+
+    #[test]
+    fn compares_sp_circuit_and_noise_columns_in_oracle_raw_files() {
+        let raw = "Plotname: SP Analysis\nFlags: complex\nNo. Variables: 4\nNo. Points: 1\nVariables:\n0 frequency frequency\n1 v(p) voltage\n2 i(p) current\n3 v(Cy_1_2) voltage\nValues:\n0 1e6,1 0.1,0 0.02,0 1e-23,-2e-24";
+        let reference = sansho_output::read_raw_ascii(raw).unwrap();
+        let mut ours = sansho_output::read_raw_ascii(
+            &raw.replace("v(Cy_1_2) voltage", "Cy_1_2 current-noise-power"),
+        )
+        .unwrap();
+        let tol = Tolerances::default();
+        assert_eq!(compare(&reference, &ours, &tol).vars.len(), 3);
+        assert!(compare(&reference, &ours, &tol).pass());
+        let plot = &mut ours.analyses[0];
+        if let Data::Complex { columns } = &mut plot.data {
+            columns[2][0] = (0., 0.);
+        }
+        assert!(!compare(&reference, &ours, &tol).pass());
+        ours.analyses[0].variables.pop();
+        assert!(!compare(&reference, &ours, &tol).problems.is_empty());
     }
 
     #[test]

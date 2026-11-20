@@ -291,6 +291,75 @@ fn base_resistance(m: &BjtModel, ib: f64, qb: f64) -> f64 {
 const PHASE_STATE: usize = 7;
 
 impl DeviceGroup for Bjts {
+    fn distortion(
+        &self,
+        ctx: &EvalCtx,
+        bias: &[f64],
+        out: &mut Vec<crate::distortion::Term>,
+    ) -> Result<(), Diagnostic> {
+        use crate::distortion::{Jet, expand};
+        for (i, m) in self.model.iter().enumerate() {
+            if m.rco > 0. || self.phase_index[i].is_some() || (m.rb > 0. && m.rbm != m.rb) {
+                return Err(Diagnostic::error(
+                    "E-ANALYSIS",
+                    format!(
+                        "{}: DISTO derivatives unavailable for quasi-saturation, excess phase or variable base resistance",
+                        self.names[i]
+                    ),
+                ));
+            }
+            let area = self.area[i];
+            let vt = thermal_voltage(m.temperature.unwrap_or(ctx.temp));
+            let pol = m.polarity;
+            expand(self.int[i], bias, out, |[c, b, e, s]| {
+                let be = (b - e) * pol;
+                let bc = (b - c) * pol;
+                let target = usize::from(m.subs < 0.);
+                let sc = (s - if target == 0 { c } else { b }) * (pol * m.subs);
+                let f = be.diode(m.is * area, m.nf * vt);
+                let r = bc.diode(m.is * area * m.bc_area_ratio, m.nr * vt);
+                let high = (f / (m.ikf * area) + r / (m.ikr * area)) * 4. + 1.;
+                let rolloff = if high.value() > 0. {
+                    high.powf(m.nkf)
+                } else {
+                    Jet::default()
+                };
+                let iqb = (-bc / m.vaf - be / m.var + 1.) * 2. / (rolloff + 1.);
+                let bf = f / m.bf + be.diode(m.ise * area, m.ne * vt);
+                let br = r / m.br + bc.diode(m.isc * area, m.nc * vt);
+                let ic = ((f - r) * iqb - br) * pol;
+                let ib = (bf + br) * pol;
+                let mut tf = Jet::constant(m.tf);
+                if f.value() > 0. && m.tf > 0. && m.xtf != 0. {
+                    let ratio = if m.itf > 0. {
+                        f / (f + m.itf * area)
+                    } else {
+                        Jet::constant(1.)
+                    };
+                    tf = (ratio * ratio * (bc / (1.44 * m.vtf)).exp() * m.xtf + 1.) * m.tf;
+                }
+                let qbe = (tf * f * iqb + be.depletion(m.cje * area, m.vje, m.mje, m.fc)) * pol;
+                let qbc =
+                    (r * m.tr + bc.depletion(m.xcjc * m.cjc * area, m.vjc, m.mjc, m.fc)) * pol;
+                let is = sc.diode(m.iss * area, m.ns * vt) * (pol * m.subs);
+                let qs = sc.depletion(m.cjs * area, m.vjs, m.mjs, 0.) * (pol * m.subs);
+                let mut currents = [ic, ib, -ic - ib, is];
+                let mut charges = [-qbc, qbc + qbe, -qbe, qs];
+                currents[target] = currents[target] - is;
+                charges[target] = charges[target] - qs;
+                (currents, charges)
+            });
+            if m.xcjc != 1. && m.cjc != 0. {
+                expand([self.ext[i][1], self.int[i][0]], bias, out, |[b, c]| {
+                    let q =
+                        ((b - c) * pol).depletion((1. - m.xcjc) * m.cjc * area, m.vjc, m.mjc, m.fc)
+                            * pol;
+                    ([Jet::default(); 2], [q, -q])
+                });
+            }
+        }
+        Ok(())
+    }
     fn output_charges(&self, i: usize, p: &str) -> Vec<(usize, f64)> {
         let row = match p {
             "ic" => 0,

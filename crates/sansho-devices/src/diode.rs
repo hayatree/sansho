@@ -236,6 +236,52 @@ impl Diodes {
 }
 
 impl DeviceGroup for Diodes {
+    fn distortion(
+        &self,
+        ctx: &EvalCtx,
+        bias: &[f64],
+        out: &mut Vec<crate::distortion::Term>,
+    ) -> Result<(), Diagnostic> {
+        use crate::distortion::{Jet, expand};
+        for (i, m) in self.model.iter().enumerate() {
+            let vt = thermal_voltage(m.temperature.unwrap_or(ctx.temp));
+            let area = self.area[i];
+            let avalanche = m.bv.is_finite().then(|| m.breakdown(area, vt));
+            expand([self.ai[i], self.k[i]], bias, out, |[a, k]| {
+                let v = a - k;
+                let diffusion = |is: f64, nvt: f64| {
+                    if v.value() >= -3. * nvt {
+                        v.diode(is, nvt)
+                    } else {
+                        let r = Jet::constant(3. * nvt / std::f64::consts::E) / v;
+                        (r * r * r + 1.) * (-is)
+                    }
+                };
+                let mut id =
+                    diffusion(m.is * area, m.n * vt) + diffusion(m.jsw * m.perimeter, m.ns * vt);
+                if m.isr > 0. && v.value() >= -3. * m.n * vt {
+                    let u = -v / m.vj + 1.;
+                    id = id + v.diode(m.isr * area, m.nr * vt) * (u * u + 0.005).powf(0.5 * m.m);
+                }
+                if let Some(b) = avalanche.filter(|b| v.value() < 0. && v.value() <= b.knee) {
+                    let z = -(v + m.bv) / (m.nbv * vt);
+                    id = if z.value() > 80. {
+                        (z - 79.) * 80f64.exp()
+                    } else {
+                        z.exp()
+                    } * (-b.at_bv);
+                }
+                if m.ikf > 0. && id.value() > 0. {
+                    id = id / ((id / (m.ikf * area)).powf(0.5) + 1.);
+                }
+                let q = id * m.tt
+                    + v.depletion(m.cjo * area, m.vj, m.m, m.fc)
+                    + v.depletion(m.cjp * m.perimeter, m.php, m.mjsw, m.fcs);
+                ([id, -id], [q, -q])
+            });
+        }
+        Ok(())
+    }
     fn output_charges(&self, i: usize, p: &str) -> Vec<(usize, f64)> {
         if matches!(p, "id" | "capcur") {
             vec![(self.at[i].q, 1.)]

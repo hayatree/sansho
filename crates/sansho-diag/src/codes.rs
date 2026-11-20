@@ -171,7 +171,7 @@ pub const CODES: &[CodeInfo] = &[
         "Wrong number of fields",
         "An element or control card has too few or too many positional fields.",
         &[
-            "Compare the line with the usage shown in the diagnostic. DC requires one or two complete source/start/stop/step groups. OP takes no arguments.",
+            "Compare the line with the usage shown in the diagnostic. DC requires one or two complete source/start/stop/step groups. OP takes no arguments. A thermal VDMOS instance requires five nodes in drain, gate, source, junction and case order.",
         ],
     ),
     e(
@@ -472,7 +472,12 @@ pub const CODES: &[CodeInfo] = &[
         "E-ANALYSIS",
         "Invalid small-signal or Fourier analysis",
         "An analysis requires resolvable ports, a defined transfer, finite model noise and a valid analysis range.",
-        &["Check the named source, output probe, transient duration and model parameters."],
+        &[
+            "Check the named source, output probe, transient duration and model parameters.",
+            "For .sp, check port numbering, finite port conversions, and two-port forward gain when requesting noise. Invalid Z0 or a nonintegral port number is a parse error.",
+            "For .disto, the diagnostic names the device or bipolar extension whose higher derivatives are unavailable. Analytic support covers the diode, MOS1 and the Gummel–Poon subset in the analysis notes.",
+            "A self-heated VDMOS requires finite positive absolute junction temperature. Invalid RTHJC, RTHCA, CTHJ and channel parameters yield E-ELAB-PARAM.",
+        ],
     ),
     e(
         "E-DC-SOURCE",

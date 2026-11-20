@@ -21,7 +21,7 @@ const NO_TRAN: TranParams = TranParams {
     tstop: 0.0,
 };
 
-fn variables(ckt: &Circuit) -> Vec<Variable> {
+pub(crate) fn variables(ckt: &Circuit) -> Vec<Variable> {
     ckt.unknowns
         .names()
         .iter()
@@ -1080,6 +1080,12 @@ pub(crate) fn tran(
             hmax = hmax.min(line.values.delay());
         }
     }
+    let crossing_groups: Vec<_> = ckt
+        .groups
+        .iter()
+        .enumerate()
+        .filter(|(_, group)| group.has_crossings())
+        .collect();
     let mut step_limits = Vec::new();
 
     let mut bps: Vec<f64> = Vec::new();
@@ -1303,10 +1309,9 @@ pub(crate) fn tran(
             }
             continue;
         }
-        let crossing = ckt
-            .discrete
+        let crossing = crossing_groups
             .iter()
-            .filter_map(|&i| ckt.groups[i].crossing(&x, &x_new, &ws.accepted[i], &ws.state[i]))
+            .filter_map(|&(i, group)| group.crossing(&x, &x_new, &ws.accepted[i], &ws.state[i]))
             .reduce(f64::min);
         if let Some(fraction) = crossing
             && fraction < 0.999

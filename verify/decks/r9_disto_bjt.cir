@@ -1,0 +1,11 @@
+Common emitter intermodulation with independent drive phases
+* Provenance: original Sansho R9 circuit.
+Vcc cc 0 4
+Vin in 0 dc 0.68 distof1 2m 15 distof2 1m -20
+Rb in b 220
+Re e 0 68
+Rc cc c 1.5k
+Q1 c b e np
+.model np npn(is=3f bf=110 vaf=70 tf=0.7n cje=15p cjc=2p)
+.disto dec 3 100k 10meg 0.83
+.end

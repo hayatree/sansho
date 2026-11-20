@@ -392,3 +392,19 @@ The R8 diode temperature sweep now uses TCV and awaits a regenerated 44.2 refere
 | `r8_ltra_ac.cir` | Complex RLC transfer, static RG leakage and input admittance. |
 | `r8_urc.cir` | Loaded transfer and step response with explicit segmentation and an automatically sized ladder with diode shunts. |
 | `r8_diode_temperature.cir` | Forward series drop and avalanche operating voltage from −20 through 100 °C. |
+
+## R9 RF and semiconductor decks
+
+| Deck in `verify/decks` | Check |
+|---|---|
+| `r9_sp_filter.cir` | Series R–L and shunt C with unequal 50 Ω and 75 Ω ports declared in reverse numeric order. Compares complex S, Y and Z. |
+| `r9_sp_bjt.cir` | Biased, capacitively coupled common-emitter amplifier. Compares forward/reverse transmission, both port reflections and two-port noise parameters. |
+| `r9_disto_diode.cir` | Second and third harmonics of a loaded forward-biased diode with series, transit and depletion terms. |
+| `r9_disto_bjt.cir` | Sum, difference and third-order intermodulation in a common-emitter stage with independently phased tones and junction storage. |
+| `r9_mos6.cir` | Nested drain and gate sweeps through the n-th power saturation knee under reverse body bias. |
+| `r9_vdmos_transfer.cir` | Hot gate transfer at two drain biases with subthreshold, drift-resistance and threshold temperature parameters. |
+| `r9_vdmos_thermal.cir` | Junction heating and cooling, drain voltage and supply current during a gate pulse with a fixed case. |
+
+All seven decks pass their cached 44.2 references. The filter compares 20 complex traces at nine frequencies and the BJT compares 33, including the short-circuit noise correlations. The hot VDMOS transfer compares 122 currents with a maximum error of 0.264 µA. The CTHJ pulse scores 0.001 on junction voltage (0.348 mK maximum error), 0.729 on drain voltage and 0.327 on supply current. All 49 R9 probe sweeps pass, including the 12 follow-up sweeps on the thermal boundary, hot channel and body diode. [Measurements and probe decks](probes/README.md#r9d-thermal-probe-results)
+
+Each R9 deck produces byte-identical binary raw output with one and two workers. The unit tests also check analytic attenuation and noise, asymmetric port matrices, harmonic and intermodulation amplitudes and phases, the loaded-diode third-order feedback term, MOS6 channel derivatives and the coupled electrical/thermal Jacobian.

@@ -42,6 +42,17 @@ fn parse_expanded(
     let mut directives = Vec::new();
     let _phase = sansho_diag::Phase::start("netlist_parse");
     let mut p = Parser {
+        vdmos_models: pre
+            .lines
+            .iter()
+            .filter(|l| {
+                l.tokens
+                    .get(2)
+                    .is_some_and(|t| t.text.eq_ignore_ascii_case("vdmos"))
+                    && l.tokens[0].text.eq_ignore_ascii_case(".model")
+            })
+            .map(|l| l.tokens[1].lower())
+            .collect(),
         has_hdl: !pre.hdl.is_empty(),
         diags: pre.diags,
         ..Parser::default()
@@ -193,6 +204,19 @@ pub(crate) fn sample_directive(
 pub(crate) fn sample_element(line: &Line, nl: &Netlist) -> Result<Element, Vec<Diagnostic>> {
     let head = line.tokens[0].lower();
     let mut p = Parser::default();
+    if head.starts_with('m')
+        && line
+            .tokens
+            .iter()
+            .any(|t| t.text.eq_ignore_ascii_case("thermal"))
+    {
+        p.vdmos_models = nl
+            .models
+            .iter()
+            .filter(|m| m.kind == "vdmos")
+            .map(|m| m.name.clone())
+            .collect();
+    }
     p.element(&head, line);
     if head.starts_with('q') {
         p.models = nl.models.clone();
@@ -210,6 +234,7 @@ pub(crate) type DynamicCards<'a> =
 
 #[derive(Default)]
 struct Parser {
+    vdmos_models: std::collections::HashSet<String>,
     title: Option<String>,
     prints: Vec<crate::PrintCard>,
     has_hdl: bool,
@@ -865,6 +890,8 @@ impl Parser {
         )?;
         let (p, n) = (node_name(&t[1]), node_name(&t[2]));
         let mut spec = SourceSpec::default();
+        let mut port = None;
+        let mut z0 = None;
         let mut i = 3;
         while i < t.len() {
             let word = t[i].lower();
@@ -876,6 +903,56 @@ impl Parser {
                     };
                     spec.dc = Some(self.number(vt, "DC")?);
                     i += 2;
+                }
+                "portnum" | "z0" => {
+                    if !t[0].lower().starts_with('v')
+                        || !t.get(i + 1).is_some_and(Token::is_eq)
+                        || i + 2 >= t.len()
+                    {
+                        self.err(
+                            "E-PARSE-VALUE",
+                            "expected voltage-source portnum=n or z0=r",
+                            t[i].span,
+                        );
+                        return None;
+                    }
+                    let value = &t[i + 2];
+                    if word == "portnum" {
+                        let Some(number) = value.positive_integer() else {
+                            self.err(
+                                "E-PARSE-VALUE",
+                                "port number must be a positive integer",
+                                value.span,
+                            );
+                            return None;
+                        };
+                        port = Some(number);
+                    } else {
+                        let r = self.number(value, "port reference resistance")?;
+                        if !(r.is_finite() && r > 0.) {
+                            self.err(
+                                "E-PARSE-VALUE",
+                                "Z0 must be finite and positive",
+                                value.span,
+                            );
+                            return None;
+                        }
+                        z0 = Some(r);
+                    }
+                    i += 3;
+                }
+                "distof1" | "distof2" => {
+                    i += 1;
+                    let mut tone = [1., 0.];
+                    for item in &mut tone {
+                        if let Some(value) = t.get(i).and_then(|x| parse_number(&x.text)) {
+                            *item = value;
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    spec.disto[usize::from(word == "distof2")] = Some((tone[0], tone[1]));
                 }
                 "ac" => {
                     i += 1;
@@ -916,6 +993,11 @@ impl Parser {
                 }
             }
         }
+        if z0.is_some() && port.is_none() {
+            self.err("E-PARSE-VALUE", "Z0 requires a port number", line.span());
+            return None;
+        }
+        spec.port = port.map(|n| (n, z0.unwrap_or(50.)));
         Some(if t[0].lower().starts_with('v') {
             ElementKind::VoltageSource { p, n, source: spec }
         } else {
@@ -1165,9 +1247,43 @@ impl Parser {
 
     fn mosfet(&mut self, line: &Line) -> Option<ElementKind> {
         let usage = "Mname nd ng ns nb model [l=..] [w=..] [ad=..] [as=..] [pd=..] [ps=..] [off]";
-        let f = self.device_fields(line)?;
-        if let [d, g, s, model] = f.positional.as_slice() {
+        let mut f = self.device_fields(line)?;
+        if let [nodes @ .., model, flag] = f.positional.as_slice()
+            && flag.text.eq_ignore_ascii_case("thermal")
+            && (nodes.len() == 5
+                || matches!(nodes.len(), 3 | 4) && self.vdmos_models.contains(&model.lower()))
+        {
+            f.positional.pop();
+            f.params.push(("thermal".into(), 1.));
+        }
+        if f.positional.len() != 6
+            && f.params
+                .iter()
+                .rfind(|(k, _)| k == "thermal")
+                .is_some_and(|(_, v)| *v != 0.)
+            && f.positional
+                .last()
+                .is_some_and(|m| self.vdmos_models.contains(&m.lower()))
+        {
+            self.err(
+                "E-PARSE-ARITY",
+                format!(
+                    "thermal VDMOS `{}` requires exactly five nodes (drain, gate, source, junction, case)",
+                    line.tokens[0].text
+                ),
+                line.span(),
+            );
+            return None;
+        }
+        let pins = match f.positional.as_slice() {
+            [_, _, _, tj, tc, _] => Some([node_name(tj), node_name(tc)]),
+            _ => None,
+        };
+        if let [d, g, s, .., model] = f.positional.as_slice()
+            && (pins.is_some() || f.positional.len() == 4)
+        {
             return Some(ElementKind::Vdmos {
+                thermal_pins: pins,
                 d: node_name(d),
                 g: node_name(g),
                 s: node_name(s),
@@ -1917,6 +2033,49 @@ impl Parser {
                     zeros: mode != "pol",
                 });
             }
+            ".sp" | ".disto" => {
+                if !(5..=6).contains(&t.len()) {
+                    self.err(
+                        "E-PARSE-ARITY",
+                        format!("{head} requires a frequency grid and at most one option"),
+                        span,
+                    );
+                    return;
+                }
+                let Some(grid) = self.frequency_sweep(&t[1..5], span) else {
+                    return;
+                };
+                let value = if let Some(token) = t.get(5) {
+                    let Some(n) = self.number(token, "analysis option") else {
+                        return;
+                    };
+                    Some(n)
+                } else {
+                    None
+                };
+                let card = if head == ".sp" {
+                    if value.is_some_and(|n| n != 0. && n != 1.) {
+                        self.err("E-PARSE-VALUE", "SP donoise must be 0 or 1", span);
+                        return;
+                    }
+                    AnalysisCard::Sp {
+                        span,
+                        grid,
+                        noise: value == Some(1.),
+                    }
+                } else {
+                    if value.is_some_and(|n| !(n > 0. && n < 1.)) {
+                        self.err("E-PARSE-VALUE", "DISTO requires 0 < f2overf1 < 1", span);
+                        return;
+                    }
+                    AnalysisCard::Disto {
+                        span,
+                        grid,
+                        ratio: value,
+                    }
+                };
+                self.analyses.push(card);
+            }
             ".ac" | ".noise" => {
                 let noise = if head == ".noise" {
                     let Some(k) = (4..=5).find(|&i| {
@@ -2337,6 +2496,37 @@ R2 ignored after end 1
         assert_eq!(nl.options.len(), 2);
         assert_eq!(nl.options[0].value, Some(1e-4));
         assert!(nl.warnings.is_empty());
+    }
+
+    #[test]
+    fn thermal_vdmos_requires_both_thermal_terminals() {
+        for flag in ["THERMAL", "thermal=1"] {
+            for nodes in ["d g s", "d g s tj"] {
+                let deck = format!("pin count\nM1 {nodes} power {flag} m=2\n.model power vdmos\n");
+                let errors = parse(&deck).unwrap_err();
+                assert_eq!(errors.len(), 1);
+                assert_eq!(errors[0].code, "E-PARSE-ARITY");
+                assert_eq!(errors[0].span, Some(Span::new(2, 1)));
+                assert!(
+                    errors[0]
+                        .message
+                        .contains("drain, gate, source, junction, case")
+                );
+            }
+        }
+        let valid = "pins\nM1 d g s tj 0 power thermal\nM2 d g s power\nM3 d g s b thermal\n.model power vdmos\n.model thermal nmos\n";
+        let nl = parse(valid).unwrap();
+        assert!(
+            matches!(&nl.elements[0].kind, ElementKind::Vdmos { thermal_pins: Some(pins), .. } if pins == &["tj", "0"])
+        );
+        assert!(matches!(
+            nl.elements[1].kind,
+            ElementKind::Vdmos {
+                thermal_pins: None,
+                ..
+            }
+        ));
+        assert!(matches!(nl.elements[2].kind, ElementKind::Mosfet { .. }));
     }
 
     #[test]

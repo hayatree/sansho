@@ -75,7 +75,7 @@ const TOOLS: &[Tool] = &[
         title: "Simulate",
         description: "Run the analyses of a circuit (given by circuit_id, or by netlist text, \
                       which is loaded first). `analyses` optionally replaces the netlist's \
-                      analysis cards including noise, tf, sens, four and pz, e.g. [\"tran 1n 1u\", \"ac dec 20 1 1g\"]. Returns a \
+                      analysis cards including sp, disto, noise, tf, sens, four and pz, e.g. [\"tran 1n 1u\", \"ac dec 20 1 1g\"]. Returns a \
                       compact summary: job_id, status, operating-point values, per-signal \
                       min/max/first/last, .meas results with units, diagnostics, input and \
                       result hashes. Include .save @m1[gm] @m1[gds] @m1[vth] to record MOS bias quantities for get_waveform.",
@@ -86,7 +86,7 @@ const TOOLS: &[Tool] = &[
                 "netlist":{"type":"string","description":NETLIST},
                 "path":{"type":"string","description":PATH},
                 "analyses":{"type":"array","items":{"type":"string"},
-                            "description":"analysis cards replacing those in the netlist (op, dc, ac, tran, noise, tf, sens, four, pz); include tran with four"}}})
+                            "description":"analysis cards replacing those in the netlist (op, dc, ac, tran, sp, disto, noise, tf, sens, four, pz); include tran with four"}}})
         },
     },
     Tool {

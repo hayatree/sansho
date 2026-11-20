@@ -210,7 +210,27 @@ fn analysis_work(a: &AnalysisCard) -> (u64, u64) {
             let n = points(inner).saturating_mul(outer.as_ref().map_or(1, points));
             (n, n.saturating_mul(4))
         }
-        AnalysisCard::Sens {
+        AnalysisCard::Sp {
+            grid:
+                sansho_netlist::FrequencySweep {
+                    sweep,
+                    points,
+                    fstart,
+                    fstop,
+                },
+            ..
+        }
+        | AnalysisCard::Disto {
+            grid:
+                sansho_netlist::FrequencySweep {
+                    sweep,
+                    points,
+                    fstart,
+                    fstop,
+                },
+            ..
+        }
+        | AnalysisCard::Sens {
             ac:
                 Some(sansho_netlist::FrequencySweep {
                     sweep,
@@ -366,7 +386,13 @@ fn summarize(index: usize, a: &AnalysisResult, max_signals: usize) -> AnalysisSu
                     });
                 }
             }
-            (Data::Complex { columns }, AnalysisKind::Sens) => {
+            (Data::Complex { columns }, AnalysisKind::Sp)
+                if v.quantity == sansho_output::Quantity::Decibels =>
+            {
+                let values: Vec<_> = columns[i].iter().map(|z| z.0).collect();
+                s.signals.push(stats_of(&v.name, unit, &values));
+            }
+            (Data::Complex { columns }, AnalysisKind::Sens | AnalysisKind::Sp) => {
                 let magnitude: Vec<_> = columns[i].iter().map(|(re, im)| re.hypot(*im)).collect();
                 s.signals.push(stats_of(&v.name, unit, &magnitude));
             }

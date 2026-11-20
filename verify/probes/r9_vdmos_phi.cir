@@ -1,0 +1,12 @@
+Hot transfer with only surface potential varied
+* Provenance: original Sansho R9b black-box experiment.
+* sweep: 0.45 0.65 0.85
+.param probe=0.45
+Vd d 0 3
+Vg g 0 1
+M1 d g 0 p
+.model p vdmos(vto=2 kp=0.8 phi={probe} tcvth=0.001)
+.options temp=55
+.dc Vg 1.3 3.2 0.025
+.save i(Vd)
+.end

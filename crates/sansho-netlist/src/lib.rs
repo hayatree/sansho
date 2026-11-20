@@ -183,6 +183,7 @@ pub enum ElementKind {
     },
     /// Three-terminal vertical double-diffused MOS transistor.
     Vdmos {
+        thermal_pins: Option<[String; 2]>,
         d: String,
         g: String,
         s: String,
@@ -423,9 +424,18 @@ impl ElementKind {
             Self::Line { ports, .. } | Self::Ltra { ports, .. } => {
                 ports.iter().map(String::as_str).collect()
             }
-            Self::Mesfet { d, g, s, .. }
-            | Self::Vdmos { d, g, s, .. }
-            | Self::Jfet { d, g, s, .. } => vec![d, g, s],
+            Self::Vdmos {
+                d,
+                g,
+                s,
+                thermal_pins,
+                ..
+            } => {
+                let mut nodes = vec![d.as_str(), g.as_str(), s.as_str()];
+                nodes.extend(thermal_pins.iter().flatten().map(String::as_str));
+                nodes
+            }
+            Self::Mesfet { d, g, s, .. } | Self::Jfet { d, g, s, .. } => vec![d, g, s],
             Self::Polynomial { p, n, controls, .. } => {
                 let mut nodes = vec![p.as_str(), n.as_str()];
                 for control in controls {
@@ -475,6 +485,10 @@ pub struct SourceSpec {
     pub ac_mag: f64,
     /// AC phase in degrees.
     pub ac_phase_deg: f64,
+    /// One-based RF port number and real reference resistance in ohms.
+    pub port: Option<(usize, f64)>,
+    /// DISTOF1 and DISTOF2 peak magnitudes and phases in degrees.
+    pub disto: [Option<(f64, f64)>; 2],
     /// Transient waveform, if given.
     pub tran: Option<TranFn>,
 }
@@ -567,6 +581,16 @@ impl DcSweep {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "analysis", rename_all = "snake_case")]
 pub enum AnalysisCard {
+    Sp {
+        span: Span,
+        grid: FrequencySweep,
+        noise: bool,
+    },
+    Disto {
+        span: Span,
+        grid: FrequencySweep,
+        ratio: Option<f64>,
+    },
     Noise {
         span: Span,
         output: Probe,

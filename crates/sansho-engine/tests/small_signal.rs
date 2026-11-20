@@ -668,3 +668,165 @@ fn bjt_area_factors_scale_independent_ac_junction_currents() {
         1e-8,
     );
 }
+
+#[test]
+fn drift_branch_crosses_zero_drain_bias_without_rd() {
+    let r = simulate(
+        "drift at zero bias\nVd d 0 0\nVg g 0 4\nM1 d g 0 p\n.model p vdmos(vto=1 kp=1 rq=0.6 vq=1.4)\n.dc Vd -0.01 0.01 0.01\n.save i(vd)\n",
+    );
+    let id = r.analyses[0].real("i(vd)").unwrap();
+    assert!(id[0] > 0. && id[1].abs() < 1e-10 && id[2] < 0.);
+}
+
+#[test]
+fn port_waves_admittance_impedance_and_matching() {
+    let r = simulate(
+        "three matched ports\nVa a 0 portnum=2 z0=75\nVb b 0 portnum=1\nVc c 0 portnum=3 z0=100\nRa a 0 150\nRb b 0 50\nRc c 0 25\n.sp oct 2 100 200\n",
+    );
+    let p = &r.analyses[0];
+    assert_eq!(p.variables.len(), 36);
+    for (i, (z, reflection)) in [(50., 0.), (150., 1. / 3.), (25., -0.6)]
+        .into_iter()
+        .enumerate()
+    {
+        for (name, want) in [("S", reflection), ("Y", 1. / z), ("Z", z)] {
+            let trace = p.complex(&format!("{name}_{}_{}", i + 1, i + 1)).unwrap();
+            for &(v, im) in trace {
+                assert!((v - want).abs() < 1e-12 && im == 0., "{name} {v} vs {want}");
+            }
+        }
+    }
+    // The asymmetry in this active two-port catches transposition of Y and Z.
+    let r = simulate(
+        "unilateral amplifier\nV1 in 0 portnum=1 z0=50\nV2 out 0 portnum=2 z0=75\nR1 in 0 50\nR2 out 0 75\nG1 out 0 in 0 0.02\n.sp lin 1 100 100\n",
+    );
+    let p = &r.analyses[0];
+    for (n, v) in [
+        ("Y_2_1", 0.02),
+        ("Z_2_1", -75.),
+        ("S_2_1", -0.01 * 3750f64.sqrt()),
+    ] {
+        check(p.complex(n).unwrap()[0].0, v, 2e-13);
+    }
+}
+#[test]
+fn matched_attenuator_noise_factor() {
+    let deck = include_str!("../../../verify/probes/r9_sp_noise_temp.cir");
+    for temp in [0., 16.85, 27., 80.] {
+        let r = simulate(&deck.replace(".temp 0", &format!(".temp {temp}")));
+        let p = &r.analyses[0];
+        check(p.complex("S_2_1").unwrap()[0].0, 0.5, 1e-12);
+        check(p.complex("NF").unwrap()[0].0, 10. * 4f64.log10(), 1e-12);
+        check(p.complex("NFmin").unwrap()[0].0, 10. * 4f64.log10(), 1e-12);
+        // For a passive network at equilibrium Cy = 2 kT (Y + Y†).
+        for r in 1..=2 {
+            for k in 1..=2 {
+                let measured = p.complex(&format!("Cy_{r}_{k}")).unwrap()[0];
+                let y = p.complex(&format!("Y_{r}_{k}")).unwrap()[0];
+                check(
+                    measured.0,
+                    4. * sansho_devices::BOLTZMANN * (273.15 + temp) * y.0,
+                    1e-12,
+                );
+                assert_eq!(measured.1, 0.);
+            }
+        }
+        assert!(p.complex("SOpt").unwrap()[0].0.abs() < 1e-12);
+        check(p.complex("Rn").unwrap()[0].0, 46.875, 1e-12);
+    }
+}
+#[test]
+fn distortion_exponential_harmonics_and_mixing() {
+    let r = simulate(
+        "ideal voltage drive\nV1 a 0 .55 distof1 .002 30 distof2 .001 -10\nD1 a 0 dm\n.model dm d(is=1f tt=2n)\n.disto dec 2 1meg 10meg\n.disto lin 3 1meg 3meg .8\n",
+    );
+    let vt = sansho_devices::thermal_voltage(300.15);
+    let bias = 1e-15 * (0.55 / vt).exp();
+    let (a, b) = (0.002 / vt, 0.001 / vt);
+    for (plot, (scale, phase, m1, m2)) in r.analyses.iter().zip([
+        (a * a / 4., 60_f64, 2., 0.),
+        (a * a * a / 24., 90., 3., 0.),
+        (a * b / 2., 20., 1., 1.),
+        (a * b / 2., 40., 1., -1.),
+        (a * a * b / 8., 70., 2., -1.),
+    ]) {
+        for (&f, &(re, im)) in plot.scale_values.iter().zip(plot.complex("i(v1)").unwrap()) {
+            let wt = std::f64::consts::TAU * (m1 * f + m2 * 0.8e6) * 2e-9;
+            let (sin, cos) = phase.to_radians().sin_cos();
+            check(re, -bias * scale * (cos - wt * sin), 1e-9);
+            check(im, -bias * scale * (sin + wt * cos), 1e-9);
+        }
+    }
+}
+#[test]
+fn distortion_mos_saturation_and_unsupported_devices() {
+    let r = simulate(
+        "square law\nVd d 0 2\nVg g 0 1.2 distof1 .01\nM1 d g 0 0 m w=4u l=2u\n.model m nmos(vto=.4 kp=.001)\n.disto lin 1 1k 1k\n",
+    );
+    check(r.analyses[0].complex("i(vd)").unwrap()[0].0, -5e-8, 1e-12);
+    assert_eq!(r.analyses[1].complex("i(vd)").unwrap()[0], (0., 0.));
+    let nl = sansho_netlist::parse(
+        "unsupported\nVd d 0 2\nVg g 0 0 distof1 1\nJ1 d g 0 m\n.model m njf\n.disto lin 1 1k 1k\n",
+    )
+    .unwrap();
+    let err = run_with(&nl, &RunConfig { threads: 1 }).unwrap_err();
+    assert!(err.diagnostics[0].message.contains("j1"));
+}
+
+#[test]
+fn voltage_feedback_mixes_the_second_order_response_into_the_third() {
+    // Solve the bias and differentiate v + R Is(exp(v/Vt)-1) = drive three times.
+    let r = simulate(
+        "series diode\nV1 in 0 0.58 distof1 .006\nR1 in out 500\nD1 out 0 dm\n.model dm d(is=5f)\n.options gmin=0\n.op\n.disto lin 1 1k 1k\n",
+    );
+    let vt = sansho_devices::thermal_voltage(300.15);
+    let g = 5e-15 * (first(&r.analyses[0], "v(out)") / vt).exp() / vt;
+    let a = 1. / (1. + 500. * g);
+    let b = -500. * g / vt * a.powi(3);
+    let c = -500. * g * a * (a.powi(3) / vt.powi(2) + 3. * a * b / vt);
+    check(
+        r.analyses[1].complex("v(out)").unwrap()[0].0,
+        b * 0.006f64.powi(2) / 4.,
+        1e-10,
+    );
+    check(
+        r.analyses[2].complex("v(out)").unwrap()[0].0,
+        c * 0.006f64.powi(3) / 24.,
+        1e-10,
+    );
+}
+#[test]
+fn r9_raw_roundtrip_preserves_frequency_scale_and_plot_order() {
+    let r = simulate(
+        "port and distortion\nV1 in 0 dc 0.5 portnum=1 distof1 .001\nR1 in 0 10k\nD1 in 0 dm\n.model dm d\n.sp lin 2 1k 2k\n.disto lin 2 1k 2k\n",
+    );
+    let mut raw = vec![];
+    sansho_output::write_raw_ascii(&r, &mut raw).unwrap();
+    let decoded = sansho_output::read_raw_ascii(std::str::from_utf8(&raw).unwrap()).unwrap();
+    assert_eq!(r.analyses.len(), decoded.analyses.len());
+    for (a, b) in r.analyses.iter().zip(decoded.analyses) {
+        assert_eq!((a.kind, &a.scale_values), (b.kind, &b.scale_values));
+        assert_eq!(a.variables.len(), b.variables.len());
+        for (x, y) in a.variables.iter().zip(&b.variables) {
+            assert!(x.name.eq_ignore_ascii_case(&y.name));
+            assert_eq!(x.quantity, y.quantity);
+            for (&(re, im), &(read_re, read_im)) in a
+                .complex(&x.name)
+                .unwrap()
+                .iter()
+                .zip(b.complex(&y.name).unwrap())
+            {
+                check(read_re, re, 1e-14);
+                check(read_im, im, 1e-14);
+            }
+        }
+    }
+}
+
+#[test]
+fn thermal_model_name_and_explicit_junction_with_forward_model_definition() {
+    let r = simulate(
+        "thermal flag or model name\nVg g 0 2\nVd d 0 1\nMplanar d g 0 0 thermal w=1u l=1u\nMpower d g 0 tj 0 power thermal\n.model thermal nmos(level=1 vto=1 kp=.001)\n.model power vdmos(vto=1 kp=.5 rthjc=4)\n.op\n",
+    );
+    assert!(first(&r.analyses[0], "i(vd)") < -0.2);
+}

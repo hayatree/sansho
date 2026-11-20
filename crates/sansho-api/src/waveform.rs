@@ -120,6 +120,16 @@ pub(crate) fn extract(
     let reduce = match (complex, reduce) {
         (false, Reduce::Mag | Reduce::Db | Reduce::PhaseDeg | Reduce::Re | Reduce::Im) => reduce,
         (true, Reduce::Real) => Reduce::Mag,
+        (true, Reduce::Auto) if a.kind == AnalysisKind::Sp && q == Quantity::Decibels => Reduce::Re,
+        (true, Reduce::Auto)
+            if a.kind == AnalysisKind::Sp
+                && matches!(
+                    q,
+                    Quantity::Resistance | Quantity::Admittance | Quantity::CurrentNoisePower
+                ) =>
+        {
+            Reduce::Mag
+        }
         (true, Reduce::Auto) if a.kind == AnalysisKind::Pz => Reduce::Re,
         (true, Reduce::Auto) if a.kind == AnalysisKind::Sens => Reduce::Mag,
         (true, Reduce::Auto) => Reduce::Db,

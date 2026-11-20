@@ -1,0 +1,11 @@
+Body-diode and body access power at fixed junction temperature
+* Provenance: original Sansho R9c black-box experiment.
+* sweep: 0 0.2 1
+.param probe=0
+Vj tj 0 0
+Vd d 0 0
+M1 d 0 0 tj 0 p thermal
+.model p vdmos(vto=5 kp=0 is=1p rb={probe} rthjc=5)
+.dc Vd 0 -0.8 -0.02
+.save i(Vd) i(Vj)
+.end

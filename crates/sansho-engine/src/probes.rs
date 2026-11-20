@@ -58,7 +58,7 @@ fn diagnostic(name: &str) -> Diagnostic {
 
 fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
     use Quantity::*;
-    let mos = matches!(kind, "mos1" | "mos2" | "mos3" | "bsim3" | "bsim4");
+    let mos = matches!(kind, "mos1" | "mos2" | "mos3" | "mos6" | "bsim3" | "bsim4");
     let bsim = matches!(kind, "bsim3" | "bsim4");
     Some(match p {
         "i" if matches!(

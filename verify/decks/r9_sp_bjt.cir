@@ -1,0 +1,15 @@
+Capacitively coupled common emitter RF two-port
+* Provenance: original Sansho R9 circuit.
+Vp1 in 0 dc 0 portnum=1 z0=50
+Vp2 out 0 dc 0 portnum=2 z0=50
+Vinbias vb 0 0.69
+Vcc cc 0 5
+Rb vb b 470
+Re e 0 47
+Rc cc c 1k
+Cin in b 10n
+Cout c out 10n
+Q1 c b e np
+.model np npn(is=2f bf=120 vaf=80 cje=12p cjc=2p tf=0.4n)
+.sp dec 4 1meg 100meg 1
+.end

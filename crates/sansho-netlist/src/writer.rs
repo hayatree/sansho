@@ -38,6 +38,14 @@ fn source(out: &mut String, s: &SourceSpec) {
     if s.ac_mag != 0.0 || s.ac_phase_deg != 0.0 {
         let _ = write!(out, " ac {} {}", num(s.ac_mag), num(s.ac_phase_deg));
     }
+    if let Some((n, r)) = s.port {
+        let _ = write!(out, " portnum={n} z0={}", num(r));
+    }
+    for (i, stim) in s.disto.iter().enumerate() {
+        if let Some((mag, phase)) = stim {
+            let _ = write!(out, " distof{} {} {}", i + 1, num(*mag), num(*phase));
+        }
+    }
     match &s.tran {
         Some(TranFn::Pulse(v)) => {
             let _ = write!(out, " pulse({})", list(v));
@@ -190,6 +198,28 @@ pub fn write_measure(m: &MeasureCard) -> String {
 /// Write one analysis card.
 pub fn write_analysis(a: &AnalysisCard) -> String {
     match a {
+        AnalysisCard::Sp { grid, .. } | AnalysisCard::Disto { grid, .. } => {
+            let (name, extra) = match a {
+                AnalysisCard::Disto { ratio, .. } => ("disto", ratio.map(num)),
+                AnalysisCard::Sp { noise: true, .. } => ("sp", Some("1".into())),
+                _ => ("sp", None),
+            };
+            let sweep = match grid.sweep {
+                AcSweep::Dec => "dec",
+                AcSweep::Oct => "oct",
+                AcSweep::Lin => "lin",
+            };
+            let mut card = format!(
+                ".{name} {sweep} {} {} {}",
+                grid.points,
+                num(grid.fstart),
+                num(grid.fstop)
+            );
+            if let Some(extra) = extra {
+                let _ = write!(card, " {extra}");
+            }
+            card
+        }
         AnalysisCard::Op { .. } => ".op".into(),
         AnalysisCard::Tf { output, source, .. } => format!(".tf {output} {source}"),
         AnalysisCard::Sens { output, ac, .. } => {
@@ -386,17 +416,34 @@ pub fn write(nl: &Netlist) -> String {
                 model,
                 params: ps,
                 off,
+            } => {
+                let _ = write!(l, "{name} {d} {g} {s} {model}");
+                params(&mut l, ps);
+                if *off {
+                    l += " off";
+                }
             }
-            | ElementKind::Vdmos {
+            ElementKind::Vdmos {
                 d,
                 g,
                 s,
                 model,
+                thermal_pins,
                 params: ps,
                 off,
             } => {
-                let _ = write!(l, "{name} {d} {g} {s} {model}");
-                params(&mut l, ps);
+                let _ = write!(l, "{name} {d} {g} {s}");
+                if let Some([tj, tc]) = thermal_pins {
+                    let _ = write!(l, " {tj} {tc}");
+                }
+                let _ = write!(l, " {model}");
+                for (k, v) in ps {
+                    if k == "thermal" && *v == 1. {
+                        l += " thermal";
+                    } else {
+                        let _ = write!(l, " {k}={}", num(*v));
+                    }
+                }
                 if *off {
                     l += " off";
                 }

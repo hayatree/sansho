@@ -1,0 +1,19 @@
+Heated channel in saturation and triode with and without access resistance
+* Provenance: original Sansho R9c black-box experiment.
+* sweep: 0 -0.75 -1.5
+.param probe=0
+Vg g 0 2
+Vj tj 0 30
+Vsat ds 0 4
+Vtri dt 0 1.5
+Vaccess da 0 1.5
+Vctrl dc 0 4
+Ms ds g 0 tj 0 p thermal
+Mt dt g 0 tj 0 p thermal
+Ma da g 0 tj 0 access thermal
+Mc dc g 0 p
+.model p vdmos(vto=1.5 kp=0.8 mu={probe} tcvth=0.001 rthjc=5)
+.model access vdmos(vto=1.5 kp=0.8 mu={probe} tcvth=0.001 rthjc=5 rd=0.08 rs=0.02)
+.dc Vg 1 4 0.05
+.save i(Vsat) i(Vtri) i(Vaccess) i(Vctrl)
+.end

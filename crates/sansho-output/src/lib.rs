@@ -25,9 +25,12 @@ pub enum Quantity {
     Charge,
     VoltageDensity,
     CurrentDensity,
+    /// Short-circuit current noise cross-spectral density.
+    CurrentNoisePower,
     Resistance,
     Admittance,
     Scalar,
+    Decibels,
     Phase,
     PoleZero,
     Percent,
@@ -51,9 +54,11 @@ impl Quantity {
             Self::Charge => "charge",
             Self::VoltageDensity => "voltage-density",
             Self::CurrentDensity => "current-density",
+            Self::CurrentNoisePower => "current-noise-power",
             Self::Resistance => "resistance",
             Self::Admittance => "admittance",
             Self::Scalar => "notype",
+            Self::Decibels => "decibel",
             Self::Phase => "phase",
             Self::PoleZero => "pole",
             Self::Percent => "percent",
@@ -73,9 +78,11 @@ impl Quantity {
             Self::Charge => "C",
             Self::VoltageDensity => "V/√Hz",
             Self::CurrentDensity => "A/√Hz",
+            Self::CurrentNoisePower => "A²/Hz",
             Self::Resistance => "Ω",
             Self::Admittance => "S",
             Self::Scalar => "",
+            Self::Decibels => "dB",
             Self::Phase => "deg",
             Self::PoleZero => "rad/s",
             Self::Percent => "%",
@@ -101,6 +108,13 @@ pub struct Variable {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AnalysisKind {
+    Sp,
+    Harmonic2,
+    Harmonic3,
+    Sum,
+    Difference,
+    Intermod3,
+
     Noise,
     IntegratedNoise,
     Tf,
@@ -118,9 +132,21 @@ pub enum AnalysisKind {
 }
 
 impl AnalysisKind {
+    pub fn is_distortion(self) -> bool {
+        matches!(
+            self,
+            Self::Harmonic2 | Self::Harmonic3 | Self::Sum | Self::Difference | Self::Intermod3
+        )
+    }
     /// ngspice plot name.
     pub fn plot_name(self) -> &'static str {
         match self {
+            Self::Sp => "SP Analysis",
+            Self::Harmonic2 => "DISTORTION - 2nd harmonic",
+            Self::Harmonic3 => "DISTORTION - 3rd harmonic",
+            Self::Sum => "DISTORTION - IM: f1+f2",
+            Self::Difference => "DISTORTION - IM: f1-f2",
+            Self::Intermod3 => "DISTORTION - IM: 2f1-f2",
             Self::Noise => "Noise Spectral Density Curves",
             Self::IntegratedNoise => "Integrated Noise",
             Self::Tf => "Transfer Function",

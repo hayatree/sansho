@@ -11,12 +11,14 @@ mod analysis;
 mod circuit;
 mod fourier;
 pub use fourier::fourier;
+mod distortion;
 mod lint;
 mod measure;
 pub mod monte_carlo;
 mod options;
 mod parallel;
 mod probes;
+mod rf;
 mod small_signal;
 mod solve;
 
@@ -213,6 +215,12 @@ fn run_analysis(
     };
     let ckt = owned.as_ref().unwrap_or(ckt);
     let mut result = match card {
+        AnalysisCard::Sp { grid, noise, .. } => {
+            return rf::analyze(ckt, nl, opts, *grid, *noise).map(|p| (vec![p], None));
+        }
+        AnalysisCard::Disto { grid, ratio, .. } => {
+            return distortion::analyze(ckt, nl, opts, *grid, *ratio).map(|p| (p, None));
+        }
         AnalysisCard::Noise {
             output,
             source,
@@ -337,13 +345,15 @@ fn project_results(full: &mut SimResults, saves: &[String]) -> Option<Measuremen
         .analyses
         .iter()
         .map(|a| {
-            if !matches!(
-                a.kind,
-                sansho_output::AnalysisKind::Op
-                    | sansho_output::AnalysisKind::Tran
-                    | sansho_output::AnalysisKind::Ac
-                    | sansho_output::AnalysisKind::Dc
-            ) {
+            if !a.kind.is_distortion()
+                && !matches!(
+                    a.kind,
+                    sansho_output::AnalysisKind::Op
+                        | sansho_output::AnalysisKind::Tran
+                        | sansho_output::AnalysisKind::Ac
+                        | sansho_output::AnalysisKind::Dc
+                )
+            {
                 return a.clone();
             }
             let indices: Vec<_> = a
@@ -381,7 +391,9 @@ fn project_results(full: &mut SimResults, saves: &[String]) -> Option<Measuremen
 
 fn card_span(card: &AnalysisCard) -> sansho_diag::Span {
     match card {
-        AnalysisCard::Four { span, .. }
+        AnalysisCard::Sp { span, .. }
+        | AnalysisCard::Disto { span, .. }
+        | AnalysisCard::Four { span, .. }
         | AnalysisCard::Pz { span, .. }
         | AnalysisCard::Tf { span, .. }
         | AnalysisCard::Sens { span, .. }

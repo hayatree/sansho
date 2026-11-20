@@ -260,3 +260,52 @@ To repeat the sweeps, run
 ```sh
 verify/probes/sweep.sh verify/probes/r8_diode_{tbv,tcv}_temp.cir
 ```
+
+## R9b RF and power MOSFET
+
+Run the original one-parameter experiments with the existing 44.2 sweep driver. Each file supplies its own values. Keep the ASCII raws and logs, including model parameter warnings.
+
+```sh
+verify/probes/sweep.sh verify/probes/r9_*.cir
+```
+
+| Probe suffix after `r9_` | Measurement |
+|---|---|
+| `sp_noise_temp` | A matched pad with available gain 1/4 gives NF = 6.0206 dB at every setting if source normalization follows circuit temperature. A fixed reference temperature gives a temperature-dependent NF. |
+| `vdmos_subshift` | Vary SUBSHIFT alone at nominal temperature. Invert the saturation current and the 80 mV softplus to recover the intercept on both sides of threshold. |
+| `vdmos_phi` | Vary PHI alone at a fixed 55 °C. Compare hot gate transfers to resolve any independent threshold translation. |
+| `vdmos_rq` | Sweep drain voltage at two gates, with finite RS and three RQ values. Subtract I·RS from Vgs and invert the triode law for intrinsic Vds. The measured drain access drop distinguishes external Vds, external drain to intrinsic source, intrinsic Vds and gate-controlled alternatives. |
+| `vdmos_rq_temp` | Paired devices with RQ=0.6 Ω and RQ=0 at four temperatures. Extract KP and the gate intercept from the control. Infer the RQ increment in triode and test the 0.3 temperature exponent. |
+| `vdmos_rthjc`, `vdmos_cthjc` | A 1 W heat-current pulse at the junction of an electrically idle MOSFET isolates the thermal network. Vary one thermal parameter per deck. A second device dissipates approximately 1 W internally with MU=TCVTH=0. Compare its measured −2·I(Vd) and junction response to the external heat pulse. The plateau gives K/W and the cooling tail gives the pole. |
+| `vdmos_case` | With zero device power, step the case by 5 V from three starting voltages. Initial junction offset, instantaneous feedthrough, relaxation and case current distinguish a junction-to-case capacitor from one to thermal ground and reveal an independent boundary path. |
+| `vdmos_tj`, `vdmos_ambient` | Compare a device with clamped thermal pins to an isothermal control over the gate transfer. Vary only the junction voltage or only ambient temperature. The slope and intercept of √Id in saturation separate mobility and threshold shifts and test whether the exposed junction voltage is a rise above ambient. |
+| `vdmos_rs_heat` | Clamp both thermal pins at zero and sweep the gate at fixed drain voltage. Vary only RS. Compare incremental junction clamp current to terminal power and to terminal power less I²RS, subtracting the zero-gate baseline. |
+
+### Measured on ngspice 44.2
+
+All 37 cached R9b sweep points pass the ordinary verifier. The largest score is 0.825 on the gate-edge drain current of the electrically heated step fixture. The filename `vdmos_cthjc` is retained to match the regenerated cache. Its model card sweeps **CTHJ**. The maintainer observed a warning for the older spelling CTHJC.
+
+| Sweep | Observation and inference |
+|---|---|
+| RTHJC | At CTHJ = 100 µJ/K, fitting the idle device's cooling tail from 3.1 to 3.5 ms gives 200.0, 600.0 and 1000.0 µs for 1, 3 and 5 K/W. Subtract the initial junction voltage before taking the log ratio. At 1 K/W the 1 W source raises the junction by 1.000 K. The separate electrical heater draws 0.500005 A at 2 V and gives the same rise within 0.001 K near the plateau. |
+| CTHJ | At RTHJC = 3 K/W the same fit gives 120.0, 600.0 and 2400.0 µs for 20, 100 and 400 µJ/K. The effective junction storage in the transient port equation is 2·CTHJ. The earlier ignored-CTHJC run gave 99.98 µs at 5 K/W, consistent with an omitted CTHJ of 10 µJ/K. |
+| Case | At ambient 27 °C, the three idle junctions start 0.135 K above their clamped cases. Case clamp currents at 0, 10 and 27 V are +27, +17 and 0 mW. A 5 V, 1 µs case ramp changes the junction by only 0.002524 V during the ramp, followed by exponential relaxation. These measurements put the storage from junction to thermal ground and imply a 1 mW/K case shunt. |
+| Junction and ambient | At zero case voltage, case clamp current is Vtj/5. Subtracting electrical heat and adding Vtj/5 to the junction clamp current leaves 0, 27, 55 and 90 mW at the four ambient settings. The ambient drive enters the junction. At 27 °C ambient the heated/control current ratios at Vtj = 0, 10, 27 and 55 V are 1, 0.906358, 0.772279 and 0.603642. At Vtj = 27 V the ratios at 0, 27, 55 and 90 °C are 0.753683, 0.772279, 0.788827 and 0.806424. The whole gate transfer scales by `(1 + Vtj/Tamb_K)^−3` for MU = −1.5, TCVTH = 0. |
+| Source access heat | At Vg = 4 V, Vd = 2 V and RD = 0.08 Ω, subtracting the idle clamp current gives 4.624636, 4.004519 and 2.826227 W for RS = 0, 0.05 and 0.2 Ω. Each agrees with `Id·Vds − Id²·RS` within 11 nW. The drain access loss contributes to forward channel heating. |
+| RQ | With RS = 0.2 Ω, invert the triode law after subtracting I·RS from the gate drive. At external Vds = 3 V, Vg = 5 V and RQ = 0.9 Ω, Id is 2.525830 A. The inferred field voltage is 2.999983 V while the external-drain to intrinsic-source drop is 2.494834 V. Both gate sweeps identify the external drain–source voltage magnitude as the field variable. |
+| RQ temperature | At Vg = 5 V the RQ = 0 control gives KP from its known RD and intrinsic Vds. Inverting the RQ = 0.6 Ω branch then gives drift multipliers 0.972118, 1.000000, 1.027118 and 1.058825 at 0, 27, 55 and 90 °C. These follow `(T/TNOM)^0.3`. |
+| SUBSHIFT and PHI | Inverting the saturation current and 80 mV softplus gives intercepts 1.960, 2.000 and 2.040 V at nominal temperature for SUBSHIFT = −40, 0 and +40 mV. The 55 °C transfer deck gives 2.012 V with SUBSHIFT = +40 mV and TCVTH = 1 mV/K. All 77 hot drain currents are identical across PHI = 0.45, 0.65 and 0.85 V. |
+| RF noise | At 0, 16.85, 27 and 80 °C, NF and NFmin are 6.020599913 dB, SOpt is zero to rounding, and Rn is 46.875 Ω. Cy₁₁ rises from 5.028322 to 6.501014 × 10⁻²² A²/Hz. The available source noise is k·Tamb per hertz and the physical Norton spectrum scales with absolute temperature. |
+
+The thermal acceptance deck scores 0.001 on V(tj), 0.729 on V(d) and 0.327 on I(Vcc) over 443 points after the hot RD correction. Maximum junction error is 0.348 mK. The worst electrical error occurs at the falling gate edge.
+
+### R9d thermal probe results
+
+All 12 follow-up sweeps pass against the maintainer’s ngspice 44.2 raws. The scores below are the largest normalized errors over all saved signals, biases and three parameter values for each probe. The pass limit is 1.
+
+| Probe | Prediction and measurement | Worst score |
+|---|---|---:|
+| `vdmos_rthca` | With 0.25 W injected at 40 °C, the predicted open-case voltage is 40 + 0.25·RTHCA. The measured voltages are 65, 140 and 290 V at 100, 400 and 1000 K/W. At a 10 V case clamp the corresponding junction voltages are 13.25, 11.75 and 11.45 V and the clamp currents are +0.550, +0.325 and +0.280 A. Both the ambient junction drive and the case shunt scale with 1/RTHCA. | 1.45×10⁻¹¹ |
+| `vdmos_implicit_case` | The maintainer’s syntax check ruled out the predicted three-node implicit boundary. THERMAL needs explicit junction and case terminals. The revised deck compares an open case with node 0. At RTHCA = 1000 K/W and Vg = 2.5 V their junction voltages are 147.930 and 2.094 V, and drain currents are 120.194 and 391.765 mA. At the first bias the open junction is 27.135 V. Starting the coupled solve at the actual body bias removes the spurious 587 V starting solution. | 0.156 |
+| `vdmos_hot_channel` | At a 30 K rise the saturation and triode branches confirm the predicted KP factor `(330.15/300.15)^(2·MU)` for MU = 0, −0.75 and −1.5 and the 30 mV threshold reduction for TCVTH = 1 mV/K. In the access branch, saturation fixes RS at 0.020 Ω. Inverting the triode current at Vg = 4 V gives RD = 0.092289 Ω for all three MU values. The previous 0.080 Ω prediction missed up to 20.02 mA. The corrected RD factor `(Tj/Tamb)^1.5` fits this rise, with a maximum current error of 11.1 nA across the sweeps. | 2.91×10⁻⁶ |
+| `vdmos_diode_heat` | At Vd = −0.8 V, subtracting the idle 0.027 W from the junction clamp gives 21.666397, 0.410366 and 0.109424 W for RB = 0, 0.2 and 1 Ω. These agree with the predicted full terminal power within 3.2 µW at that bias. Excluding I²RB would give 0.357743 and 0.090716 W for the two finite resistances. | 0.0463 |

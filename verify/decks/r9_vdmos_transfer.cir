@@ -1,0 +1,11 @@
+VDMOS transfer and drift resistance at two drain biases
+* Provenance: original Sansho R9 circuit.
+Vd d 0 0.4
+Vg g 0 1.5
+M1 d g 0 power
+.model power vdmos(vto=2 kp=0.8 rd=0.05 rq=0.6 vq=1.4
++ ksubthres=0.08 subshift=0.04 phi=0.65 tcvth=0.001)
+.temp 55
+.dc Vg 1.3 4.3 0.05 Vd 0.4 2.4 2
+.save i(Vd)
+.end

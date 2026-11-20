@@ -4,6 +4,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Add N-port S, Y and Z analysis and two-port noise parameters through netlists, the session API and MCP. A four-temperature matched-pad sweep confirms circuit-temperature noise normalization.
+- Add single-tone and two-tone small-signal distortion with analytic current and charge derivatives for diodes, Gummel–Poon BJTs and level-one MOSFETs.
+- Add the level-six power-law MOS channel and extend VDMOS with subthreshold shape, drain drift resistance, threshold temperature translation and a coupled thermal network using RTHJC, RTHCA and CTHJ. THERMAL requires five nodes and reports E-PARSE-ARITY for missing pins. Correct hot drain resistance and open-case startup against ngspice 44.2. The gate-pulse comparison and all twelve thermal follow-up sweeps pass. CTHJC gives an ignored-parameter warning.
+
 - Reconcile VDMOS channel and capacitance defaults, incremental Statz gate charge and URC diode shunts with cached ngspice 44.2 measurements. Document the static LTRA AC reference and nonphysical bipolar QCO transient.
 - Support diode TCV in V/K with BV(T) = BV − TCV·(T − TNOM). TBV1 and TBV2 produce `W-MODEL-IGNORED`, matching ngspice 44.2 behavior.
 - Add electrical VDMOS and level-one MESFET models with gate charge, small-signal noise and terminal vectors.

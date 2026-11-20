@@ -1,0 +1,15 @@
+Temperature scaling of the drift increment
+* Provenance: original Sansho R9b black-box experiment.
+* sweep: 0 27 55 90
+.param probe=0
+Vd d 0 1
+Vctrl dc 0 1
+Vg g 0 4
+M1 d g 0 p
+M0 dc g 0 ctrl
+.model p vdmos(vto=1 kp=1 rd=0.05 rq=0.6 vq=1.4)
+.model ctrl vdmos(vto=1 kp=1 rd=0.05)
+.temp 0
+.dc Vg 0.5 5 0.05
+.save i(Vd) i(Vctrl)
+.end

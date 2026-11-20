@@ -18,6 +18,7 @@ pub mod bsim4;
 mod bsim_body;
 pub mod controlled;
 pub mod diode;
+pub mod distortion;
 pub mod dual;
 pub mod jfet;
 pub mod junction;
@@ -621,6 +622,26 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
 
     /// Whether `f` and `q` are linear in `x` (enables single-solve Newton).
     fn is_linear(&self) -> bool;
+    /// Collect second- and third-order nonlinear current and charge coefficients.
+    fn distortion(
+        &self,
+        _ctx: &EvalCtx,
+        _bias: &[f64],
+        _out: &mut Vec<distortion::Term>,
+    ) -> Result<(), Diagnostic> {
+        if self.is_linear() {
+            Ok(())
+        } else {
+            Err(Diagnostic::error(
+                "E-ANALYSIS",
+                format!(
+                    "DISTO derivatives unavailable for {} ({})",
+                    self.instance_name(0).unwrap_or("device"),
+                    self.type_name()
+                ),
+            ))
+        }
+    }
     /// Distributed element whose delayed waves require accepted transient samples.
     fn line(&self) -> Option<&line::Line> {
         None
@@ -658,7 +679,11 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
     fn settle(&self, _x: &[f64], _state: &mut [f64]) -> bool {
         false
     }
-    /// Fraction of a proposed step at which a discrete transition occurred.
+    /// Whether this group can locate a transition within a transient step.
+    fn has_crossings(&self) -> bool {
+        false
+    }
+    /// Fraction of a proposed step at which a transition occurred.
     fn crossing(
         &self,
         _old: &[f64],

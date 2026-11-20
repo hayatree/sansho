@@ -154,6 +154,9 @@ impl DeviceGroup for VoltageSources {
             b.g(n, k);
             b.g(k, p);
             b.g(k, n);
+            if self.set.specs[i].port.is_some() {
+                b.g(k, k);
+            }
             b.f(p);
             b.f(n);
             b.f(k);
@@ -162,14 +165,22 @@ impl DeviceGroup for VoltageSources {
         Ok(())
     }
     fn eval(&self, ctx: &EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
+        let mut offset = 0;
         for i in 0..self.len() {
             let cur = x[self.k[i]];
             let v = volt(x, self.set.p[i]) - volt(x, self.set.n[i]);
-            out.g[4 * i..4 * i + 4].copy_from_slice(&[1.0, -1.0, 1.0, -1.0]);
+            out.g[offset..offset + 4].copy_from_slice(&[1.0, -1.0, 1.0, -1.0]);
+            offset += 4;
+            let mut drop = v;
+            if let Some((_, r)) = self.set.specs[i].port {
+                out.g[offset] = -r;
+                offset += 1;
+                drop -= r * cur;
+            }
             if let Some(values) = out.outputs.get_mut(i) {
                 values.extend([("i", cur), ("p", cur * v)]);
             }
-            out.f[3 * i..3 * i + 3].copy_from_slice(&[cur, -cur, v]);
+            out.f[3 * i..3 * i + 3].copy_from_slice(&[cur, -cur, drop]);
             out.b[i] = self.set.value(i, ctx);
         }
     }

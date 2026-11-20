@@ -1,0 +1,11 @@
+Power-law MOS output characteristics across the saturation knee
+* Provenance: original Sansho R9 circuit.
+Vg g 0 1.2
+Vd d 0 0.5
+Vb b 0 -0.2
+M1 d g 0 b power l=2u w=12u
+.model power nmos(level=6 vto=0.6 kc=65u nc=1.45 kv=0.75 nv=0.85
++ gamma=0.35 phi=0.65 lambda0=0.025 sigma=0.015)
+.dc Vd 0 2.4 0.05 Vg 0.9 1.9 0.5
+.save i(Vd)
+.end

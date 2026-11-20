@@ -1,0 +1,16 @@
+Electrical transfer at a fixed junction voltage and variable ambient
+* Provenance: original Sansho R9b black-box experiment.
+* sweep: 0 27 55 90
+.param probe=0
+Vcase tc 0 0
+Vj tj 0 27
+Vd d 0 4
+Vcontrol ctrl 0 4
+Vg g 0 2
+M1 d g 0 tj tc p thermal
+M0 ctrl g 0 p
+.model p vdmos(vto=1.5 kp=0.8 mu=-1.5 rthjc=5 cthj=100u)
+.temp 0
+.dc Vg 1 3.5 0.05
+.save i(Vd) i(Vcontrol) i(Vj) i(Vcase)
+.end

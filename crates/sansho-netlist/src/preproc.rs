@@ -975,6 +975,13 @@ impl Flat<'_> {
                     .collect(),
                 'j' | 'z' | 'u' => (1..4.min(n)).collect(),
                 'm' if toks
+                    .get(6)
+                    .is_some_and(|t| self.defs.models.contains(&t.lower()))
+                    && !toks[4..6].iter().any(Token::is_eq) =>
+                {
+                    (1..6).collect()
+                }
+                'm' if toks
                     .get(4)
                     .is_some_and(|v| self.defs.models.contains(&v.lower()))
                     && !toks

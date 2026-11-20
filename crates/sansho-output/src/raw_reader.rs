@@ -32,6 +32,12 @@ fn err(line: usize, message: impl Into<String>) -> RawError {
 fn kind_of(plot: &str) -> Option<AnalysisKind> {
     let p = plot.to_ascii_lowercase();
     for kind in [
+        AnalysisKind::Sp,
+        AnalysisKind::Harmonic2,
+        AnalysisKind::Harmonic3,
+        AnalysisKind::Sum,
+        AnalysisKind::Difference,
+        AnalysisKind::Intermod3,
         AnalysisKind::Noise,
         AnalysisKind::IntegratedNoise,
         AnalysisKind::Tf,
@@ -43,7 +49,9 @@ fn kind_of(plot: &str) -> Option<AnalysisKind> {
             return Some(kind);
         }
     }
-    if p.starts_with("operating point") {
+    if p.starts_with("s-parameter analysis") {
+        Some(AnalysisKind::Sp)
+    } else if p.starts_with("operating point") {
         Some(AnalysisKind::Op)
     } else if p.starts_with("dc transfer") {
         Some(AnalysisKind::Dc)
@@ -63,9 +71,11 @@ fn quantity_of(t: &str) -> Quantity {
         "charge" => Quantity::Charge,
         "voltage-density" => Quantity::VoltageDensity,
         "current-density" => Quantity::CurrentDensity,
+        "current-noise-power" => Quantity::CurrentNoisePower,
         "resistance" => Quantity::Resistance,
         "admittance" => Quantity::Admittance,
         "notype" => Quantity::Scalar,
+        "decibel" | "db" => Quantity::Decibels,
         "phase" => Quantity::Phase,
         "pole" => Quantity::PoleZero,
         "percent" => Quantity::Percent,
@@ -191,15 +201,17 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
         let Some(kind) = kind_of(&plot) else {
             continue;
         };
-        let has_scale = matches!(
-            kind,
-            AnalysisKind::Ac
-                | AnalysisKind::Dc
-                | AnalysisKind::Tran
-                | AnalysisKind::Noise
-                | AnalysisKind::Four
-        ) || (kind == AnalysisKind::Sens
-            && vars.first().is_some_and(|v| v.name == "frequency"));
+        let has_scale = kind.is_distortion()
+            || matches!(
+                kind,
+                AnalysisKind::Sp
+                    | AnalysisKind::Ac
+                    | AnalysisKind::Dc
+                    | AnalysisKind::Tran
+                    | AnalysisKind::Noise
+                    | AnalysisKind::Four
+            )
+            || (kind == AnalysisKind::Sens && vars.first().is_some_and(|v| v.name == "frequency"));
         let (scale, scale_values, vars) = if has_scale && !vars.is_empty() {
             let s = vars[0].clone();
             let vals = if complex {

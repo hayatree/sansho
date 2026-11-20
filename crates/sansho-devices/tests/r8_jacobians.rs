@@ -299,3 +299,26 @@ fn lossy_line_trial_jacobian_includes_the_current_interval() {
         assert_eq!(slots.b, nominal.b);
     }
 }
+
+#[test]
+fn thermal_vdmos_coupled_jacobian_with_drift_resistance() {
+    use sansho_devices::vdmos::ThermalVdmos;
+    let p = params(&[
+        ("kp", 0.7),
+        ("vto", 1.1),
+        ("rq", 1.2),
+        ("vq", 0.8),
+        ("rd", 0.1),
+        ("rs", 0.2),
+        ("subshift", 0.03),
+        ("ksubthres", 0.07),
+        ("tcvth", 0.001),
+    ]);
+    let dev = Vdmos::new("m1", [Some(0), Some(1), None], &p, &params(&[]), HOT, false).unwrap();
+    let thermal = ThermalVdmos::new(dev, [Some(2), Some(3)], 2., 90., 1e-5).unwrap();
+    check(
+        thermal,
+        &["d", "g", "tj", "tc"],
+        &[1.2, 1.4, 61., 45., 0.9, 0.05, 0.4],
+    );
+}

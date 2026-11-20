@@ -151,6 +151,9 @@ impl DeviceGroup for Switch {
         state[0] = if next { 1. } else { -1. };
         on != next
     }
+    fn has_crossings(&self) -> bool {
+        true
+    }
     fn crossing(&self, old: &[f64], new: &[f64], accepted: &[f64], current: &[f64]) -> Option<f64> {
         let on = self.on(accepted[0]);
         if on == self.on(current[0]) {

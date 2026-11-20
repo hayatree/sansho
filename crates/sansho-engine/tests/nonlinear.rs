@@ -57,6 +57,41 @@ fn diode_tbv_parameters_warn_and_leave_breakdown_unchanged() {
 }
 
 #[test]
+fn vdmos_thermal_parameter_names() {
+    let deck = "idle thermal pins\nM1 0 0 0 tj tc p thermal\nVcase tc 0 10\n.model p vdmos(rthjc=5 rthca=1000 cthj=100u cthjc=1)\n.op\n";
+    let out = run(&parse(deck).unwrap()).unwrap();
+    let warnings: Vec<_> = out
+        .warnings
+        .iter()
+        .filter(|w| w.code == "W-MODEL-IGNORED")
+        .collect();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].message.ends_with("ignored: cthjc"));
+    assert!((op(&out.results, "v(tj)") - 10.135).abs() < 1e-8);
+    assert!((op(&out.results, "i(vcase)") - 0.017).abs() < 1e-8);
+}
+
+#[test]
+fn vdmos_open_case_starts_near_ambient() {
+    let deck = include_str!("../../../verify/probes/r9_vdmos_implicit_case.cir")
+        .replace(".param probe=10", ".param probe=1000");
+    let out = simulate(&deck);
+    let jf = out.analyses[0].real("v(jf)").unwrap();
+    let jc = out.analyses[0].real("v(jc)").unwrap();
+    assert!((jf[0] - 27.13514).abs() < 1e-5);
+    assert!((jc[0] - 0.135001).abs() < 1e-5);
+}
+
+#[test]
+fn vdmos_hot_drain_access_at_fixed_junction_rise() {
+    let out = simulate(include_str!(
+        "../../../verify/probes/r9_vdmos_hot_channel.cir"
+    ));
+    let access = out.analyses[0].real("i(vaccess)").unwrap();
+    assert!((access.last().unwrap() + 1.902550529).abs() < 1e-6);
+}
+
+#[test]
 fn bjt_forward_active_gain() {
     let r = simulate(
         "q\nVCE c 0 5\nIB 0 b 10u\nQ1 c b 0 qm\n.model qm npn is=1e-15 bf=120 br=2\n.op\n",

@@ -1,0 +1,10 @@
+Two-port RLC filter with unequal real port impedances
+* Provenance: original Sansho R9 circuit.
+Vload out 0 dc 0 portnum=2 z0=75
+Vdrive in 0 dc 0 portnum=1 z0=50
+Rseries in mid 12
+Lseries mid out 120n
+Cout out 0 47p
+Rbleed in 0 2k
+.sp dec 4 1meg 100meg
+.end

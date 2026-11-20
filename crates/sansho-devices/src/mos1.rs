@@ -82,6 +82,7 @@ impl Mos1Model {
     pub fn level_index(&self) -> usize {
         match self.channel {
             crate::mos23::Channel::SquareLaw => 0,
+            crate::mos23::Channel::PowerLaw { .. } => 3,
             crate::mos23::Channel::ChargeSheet { .. } => 1,
             crate::mos23::Channel::SemiEmpirical { .. } => 2,
         }
@@ -148,9 +149,12 @@ impl Mos1Model {
         let cox = p.get("tox", if level == 1. { 0. } else { 1e-7 });
         let cox = if cox > 0.0 { EPS_OX / cox } else { 0.0 };
         let u0 = p.opt(&["u0", "uo"]).unwrap_or(600.0);
-        let kp = p
-            .opt(&["kp"])
-            .unwrap_or(if cox > 0.0 { u0 * 1e-4 * cox } else { 2e-5 });
+        let kp = if level == 6. {
+            p.get("kc", 5e-5)
+        } else {
+            p.opt(&["kp"])
+                .unwrap_or(if cox > 0.0 { u0 * 1e-4 * cox } else { 2e-5 })
+        };
         let nsub = if level == 1. { None } else { p.opt(&["nsub"]) };
         let tnom = p.opt(&["tnom"]);
         let nominal = tnom.unwrap_or(default_tnom) + 273.15;
@@ -187,7 +191,7 @@ impl Mos1Model {
             sheet: [rd, rs].map(|r| sheet.filter(|_| r.is_none())),
             width_reduction: if level == 3. { p.get("wd", 0.) } else { 0. },
             mobility: u0 * 1e-4,
-            surface_states: if level == 1. {
+            surface_states: if matches!(level, 1. | 6.) {
                 0.
             } else {
                 crate::CHARGE * 1e4 * p.get("nfs", 0.) / cox
@@ -203,7 +207,13 @@ impl Mos1Model {
             kp,
             gamma,
             phi,
-            lambda: if level == 3. { 0. } else { p.get("lambda", 0.) },
+            lambda: if level == 6. {
+                p.opt(&["lambda0", "lambda"]).unwrap_or(0.)
+            } else if level == 3. {
+                0.
+            } else {
+                p.get("lambda", 0.)
+            },
             rd: rd.unwrap_or(0.),
             rs: rs.unwrap_or(0.),
             cbd: p.opt(&["cbd"]),
@@ -450,6 +460,114 @@ fn meyer(vgst: f64, vds: f64, phi: f64, cox: f64) -> (f64, f64, f64) {
 }
 
 impl DeviceGroup for Mos1s {
+    fn distortion(
+        &self,
+        ctx: &EvalCtx,
+        bias: &[f64],
+        out: &mut Vec<crate::distortion::Term>,
+    ) -> Result<(), Diagnostic> {
+        use crate::distortion::{Jet, capacitance, expand};
+        for (i, m) in self.model.iter().enumerate() {
+            if m.level_index() != 0 {
+                return Err(Diagnostic::error(
+                    "E-ANALYSIS",
+                    format!(
+                        "{}: DISTO derivatives unavailable for {}",
+                        self.names[i],
+                        m.channel.name()
+                    ),
+                ));
+            }
+            let dv = &self.derived[i];
+            let pol = m.polarity;
+            let vt = thermal_voltage(m.temperature.unwrap_or(ctx.temp));
+            let controls = |[d, g, s, b]: [Jet; 4]| {
+                let reverse = (d.value() - s.value()) * pol < 0.;
+                let (source, drain) = if reverse { (d, s) } else { (s, d) };
+                let bs = (b - source) * pol;
+                let root = if bs.value() <= 0. {
+                    (-bs + m.phi).powf(0.5)
+                } else {
+                    let v = -bs / (2. * dv.sqrt_phi) + dv.sqrt_phi;
+                    if v.value() > 0. { v } else { Jet::default() }
+                };
+                (
+                    (g - source) * pol - (root - dv.sqrt_phi) * m.gamma - pol * m.vto,
+                    (drain - source) * pol,
+                    reverse,
+                )
+            };
+            expand(self.int[i], bias, out, |terminals| {
+                let [d, _, s, b] = terminals;
+                let (u, ds, rev) = controls(terminals);
+                let v = if u.value() < ds.value() { u } else { ds };
+                let id = if u.value() > 0. {
+                    (u - v * 0.5)
+                        * v
+                        * (ds * m.lambda + 1.)
+                        * (dv.beta * pol * if rev { -1. } else { 1. })
+                } else {
+                    Jet::default()
+                };
+                let bd = (b - d) * pol;
+                let bs = (b - s) * pol;
+                let ibd = bd.diode(dv.isd, vt) * pol;
+                let ibs = bs.diode(dv.iss, vt) * pol;
+                let junction = |v: Jet, bottom, side| {
+                    (v.depletion(bottom, m.pb, m.mj, m.fc) + v.depletion(side, m.pb, m.mjsw, m.fc))
+                        * pol
+                };
+                let qd = junction(bd, dv.cbd, dv.cbd_sw);
+                let qs = junction(bs, dv.cbs, dv.cbs_sw);
+                (
+                    [id - ibd, Jet::default(), -id - ibs, ibd + ibs],
+                    [-qd, Jet::default(), -qs, qd + qs],
+                )
+            });
+            if dv.cox_total == 0. {
+                continue;
+            }
+            for (k, end) in [2, 0, 3].into_iter().enumerate() {
+                capacitance(
+                    self.int[i],
+                    [self.int[i][1], self.int[i][end]],
+                    bias,
+                    out,
+                    |x| {
+                        let (u, ds, rev) = controls(x);
+                        let c = dv.cox_total;
+                        let zero = Jet::default();
+                        let mut caps = if u.value() <= -m.phi {
+                            [zero, zero, Jet::constant(c)]
+                        } else if u.value() <= -0.5 * m.phi {
+                            [zero, zero, -u * (c / m.phi)]
+                        } else if u.value() <= 0. {
+                            [
+                                (u * (2. / m.phi) + 1.) * (2. * c / 3.),
+                                zero,
+                                -u * (c / m.phi),
+                            ]
+                        } else if u.value() <= ds.value() {
+                            [Jet::constant(2. * c / 3.), zero, zero]
+                        } else {
+                            let a = (u - ds) / (u * 2. - ds);
+                            let b = u / (u * 2. - ds);
+                            [
+                                (-a * a + 1.) * (2. * c / 3.),
+                                (-b * b + 1.) * (2. * c / 3.),
+                                zero,
+                            ]
+                        };
+                        if rev {
+                            caps.swap(0, 1);
+                        }
+                        caps[k]
+                    },
+                );
+            }
+        }
+        Ok(())
+    }
     fn output_charges(&self, i: usize, p: &str) -> Vec<(usize, f64)> {
         if !self.derived[i].has_storage {
             return Vec::new();
@@ -684,6 +802,7 @@ impl Mos1s {
                 vgs_e - vth,
                 vds_e,
                 sarg,
+                vbs_e,
                 m.gamma,
                 dv.beta,
                 m.lambda,

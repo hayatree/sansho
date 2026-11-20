@@ -309,3 +309,17 @@ fn hierarchical_transconductance_waveform() {
     assert_eq!(wave["unit"], "S");
     assert!(wave["y"][0].as_f64().unwrap() > 0.);
 }
+
+#[test]
+fn rf_port_analysis_override_and_waveform() {
+    let mut client = Client::start();
+    let (r,err)=client.tool("simulate",json!({"netlist":"RF port\nV1 p 0 portnum=1\nR1 p 0 100\n.op\n.end\n","analyses":["sp lin 2 1k 2k"]}));
+    assert!(!err && r["job"]["status"] == "ok", "{r}");
+    let (wave, err) = client.tool(
+        "get_waveform",
+        json!({"job_id":r["job"]["job_id"],"signal":"Z_1_1"}),
+    );
+    assert!(!err, "{wave}");
+    assert_eq!(wave["unit"], "Ω");
+    assert!((wave["y"][1].as_f64().unwrap() - 100.).abs() < 1e-12);
+}

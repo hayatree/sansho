@@ -1,0 +1,13 @@
+Partition of source access dissipation at fixed junction voltage
+* Provenance: original Sansho R9b black-box experiment.
+* sweep: 0 0.05 0.2
+.param probe=0
+Vcase tc 0 0
+Vj tj 0 0
+Vd d 0 2
+Vg g 0 3
+M1 d g 0 tj tc p thermal
+.model p vdmos(vto=1.5 kp=0.8 rd=0.08 rs={probe} rthjc=5)
+.dc Vg 0 4 0.1
+.save i(Vd) i(Vj) i(Vcase)
+.end

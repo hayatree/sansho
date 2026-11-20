@@ -11,6 +11,8 @@ with `get_waveform`. The CLI writes all plots to one raw file with `sansho run d
 | `.dc src1 start stop step [src2 start stop step]` | DC solutions versus independent source value, nominal resistor value or ambient temperature (`temp`) on either axis. The outer loop advances src2. Each complete inner sweep follows the previous one in the same plot, with the inner value as scale. |
 | `.ac dec\|oct\|lin n start stop` | Complex node voltages and branch currents versus frequency in Hz. Sources use their AC magnitude and phase. |
 | `.tran step stop [start [maxstep]] [uic]` | Node voltages and branch currents versus time in seconds. The integrator adapts its internal step. |
+| `.sp dec\|oct\|lin n start stop [donoise]` | One complex frequency plot of the scattering, admittance and impedance matrices. |
+| `.disto dec\|oct\|lin n start stop [f2overf1]` | Two harmonic plots for one tone or three intermodulation plots for two tones. |
 | `.noise v(out[,ref]) source dec\|oct\|lin n start stop [interval]` | A noise spectrum and a separate plot of integrated RMS noise. |
 | `.tf outvar source` | DC incremental gain and input and output resistance. |
 | `.sens outvar [ac dec\|oct\|lin n start stop]` | DC or complex AC change in the selected output per unit change in each reported parameter. |
@@ -40,7 +42,7 @@ Select a quantity with `.save @m1[gm]`. A transistor inside subcircuit instance 
 | M, VDMOS | `id ig is ibd gm gds vgs vds cgs cgd`. |
 | O, T | Port voltages `v1 v2` and currents `i1 i2` entering the line. |
 | U | End currents `i1 i2` entering the ladder. |
-| M, levels 1/2/3 | `id is ig ib ibd ibs gm gds gmbs vth von vdsat cgg cgs cgd`. The gate capacitances use the classical Meyer and overlap terms. |
+| M, levels 1/2/3/6 | `id is ig ib ibd ibs gm gds gmbs vth von vdsat cgg cgs cgd`. The gate capacitances use the classical Meyer and overlap terms. |
 | BSIM3 and BSIM4 | `id is ig ib ibd ibs isub gm gds gmbs vth vdsat`. Intrinsic charges `qd qg qs qb` and their 16 signed derivatives `cxy`, where x and y are d, g, s or b. Junction outputs `qbd qbs capbd capbs`. BSIM4 also exposes `igd igs igb igcd igcs`. |
 
 OP and DC sample the converged point. TRAN samples accepted timesteps. Capacitor and junction displacement currents use local charge history. BSIM channel and leakage quantities are quasi-static at the sampled bias. AC returns complex branch and two-terminal small-signal currents for `i` and `current`. Other device quantities give the real bias value across the frequency sweep. BSIM derivatives use the intrinsic channel model. External parasitics can change gain measured at circuit terminals.
@@ -265,3 +267,22 @@ and lumped PZ. The JFET noise generators are RD/RS thermal noise, channel
 thermal noise with conductance 2|gm|/3 and drain-current flicker power
 KF·|Id|^AF/f for a single copy. Levels 2 and 3 reuse the MOS1 thermal and
 flicker conventions with the selected channel's gm.
+
+## RF ports
+
+A voltage source such as `Vrf in ref dc 0 portnum=1 z0=75` supplies a Thévenin port with real series resistance in ohms. Z0 defaults to 50 Ω. Port numbers start at one, are unique and consecutive, and determine row and column order independently of netlist order. The port resistance participates in the DC bias.
+
+At each frequency Sansho factors the terminated AC matrix once. Driving port k with 1 V open circuit gives incident wave amplitude 1/(2√Zₖ). With voltage Vᵣ across the port pins and current Iᵣ entering the network, the reflected wave is (Vᵣ/√Zᵣ − Iᵣ√Zᵣ)/2. Dividing by the incident amplitude gives Sᵣₖ. The dense port solves YV = I and ZI = V give siemens and ohms. A floating network can have a well-defined scattering matrix and a singular impedance conversion. Sansho diagnoses singular conversions.
+
+The complex `SP Analysis` plot starts with frequency and the circuit voltages and branch currents for a 1 V drive on the highest-numbered port. The `#res` voltage is the ideal-source side of each port resistance. The S, Y and Z matrices follow in row order. For example, `S_2_1` is transmission from port 1 to port 2.
+
+With two ports and an optional final 1, adjoint solves project the device noise generators onto the outgoing waves. Applying Y plus the terminating shunt admittances to the matched noise voltages gives the equivalent short-circuit currents. The Hermitian matrix `Cy_i_j` reports their cross spectra E[Iᵢ Iⱼ*] in A²/Hz. The remaining vectors in raw order are `NF` (matched noise figure, dB), `SOpt` (complex optimum source reflection coefficient), `NFmin` (minimum noise figure, dB) and `Rn` (ohms). Zero forward gain gives E-ANALYSIS. Sansho uses kT at circuit temperature as the available source noise power per hertz. The 44.2 matched-pad sweep gives 6.0206 dB for NF and NFmin at 0, 16.85, 27 and 80 °C. The Norton noise power scales with absolute temperature. [Probe descriptions](../verify/probes/README.md#r9b-rf-and-power-mosfet)
+
+
+## Small-signal distortion
+
+A voltage or current source can specify `distof1 magnitude phase` and `distof2 magnitude phase` independently of its DC and AC values. A bare DISTOF keyword with the tone number gives unit peak magnitude and zero phase. Angles are in degrees. Sansho expands currents and charges about the common DC bias, factors the AC matrix at each required product frequency, and solves for the negative nonlinear residual. Third order includes both the cubic response to the fundamentals and quadratic mixing with the second-order solution.
+
+For one tone the result contains the complex peak phasors at 2F1 and 3F1. With 0 < f2overf1 < 1, F2 = fstart × f2overf1 stays fixed and the three output frequencies are F1 + F2, F1 − F2 and 2F1 − F2. Each plot uses the swept fundamental F1 as its horizontal axis. Signals have the usual node-voltage and branch-current names. A load can change the third harmonic through feedback at the second harmonic. The outputs are dimensional voltages and currents.
+
+The diode expansion includes diffusion, leakage, knee roll-off, avalanche and junction charge. Gummel–Poon includes base charge, leakage, forward and reverse transit charge, split collector capacitance and the substrate junction. Bias-dependent base resistance, excess phase and the epitaxial collector give E-ANALYSIS. MOS1 includes the channel, bulk junctions and Meyer capacitances. The nonlinear Meyer displacement current uses the frequency of the differentiated voltage factor in C(x) dV/dt. Other nonlinear device families require their own derivative implementation. At a piecewise model boundary derivatives follow the selected branch. The R9 diode and BJT distortion decks pass the cached ngspice 44.2 comparison.

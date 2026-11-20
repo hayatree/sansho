@@ -18,7 +18,7 @@ use std::{collections::BTreeMap, f64::consts::TAU};
 pub(super) fn error(msg: impl Into<String>) -> Diagnostic {
     Diagnostic::error("E-ANALYSIS", msg)
 }
-fn solver(e: SolverError) -> Diagnostic {
+pub(super) fn solver(e: SolverError) -> Diagnostic {
     Diagnostic::error("E-SOLVE-SINGULAR", e.to_string())
 }
 pub(super) fn var(name: impl Into<String>, quantity: Quantity) -> Variable {
@@ -27,7 +27,7 @@ pub(super) fn var(name: impl Into<String>, quantity: Quantity) -> Variable {
         quantity,
     }
 }
-fn node(c: &Circuit, s: &str) -> Result<Node, Diagnostic> {
+pub(super) fn node(c: &Circuit, s: &str) -> Result<Node, Diagnostic> {
     if s == "0" {
         return Ok(None);
     }
@@ -91,7 +91,7 @@ fn inject<T: From<f64> + Copy + std::ops::AddAssign>(x: &mut [T], [p, n]: Port) 
         x[i] += (-1.0).into()
     }
 }
-fn read<T: Default + Copy + std::ops::Sub<Output = T>>(x: &[T], [p, n]: Port) -> T {
+pub(super) fn read<T: Default + Copy + std::ops::Sub<Output = T>>(x: &[T], [p, n]: Port) -> T {
     p.map_or(T::default(), |i| x[i]) - n.map_or(T::default(), |i| x[i])
 }
 fn dc_lu(c: &Circuit, w: &Workspace) -> Result<SerialLu<f64>, Diagnostic> {

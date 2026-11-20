@@ -752,7 +752,12 @@ pub(crate) fn compile_cached(
                 dc.union(p, n);
                 dc.union(n, b);
             }
-            ElementKind::Vdmos { d, s, .. } => {
+            ElementKind::Vdmos {
+                d, s, thermal_pins, ..
+            } => {
+                if let Some([tj, tc]) = thermal_pins {
+                    dc.union(g_id(node(tj)), g_id(node(tc)));
+                }
                 dc.union(g_id(node(d)), g_id(node(s)));
             }
             ElementKind::Mosfet { d, s, b, .. } => {
@@ -800,6 +805,9 @@ pub(crate) fn compile_cached(
                     dc.union(p, n);
                     dc.union(a, b);
                 }
+            }
+            ElementKind::VoltageSource { source, .. } if source.port.is_some() => {
+                dc.union(p, n);
             }
             ElementKind::Inductor { .. }
             | ElementKind::Polynomial { voltage: true, .. }
@@ -908,7 +916,10 @@ pub(crate) fn compile_cached(
                     let ElementKind::VoltageSource { p, n, source } = &e.kind else {
                         return None;
                     };
-                    if source.tran.is_some() || swept.contains(e.name.as_str()) {
+                    if source.port.is_some()
+                        || source.tran.is_some()
+                        || swept.contains(e.name.as_str())
+                    {
                         return None;
                     }
                     let dc = sansho_devices::dc_value(source);
@@ -1211,6 +1222,7 @@ fn prepare_va_kernels(
         let mut range = [0.0f64; 2];
         for e in &nl.elements {
             if let ElementKind::VoltageSource { p, n, source } = &e.kind
+                && source.port.is_none()
                 && source.tran.is_none()
             {
                 let rail = match (node_index.get(p), node_index.get(n)) {
@@ -1328,7 +1340,7 @@ fn native_groups<'a>(
     let mut h_src = Chunked::<Ccvs>::new(CHUNK_LINEAR);
     let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
     let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
-    let mut classic_mos = [1, 2, 3].map(|_| Chunked::<Mos1s>::new(CHUNK_NONLINEAR));
+    let mut classic_mos = [1, 2, 3, 6].map(|_| Chunked::<Mos1s>::new(CHUNK_NONLINEAR));
     let mut bsim3 = Chunked::<Bsim3s>::new(CHUNK_NONLINEAR);
     let mut compact_models = HashMap::<_, PreparedMos>::new();
     let mut bsim4 = Chunked::<Bsim4s>::new(CHUNK_NONLINEAR);
@@ -1466,6 +1478,7 @@ fn native_groups<'a>(
                 nonlinear_count += 1;
             }
             ElementKind::Vdmos {
+                thermal_pins,
                 d,
                 g,
                 s,
@@ -1485,16 +1498,37 @@ fn native_groups<'a>(
                 };
                 let inst = ModelParams::new(params);
                 match instance_temperature(&inst, opts, p.opt(&["tnom"])).and_then(|t| {
-                    sansho_devices::vdmos::Vdmos::new(
+                    let device = sansho_devices::vdmos::Vdmos::new(
                         &e.name,
                         [node(d), node(g), node(s)],
                         &p,
                         &inst,
                         t,
                         *off,
-                    )
+                    )?;
+                    let rthjc = p.get("rthjc", 1.);
+                    let rthca = p.get("rthca", 1000.);
+                    let cthj = p.get("cthj", 10e-6);
+                    let thermal = inst.get("thermal", 0.) != 0.;
+                    let device: Box<dyn DeviceGroup> = if let Some(pins) = thermal_pins {
+                        Box::new(sansho_devices::vdmos::ThermalVdmos::new(
+                            device,
+                            pins.each_ref().map(|s| node(s)),
+                            rthjc,
+                            rthca,
+                            cthj,
+                        )?)
+                    } else if thermal {
+                        return Err(Diagnostic::error(
+                            "E-PARSE-ARITY",
+                            format!("thermal VDMOS `{}` requires exactly five nodes (drain, gate, source, junction, case)", e.name),
+                        ));
+                    } else {
+                        Box::new(device)
+                    };
+                    Ok(device)
                 }) {
-                    Ok(dev) => controlled.push(Box::new(dev)),
+                    Ok(dev) => controlled.push(dev),
                     Err(err) => errors.push(err.with_span(e.span)),
                 }
                 ModelCache::warn_ignored(card, &p.unused(), diags);
@@ -2267,7 +2301,7 @@ impl<'a> ModelCache<'a> {
         let params = ModelParams::new(&card.params);
         let level = params.get("level", 1.0);
         if !(level == 1.
-            || matches!(card.kind.as_str(), "nmos" | "pmos") && matches!(level, 2. | 3.))
+            || matches!(card.kind.as_str(), "nmos" | "pmos") && matches!(level, 2. | 3. | 6.))
         {
             let mut d = Diagnostic::error(
                 "E-ELAB-MODEL",
@@ -2275,7 +2309,7 @@ impl<'a> ModelCache<'a> {
             )
             .with_span(card.span);
             if matches!(card.kind.as_str(), "nmos" | "pmos") {
-                d = d.with_note("built-in MOSFET levels are 1, 2, 3, 8, 49 and 54");
+                d = d.with_note("built-in MOSFET levels are 1, 2, 3, 6, 8, 49 and 54");
             }
             errors.push(d);
             return None;

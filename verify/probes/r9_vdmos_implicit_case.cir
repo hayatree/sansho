@@ -1,0 +1,13 @@
+Open and grounded case boundaries under channel heating
+* Provenance: original Sansho R9c black-box experiment.
+* sweep: 10 100 1000
+.param probe=10
+Vg g 0 2
+Vf df 0 1
+Vc dc 0 1
+Mf df g 0 jf cf p thermal
+Mc dc g 0 jc 0 p thermal
+.model p vdmos(vto=1.5 kp=0.8 rthjc=5 rthca={probe})
+.dc Vg 1 2.5 0.05
+.save i(Vf) i(Vc) v(jf) v(cf) v(jc)
+.end
