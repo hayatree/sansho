@@ -341,6 +341,49 @@ pub fn write_analysis(a: &AnalysisCard) -> String {
     }
 }
 
+/// Format a model card with its explicit parameters.
+pub fn write_model(m: &crate::ModelCard) -> String {
+    let mut l = format!(".model {} {} (", m.name, m.kind);
+    let ps: Vec<String> = m
+        .params
+        .iter()
+        .map(|(k, v)| format!("{k}={}", num(*v)))
+        .collect();
+    if let Some(v) = &m.version {
+        let _ = write!(l, "version={v} ");
+    }
+    if let Some(t) = &m.table {
+        let key = if m.kind == "d_source" {
+            "input_file"
+        } else {
+            "file"
+        };
+        let _ = write!(l, "{key}=\"{}\" ", t.filename);
+    }
+    l += &ps.join(" ");
+    for (k, values) in &m.arrays {
+        if m.kind == "d_lut" && k == "table_values" {
+            let table: String = values
+                .iter()
+                .map(|&v| {
+                    if v == 0. {
+                        '0'
+                    } else if v == 1. {
+                        '1'
+                    } else {
+                        'U'
+                    }
+                })
+                .collect();
+            let _ = write!(l, " {k}=\"{table}\"");
+        } else {
+            let _ = write!(l, " {k}=[{}]", list(values));
+        }
+    }
+    l += ")";
+    l
+}
+
 /// Write a complete deck (title line through `.end`).
 pub fn write(nl: &Netlist) -> String {
     let mut out = String::new();
@@ -620,24 +663,7 @@ pub fn write(nl: &Netlist) -> String {
         let _ = writeln!(out, "{l}");
     }
     for m in &nl.models {
-        let mut l = format!(".model {} {} (", m.name, m.kind);
-        let ps: Vec<String> = m
-            .params
-            .iter()
-            .map(|(k, v)| format!("{k}={}", num(*v)))
-            .collect();
-        if let Some(v) = &m.version {
-            let _ = write!(l, "version={v} ");
-        }
-        if let Some(t) = &m.table {
-            let _ = write!(l, "file=\"{}\" ", t.filename);
-        }
-        l += &ps.join(" ");
-        for (k, values) in &m.arrays {
-            let _ = write!(l, " {k}=[{}]", list(values));
-        }
-        l += ")";
-        let _ = writeln!(out, "{l}");
+        let _ = writeln!(out, "{}", write_model(m));
     }
     if !nl.options.is_empty() {
         let mut l = String::from(".options");

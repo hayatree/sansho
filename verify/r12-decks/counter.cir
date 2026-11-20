@@ -1,0 +1,20 @@
+Two-bit ripple counter
+* sansho-verify: known-difference Fourth coarse-grid ADC sample is 10 ps early, shifting both DAC ramps by 50 mV. All digital histories agree at tmax=20p (verify/probes/README.md).
+* Provenance: original Sansho circuit.
+Vclk in 0 PULSE(0 1 4n 0.2n 0.2n 4n 10n)
+Aclk [in] [clk] adc
+Ap high pull
+Abit0 high clk NULL NULL q0 carry toggle
+Abit1 qb1 carry NULL NULL q1 qb1 flip
+Aout [q0 q1] [lo hi] dac
+R0 lo 0 10k
+R1 hi 0 10k
+.model adc adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0.1n fall_delay=0.1n)
+.model pull d_pullup
+.model toggle d_tff(ic=0 clk_delay=0.3n rise_delay=0.1n fall_delay=0.1n)
+.model flip d_dff(ic=0 clk_delay=0.3n rise_delay=0.1n fall_delay=0.1n)
+.model dac dac_bridge(out_low=0 out_high=1 t_rise=0.2n t_fall=0.2n)
+.tran 0.5n 50n
+.save v(lo) v(hi)
+.print tran v(lo) v(hi)
+.end

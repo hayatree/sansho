@@ -51,6 +51,24 @@ pub(crate) fn solve_op(
     code: &'static str,
     analysis: &str,
 ) -> Result<(), Diagnostic> {
+    for _ in 0..crate::digital::DELTA_LIMIT {
+        solve_analog_op(ckt, ctx, x, ws, opts, code, analysis)?;
+        if !ws.events.settle(&ckt.digital, x, 0., true)? {
+            return Ok(());
+        }
+    }
+    Err(crate::digital::oscillation(0.))
+}
+
+fn solve_analog_op(
+    ckt: &Circuit,
+    ctx: &EvalCtx,
+    x: &mut [f64],
+    ws: &mut Workspace,
+    opts: &SimOptions,
+    code: &'static str,
+    analysis: &str,
+) -> Result<(), Diagnostic> {
     // `.nodeset`: solve with the nodes held at their values, then release them.
     if !ckt.nodesets.is_empty() && ws.clamp.is_empty() {
         ws.clamp = ckt.nodesets.clone();
@@ -265,9 +283,12 @@ pub(crate) fn op(
     let mut probes = crate::probes::Probes::bind(ckt, nl, opts.savecurrents)?;
     probes.sample(ckt, &ws, &make_ctx(opts, Mode::Dc, NO_TRAN), &x, &[])?;
     let mut vars = variables(ckt);
+    let mut events = Default::default();
+    ws.events.record(&ckt.digital, 0., &mut events);
     let mut cols = x.into_iter().map(|v| vec![v]).collect();
     probes.finish(&mut vars, &mut cols);
     Ok(AnalysisResult {
+        events,
         kind: AnalysisKind::Op,
         scale: None,
         scale_values: Vec::new(),
@@ -320,6 +341,7 @@ pub(crate) fn dc_sweep(
     let mut ws = Workspace::new(ckt);
     let n = ckt.dim();
     let mut x = vec![0.0; n];
+    let mut events = Default::default();
     let mut scale = Vec::new();
     let mut cols = vec![Vec::new(); n];
     for column in std::iter::once(&mut scale).chain(&mut cols) {
@@ -387,7 +409,8 @@ pub(crate) fn dc_sweep(
             }
         }
         // Continue from the previous point; fall back to a full operating-point solve.
-        let continued = k % row > 0
+        let continued = ckt.digital.names.is_empty()
+            && k % row > 0
             && newton(
                 ckt,
                 &ctx,
@@ -406,6 +429,7 @@ pub(crate) fn dc_sweep(
             return Err(d.with_note(format!("at {source} = {v:e}, outer value {outer_value:?}")));
         }
         probes.sample(ckt, &ws, &ctx, &x, &[])?;
+        ws.events.record(&ckt.digital, v, &mut events);
         scale.push(v);
         for (c, &xv) in cols.iter_mut().zip(&x) {
             c.push(xv);
@@ -422,6 +446,7 @@ pub(crate) fn dc_sweep(
     };
     Ok((
         AnalysisResult {
+            events,
             kind: AnalysisKind::Dc,
             scale: Some(Variable {
                 name: if temperature {
@@ -683,6 +708,7 @@ pub(crate) fn ac(
     let mut vars = variables(ckt);
     probes.ac_columns(ckt, &freqs, &mut vars, &mut cols)?;
     Ok(AnalysisResult {
+        events: Default::default(),
         kind: AnalysisKind::Ac,
         scale: Some(Variable {
             name: "frequency".into(),
@@ -1028,6 +1054,7 @@ pub(crate) fn tran(
             }
         }
         ws.clear_state();
+        ws.events.initialize_uic(&ckt.digital, &mut x)?;
     } else {
         // `.ic` holds nodes at their value while the operating point is solved.
         ws.clamp = ckt.ics.clone();
@@ -1178,6 +1205,10 @@ pub(crate) fn tran(
     if tstart <= eps {
         probes.sample(ckt, &ws, &eval_ctx, &x, &qdot)?;
     }
+    let mut events = Default::default();
+    if tstart <= eps {
+        ws.events.record(&ckt.digital, 0., &mut events);
+    }
     record(0.0, &x, &mut times, &mut cols);
 
     let mut accepted_steps = 0;
@@ -1198,14 +1229,20 @@ pub(crate) fn tran(
         .iter()
         .filter(|g| g.has_random_waveform())
         .collect();
+    let mixed = !ckt.digital.names.is_empty();
+    let mut accepted_events = ws.events.clone();
     while t < tstop - eps {
         let begin = profile.then(std::time::Instant::now);
         attempted_steps += 1;
+        if mixed {
+            ws.events.clone_from(&accepted_events);
+        }
         let fixed_bp = bps.get(bp_idx).copied().unwrap_or(tstop);
         let next_bp = random
             .iter()
             .map(|g| g.next_random_breakpoint(t + eps))
-            .fold(fixed_bp, f64::min);
+            .fold(fixed_bp, f64::min)
+            .min(ws.events.next(&ckt.digital, t));
         while let Some((_, cap)) = step_limits.next_if(|&(start, _)| start <= t + eps) {
             hmax = hmax.min(cap);
         }
@@ -1215,7 +1252,7 @@ pub(crate) fn tran(
         let proposed_h = h;
         if t + h >= next_bp - eps {
             h = next_bp - t;
-        } else if !has_storage && t + 2.0 * h > next_bp {
+        } else if !mixed && !has_storage && t + 2.0 * h > next_bp {
             // Balance the last two intervals on purely algebraic circuits.
             h = 0.5 * (next_bp - t);
         }
@@ -1289,6 +1326,23 @@ pub(crate) fn tran(
         {
             x_new.copy_from_slice(&x);
             result = solve(&mut x_new, &mut ws);
+        }
+        // Sample the ADC at this trial solution. Rejected trials discard their events.
+        let mut dac_jump = false;
+        if mixed && result.is_ok() {
+            for iteration in 0..crate::digital::DELTA_LIMIT {
+                if !ws.events.settle(&ckt.digital, &x_new, ctx.time, false)? {
+                    break;
+                }
+                dac_jump = true;
+                if iteration + 1 == crate::digital::DELTA_LIMIT {
+                    return Err(crate::digital::oscillation(ctx.time));
+                }
+                result = solve(&mut x_new, &mut ws);
+                if result.is_err() {
+                    break;
+                }
+            }
         }
         if let Err(e) = result {
             h /= 8.0;
@@ -1369,13 +1423,13 @@ pub(crate) fn tran(
                 })
                 .reduce(f64::min);
             relaxation.map_or(0.0625, |tau| tau.max(hmin).min(h) / h)
-        } else if has_storage && accepted_steps == 0 {
+        } else if (has_storage || mixed) && accepted_steps == 0 {
             // No curvature estimate yet. Acquire a second sample at the initial step.
             1.0
         } else {
             2.0
         };
-        if hist.len() >= 2 {
+        if hist.len() >= 2 && !dac_jump {
             // Use the conservative first-order estimate while the third divided
             // difference is unavailable at a trapezoidal restart.
             let factor = 0.9 * r.max(1e-12).powf(-1.0 / (error_order as f64 + 1.0));
@@ -1398,18 +1452,21 @@ pub(crate) fn tran(
             }
             grow = factor.clamp(0.5, 2.0);
         }
+        if mixed {
+            accepted_events.clone_from(&ws.events);
+        }
         accepted_steps += 1;
         // Accept.
         t += h;
         let hit_bp = (t - next_bp).abs() <= eps;
         if hit_bp {
             t = next_bp;
-            if (t - fixed_bp).abs() <= eps {
+            if fixed_bp == next_bp {
                 bp_idx += 1;
             }
             hist.clear();
         }
-        if crossing.is_some() {
+        if crossing.is_some() || dac_jump {
             hist.clear();
             grow = grow.min(1.);
         }
@@ -1437,6 +1494,7 @@ pub(crate) fn tran(
             control += t.elapsed();
         }
         if t >= tstart - eps {
+            ws.events.record(&ckt.digital, t, &mut events);
             probes.sample(ckt, &ws, &eval_ctx, &x, &qdot)?;
         }
         record(t, &x, &mut times, &mut cols);
@@ -1472,6 +1530,7 @@ pub(crate) fn tran(
     };
     Ok((
         AnalysisResult {
+            events,
             kind: AnalysisKind::Tran,
             scale: Some(Variable {
                 name: "time".into(),

@@ -1,0 +1,44 @@
+Initial Q and complementary Q with static data and delayed enable
+* Provenance: original Sansho R12b black-box experiment.
+* sweep: 0 1 2
+.param probe=0
+Vin in 0 PULSE(0 1 4n 0.2n 0.2n 3n 20n)
+Aa [in] [clk] adc
+Ap hi up
+Ad hi clk NULL NULL q qb flip
+Ai hi clk NULL NULL qi qib ff
+At hi clk NULL NULL tdef NULL tff
+Ald hi clk NULL NULL ldef NULL dl
+Al hi clk NULL NULL l lb latch
+Ao hi hi NULL NULL openq openqb latch
+As hi clk hi NULL NULL sr srb srmodel
+Am loop loop buf
+.model adc adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0 fall_delay=0)
+.model flip d_dff
+.model ff d_dff(ic={probe})
+.model tff d_tff
+.model dl d_dlatch
+.model latch d_dlatch(ic={probe})
+.model srmodel d_srlatch
+.model up d_pullup
+.model buf d_buffer
+.control
+tran 0.1n 12n
+eprint clk
+eprint q
+eprint qb
+eprint qi
+eprint qib
+eprint tdef
+eprint ldef
+eprint l
+eprint lb
+eprint openq
+eprint openqb
+eprint sr
+eprint srb
+eprint loop
+showmod
+quit
+.endc
+.end

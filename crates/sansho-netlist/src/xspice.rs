@@ -16,7 +16,7 @@ pub struct CodePort {
 
 impl CodePort {
     pub fn differential(&self) -> bool {
-        self.modifier.ends_with('d')
+        matches!(self.modifier.as_str(), "vd" | "id" | "gd" | "hd")
     }
 
     pub fn text(&self) -> String {
@@ -137,12 +137,48 @@ pub fn analog_model(kind: &str) -> bool {
     )
 }
 
+/// Event-domain families. The model signature determines each port's default domain.
+pub fn digital_model(kind: &str) -> bool {
+    matches!(
+        kind,
+        "adc_bridge"
+            | "dac_bridge"
+            | "d_osc"
+            | "d_buffer"
+            | "d_inverter"
+            | "d_and"
+            | "d_nand"
+            | "d_or"
+            | "d_nor"
+            | "d_xor"
+            | "d_xnor"
+            | "d_tristate"
+            | "d_pullup"
+            | "d_pulldown"
+            | "d_open_c"
+            | "d_open_e"
+            | "d_dff"
+            | "d_jkff"
+            | "d_tff"
+            | "d_srff"
+            | "d_dlatch"
+            | "d_srlatch"
+            | "d_fdiv"
+            | "d_source"
+            | "d_lut"
+    )
+}
+
+pub(crate) fn code_model(kind: &str) -> bool {
+    analog_model(kind) || digital_model(kind)
+}
+
 impl ModelCard {
     /// Check required code-model parameters in their declared scalar, array or file form.
     pub fn check_code_model_params(&self) -> Result<(), Diagnostic> {
         let (scalars, arrays): (&[&str], &[&str]) = match self.kind.as_str() {
             "d_dt" | "int" => (&["out_lower_limit", "out_upper_limit"], &[]),
-            "sine" | "triangle" | "square" => (&[], &["cntl_array", "freq_array"]),
+            "sine" | "triangle" | "square" | "d_osc" => (&[], &["cntl_array", "freq_array"]),
             "pwl" => (&[], &["x_array", "y_array"]),
             "s_xfer" => (&[], &["num_coeff", "den_coeff"]),
             _ => (&[], &[]),
@@ -157,6 +193,12 @@ impl ModelCard {
             })
             .copied()
             .or_else(|| (self.kind == "filesource" && self.table.is_none()).then_some("file"));
+        let missing = missing
+            .or_else(|| (self.kind == "d_source" && self.table.is_none()).then_some("input_file"))
+            .or_else(|| {
+                (self.kind == "d_lut" && self.arrays.iter().all(|(k, _)| k != "table_values"))
+                    .then_some("table_values")
+            });
         if let Some(key) = missing {
             return Err(Diagnostic::error(
                 "E-ELAB-PARAM",
@@ -183,6 +225,7 @@ impl SourceTable {
         &mut self,
         loader: &dyn crate::SourceLoader,
         from: Option<&str>,
+        digital: bool,
     ) -> Result<(), String> {
         let path = std::path::Path::new(&self.filename);
         if path.components().any(|c| {
@@ -206,7 +249,13 @@ impl SourceTable {
             let row: Vec<f64> = data
                 .split(|c: char| c.is_whitespace() || c == ',')
                 .filter(|s| !s.is_empty())
-                .map(|s| {
+                .enumerate()
+                .map(|(col, s)| {
+                    if digital && col > 0 {
+                        return digital_code(s).map(f64::from).ok_or_else(|| {
+                            format!("{}:{}: invalid digital value {s}", self.filename, i + 1)
+                        });
+                    }
                     crate::parse_number(s)
                         .filter(|v| v.is_finite())
                         .ok_or_else(|| format!("{}:{}: invalid sample", self.filename, i + 1))
@@ -226,4 +275,23 @@ impl SourceTable {
         }
         Ok(())
     }
+}
+
+/// Stable packed state used in a digital stimulus file (level + 3 × strength).
+pub fn digital_code(text: &str) -> Option<u8> {
+    let mut bytes = text.bytes().map(|c| c.to_ascii_lowercase());
+    let level = match bytes.next()? {
+        b'0' => 0,
+        b'1' => 1,
+        b'u' => 2,
+        _ => return None,
+    };
+    let drive = match bytes.next() {
+        Some(b's') | None => 0,
+        Some(b'r') => 1,
+        Some(b'z') => 2,
+        Some(b'u') => 3,
+        _ => return None,
+    };
+    bytes.next().is_none().then_some(level + 3 * drive)
 }

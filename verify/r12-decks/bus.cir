@@ -1,0 +1,21 @@
+Two tristate drivers and a resistive pullup
+* Provenance: original Sansho circuit.
+Vena a 0 PULSE(0 1 4n 0.2n 0.2n 12n 40n)
+Venb b 0 PULSE(0 1 10n 0.2n 0.2n 12n 40n)
+Aen [a b] [ea eb] adc
+Azero zero down
+Aone one up
+Alo zero ea bus tri
+Ahi one eb bus tri
+Abias bus up
+Aout [bus] [out] dac
+Rload out 0 10k
+.model up d_pullup
+.model down d_pulldown
+.model adc adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0 fall_delay=0)
+.model tri d_tristate(delay=0.5n)
+.model dac dac_bridge(out_low=0 out_high=1 out_undef=0.4 t_rise=0.2n t_fall=0.2n)
+.tran 0.5n 28n
+.save v(out)
+.print tran v(out)
+.end

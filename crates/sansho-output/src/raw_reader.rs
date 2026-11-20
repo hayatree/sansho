@@ -243,6 +243,7 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
             }
         };
         results.analyses.push(AnalysisResult {
+            events: Default::default(),
             kind,
             scale,
             scale_values,
@@ -266,6 +267,7 @@ mod tests {
             title: "t".into(),
             analyses: vec![
                 AnalysisResult {
+                    events: Default::default(),
                     kind: AnalysisKind::Op,
                     scale: None,
                     scale_values: vec![],
@@ -278,6 +280,7 @@ mod tests {
                     },
                 },
                 AnalysisResult {
+                    events: Default::default(),
                     kind: AnalysisKind::Ac,
                     scale: Some(Variable {
                         name: "frequency".into(),

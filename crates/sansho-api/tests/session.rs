@@ -348,3 +348,20 @@ fn noise_override_reports_ranked_contributors_and_reproducible_hash() {
     }
     assert_eq!(hashes[0], hashes[1]);
 }
+
+#[test]
+fn digital_waveform_query_preserves_strength() {
+    let mut s = session(2);
+    let c = s
+        .load("bus\nAone bus pull\n.model pull d_pullup\n.op")
+        .unwrap();
+    let j = s.simulate(&c.circuit_id, None).unwrap();
+    assert_eq!(j.analyses[0].digital_nodes, ["bus"]);
+    let wave = s
+        .waveform(&j.job_id, "bus", None, Reduce::Auto, None, None, 100)
+        .unwrap();
+    assert_eq!(wave.unit, "digital");
+    assert_eq!(wave.symbols, ["1r"]);
+    assert_eq!(wave.x, [0.]);
+    assert_eq!(wave.y, [4.]);
+}

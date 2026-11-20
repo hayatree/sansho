@@ -26,6 +26,8 @@ or a total count for a linear sweep.
 
 An outer TEMP axis rebinds temperature-dependent devices once per inner curve. An inner TEMP axis rebinds at every point and reapplies the outer source bias. Netlist parameter expressions retain their preprocessing-time values.
 
+OP, DC and transient plots also retain resolved digital changes. The analog time grid includes scheduled events and DAC ramp endpoints. [Event-domain outputs](xspice.md#event-timing-and-output)
+
 ## Device output vectors
 
 Select a quantity with `.save @m1[gm]`. A transistor inside subcircuit instance X1 has a name such as `@m.x1.m1[gm]`. The same names work in measurements, print cards, session results, JSON and MCP `get_waveform`. A misspelled device or field gives E-OUTPUT-VECTOR. Print and measure cards can use signals excluded by an explicit .save list.

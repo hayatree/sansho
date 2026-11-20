@@ -385,3 +385,33 @@ fn probe_substitution_and_angle_units() {
     success(&out);
     assert_eq!(values(&out), [0.5, 1000., 90., 1., 45.]);
 }
+
+#[test]
+fn digital_control_lists_nodes_and_prints_strengths() {
+    let o = script(
+        "Ap bus pull\n.model pull d_pullup",
+        "op\nedisplay\neprint bus",
+        &Default::default(),
+    );
+    success(&o);
+    assert!(o.transcript.lines.iter().any(|s| s == "bus digital"));
+    assert!(o.transcript.lines.iter().any(|s| s == "0e0 bus 1r"));
+}
+
+#[test]
+fn showmod_lists_current_model_parameters_without_an_analysis() {
+    let out = script(
+        ".model clock d_osc(cntl_array=[0 2] freq_array=[1 3] duty_cycle=0.5)",
+        "altermod clock duty_cycle=0.25\nshowmod\necho done",
+        &Default::default(),
+    );
+    success(&out);
+    assert_eq!(
+        out.transcript.lines,
+        [
+            ".model clock d_osc (duty_cycle=2.5e-1 cntl_array=[0 2] freq_array=[1 3])",
+            "done",
+        ]
+    );
+    assert!(out.results.analyses.is_empty());
+}

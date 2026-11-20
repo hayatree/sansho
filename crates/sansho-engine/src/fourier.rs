@@ -95,6 +95,7 @@ pub fn fourier(
         }
     }
     Ok(AnalysisResult {
+        events: Default::default(),
         kind: AnalysisKind::Four,
         scale: Some(var("frequency", Quantity::Frequency)),
         scale_values: (0..HARMONICS).map(|h| frequency * h as f64).collect(),

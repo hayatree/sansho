@@ -796,10 +796,26 @@ impl Flat<'_> {
 
     /// Substitute all values of a line: expression tokens anywhere, and `key = value`.
     fn substitute(&mut self, tokens: &[Token], scope: &Scope<'_>) -> Vec<Token> {
+        let literal_key = match tokens {
+            [card, _, kind, ..] if card.text.eq_ignore_ascii_case(".model") => {
+                match kind.lower().as_str() {
+                    "d_lut" => Some("table_values"),
+                    "d_source" => Some("input_file"),
+                    "filesource" => Some("file"),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
         let mut out = Vec::with_capacity(tokens.len());
         for (i, t) in tokens.iter().enumerate() {
             let after_eq = i > 0 && tokens[i - 1].is_eq();
-            out.push(if after_eq {
+            let literal = after_eq
+                && i >= 2
+                && literal_key.is_some_and(|k| tokens[i - 2].text.eq_ignore_ascii_case(k));
+            out.push(if literal {
+                t.clone()
+            } else if after_eq {
                 self.kv_value(t, scope)
             } else {
                 self.value(t, scope)
@@ -950,7 +966,7 @@ impl Flat<'_> {
                         let analog = line
                             .tokens
                             .get(2)
-                            .is_some_and(|t| crate::analog_model(&t.lower()));
+                            .is_some_and(|t| crate::xspice::code_model(&t.lower()));
                         let deferred = !analog
                             && line.tokens.get(3..).is_some_and(|tail| {
                                 tail.chunks(3).any(|kv| {

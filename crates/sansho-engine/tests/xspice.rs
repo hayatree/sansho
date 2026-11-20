@@ -142,6 +142,9 @@ fn required_parameters_name_the_model_and_missing_field() {
         ("pwl", &["x_array=[0 1]", "y_array=[0 1]"]),
         ("s_xfer", &["num_coeff=[1]", "den_coeff=[1 1]"]),
         ("filesource", &["file=\"wave.dat\""]),
+        ("d_source", &["input_file=\"bits.dat\""]),
+        ("d_lut", &["table_values=\"10\""]),
+        ("d_osc", &["cntl_array=[0 1]", "freq_array=[1 2]"]),
     ] {
         for (i, field) in fields.iter().enumerate() {
             let params = fields
@@ -196,11 +199,7 @@ fn local_model_arrays_roundtrip_and_failures() {
     let again = parse(&text).unwrap();
     assert_eq!(nl.elements[0].kind, again.elements[0].kind);
     assert!(text.contains("x1.out"));
-    for kind in [
-        "adc_bridge(in_low=0.1)",
-        "d_and(rise_delay=1n)",
-        "d_state(state_file=\"abc\")",
-    ] {
+    for kind in ["d_unsupported", "d_state(state_file=\"abc\")"] {
         let ds = parse(&format!("digital\nA1 [a b] out m\n.model m {kind}")).unwrap_err();
         assert!(ds.iter().any(|d|d.code=="E-XSPICE-MODEL" && d.message.contains("unsupported code model")));
     }

@@ -143,6 +143,7 @@ impl Plot {
             }
         };
         Ok(AnalysisResult {
+            events: a.map(|plot| plot.events.clone()).unwrap_or_default(),
             kind: a.map_or(AnalysisKind::Vectors, |a| a.kind),
             scale: scale.cloned(),
             scale_values: a.map(|a| a.scale_values.clone()).unwrap_or_default(),

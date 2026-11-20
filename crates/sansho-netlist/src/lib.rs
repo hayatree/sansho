@@ -21,7 +21,7 @@ mod statistics;
 mod writer;
 mod xspice;
 pub use statistics::Sample;
-pub use xspice::{CodePort, SourceTable, analog_model};
+pub use xspice::{CodePort, SourceTable, analog_model, digital_code, digital_model};
 
 pub use expr::{Expr, eval as eval_expr, eval_const, parse_behavior, parse_expr};
 pub use lexer::{Lexed, Line, Token, lex, lex_source};
@@ -30,7 +30,7 @@ pub use number::parse_number;
 pub use parser::{parse, parse_parameters, parse_with, prepare_parameters};
 pub use preproc::{FsLoader, NoFiles, SourceLoader};
 pub use sansho_diag::{Diagnostic, Severity, Span};
-pub use writer::{write, write_analysis, write_measure};
+pub use writer::{write, write_analysis, write_measure, write_model};
 
 use serde::Serialize;
 

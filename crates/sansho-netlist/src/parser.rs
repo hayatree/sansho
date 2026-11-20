@@ -157,7 +157,7 @@ fn parse_expanded(
                 .get(m.span.file as usize)
                 .filter(|v| !v.is_empty())
                 .map(String::as_str);
-            if let Err(msg) = data.read(loader, from) {
+            if let Err(msg) = data.read(loader, from, m.kind == "d_source") {
                 p.diags
                     .push(Diagnostic::error("E-XSPICE-FILE", msg).with_span(m.span));
             }
@@ -1754,7 +1754,7 @@ impl Parser {
                 ),
                 Some(m)
                     if matches!(e.kind, ElementKind::CodeModel { .. })
-                        && !crate::analog_model(&m.kind) =>
+                        && !crate::xspice::code_model(&m.kind) =>
                 {
                     errs.push(
                         Diagnostic::error(
@@ -1795,7 +1795,7 @@ impl Parser {
         };
         let name = t[1].lower();
         let kind = t[2].lower();
-        if self.code_models.contains(&name) && !crate::analog_model(&kind) {
+        if self.code_models.contains(&name) && !crate::xspice::code_model(&kind) {
             self.err(
                 "E-XSPICE-MODEL",
                 format!("unsupported code model {kind} ({name})"),
@@ -1856,7 +1856,27 @@ impl Parser {
                 );
                 return;
             };
-            if kind == "filesource" && k == "file" {
+            if kind == "d_lut" && k == "table_values" {
+                let values = vt
+                    .text
+                    .trim_matches('"')
+                    .chars()
+                    .map(|c| match c.to_ascii_lowercase() {
+                        '0' => Some(0.),
+                        '1' => Some(1.),
+                        'u' => Some(2.),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>();
+                let Some(values) = values else {
+                    self.err("E-ELAB-PARAM", "invalid LUT table_values", vt.span);
+                    return;
+                };
+                arrays.push((k, values));
+                i += 3;
+                continue;
+            }
+            if kind == "filesource" && k == "file" || kind == "d_source" && k == "input_file" {
                 table = Some(crate::SourceTable {
                     filename: vt.text.trim_matches('"').into(),
                     rows: vec![],
@@ -1864,7 +1884,7 @@ impl Parser {
                 i += 3;
                 continue;
             }
-            if crate::analog_model(&kind) && vt.text == "[" {
+            if crate::xspice::code_model(&kind) && vt.text == "[" {
                 let mut values = Vec::new();
                 i += 3;
                 while let Some(t) = t.get(i) {
@@ -1885,7 +1905,7 @@ impl Parser {
                 i += 1;
                 continue;
             }
-            if crate::analog_model(&kind)
+            if crate::xspice::code_model(&kind)
                 && matches!(vt.lower().as_str(), "true" | "false" | "yes" | "no")
             {
                 params.push((k, f64::from(matches!(vt.lower().as_str(), "true" | "yes"))));

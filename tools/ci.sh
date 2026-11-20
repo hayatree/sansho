@@ -66,6 +66,7 @@ if (( !quick )); then
   if [[ "${1:-}" == --cached ]] || docker image inspect sansho-ngspice:latest >/dev/null 2>&1; then
     step "verify vs ngspice" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}"
     step "verify R11 analog code models" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" verify/r11-decks
+    step "verify R12 digital code models" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" verify/r12-decks
     step "verify BSIM3 decks" cargo run -q --release -p sansho-verify -- "${verify_args[@]}" verify/bsim3-decks
     step "verify BSIM4 decks" cargo run -q --release -p sansho-verify -- "${verify_args[@]}" verify/bsim4-decks
     if [[ -d va-models/volare-sky130 ]]; then

@@ -264,6 +264,7 @@ pub(super) fn analyze(
         }
     }
     Ok(AnalysisResult {
+        events: Default::default(),
         kind: AnalysisKind::Sp,
         scale: Some(var("frequency", Quantity::Frequency)),
         scale_values: freq,

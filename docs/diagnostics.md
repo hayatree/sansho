@@ -48,6 +48,8 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-ELAB-CONTROL`](#e-elab-control) | error | Invalid controlling source |
 | [`E-XSPICE-FILE`](#e-xspice-file) | error | Invalid waveform table |
 | [`E-XSPICE-PORT`](#e-xspice-port) | error | Invalid code-model port |
+| [`E-XSPICE-OSCILLATION`](#e-xspice-oscillation) | error | Event iteration limit |
+| [`E-XSPICE-TIME`](#e-xspice-time) | error | Invalid event time |
 | [`E-XSPICE-MODEL`](#e-xspice-model) | error | Unsupported code model |
 | [`E-ELAB-EMPTY`](#e-elab-empty) | error | Empty netlist |
 | [`E-ELAB-INTERNAL`](#e-elab-internal) | error | Internal elaboration error |
@@ -329,15 +331,27 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## E-XSPICE-PORT
 
-**Invalid code-model port.** A port has an invalid type, terminal count or vector shape.
+**Invalid code-model port.** A port has an invalid type, terminal count or vector shape, or a node connects both analog and digital terminals.
 
 - Check the port order and types in docs/xspice.md.
+
+## E-XSPICE-OSCILLATION
+
+**Event iteration limit.** A digital or mixed feedback loop did not settle at the indicated time.
+
+- Check feedback polarity and propagation delays in the loop.
+
+## E-XSPICE-TIME
+
+**Invalid event time.** A scheduled edge or ramp endpoint cannot be represented at the current simulation time.
+
+- Check the units of the timing and frequency parameters.
 
 ## E-XSPICE-MODEL
 
 **Unsupported code model.** The A element references an unsupported code-model family.
 
-- See docs/xspice.md for the supported analog families.
+- See docs/xspice.md for the supported families.
 
 ## E-ELAB-EMPTY
 

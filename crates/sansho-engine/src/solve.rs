@@ -50,6 +50,7 @@ pub(crate) struct Assembled {
 /// Reusable per-job workspace.
 #[derive(Debug)]
 pub(crate) struct Workspace {
+    pub events: crate::digital::Events,
     timed: bool,
     detailed: bool,
     assembly_time: Duration,
@@ -148,6 +149,7 @@ impl Workspace {
         let profile_bsim =
             sansho_diag::profile_enabled() && std::env::var_os("SANSHO_PROFILE_BSIM4").is_some();
         Self {
+            events: crate::digital::Events::new(&ckt.digital),
             timed: sansho_diag::profile_enabled() || sansho_diag::profile_devices(),
             detailed: sansho_diag::profile_devices(),
             assembly_time: Duration::ZERO,
@@ -410,6 +412,8 @@ fn assemble_for(
         conductance();
         charge_and_sources();
     }
+    ws.events
+        .stamp(&ckt.digital, &mut a.b, ctx.time, ctx.source_factor);
     for &(i, v) in &ws.clamp {
         let d = ckt.node_diag[i];
         if d != DISCARD {
@@ -526,6 +530,9 @@ pub(crate) fn newton(
     gshunt: f64,
 ) -> Result<usize, NewtonError> {
     ws.newton_calls += 1;
+    if x.is_empty() {
+        return Ok(0);
+    }
     if ws.lu.is_none() {
         let start = ws.timed.then(Instant::now);
         ws.lu = Some(

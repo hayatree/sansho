@@ -334,14 +334,26 @@ pub const CODES: &[CodeInfo] = &[
     e(
         "E-XSPICE-PORT",
         "Invalid code-model port",
-        "A port has an invalid type, terminal count or vector shape.",
+        "A port has an invalid type, terminal count or vector shape, or a node connects both analog and digital terminals.",
         &["Check the port order and types in docs/xspice.md."],
+    ),
+    e(
+        "E-XSPICE-OSCILLATION",
+        "Event iteration limit",
+        "A digital or mixed feedback loop did not settle at the indicated time.",
+        &["Check feedback polarity and propagation delays in the loop."],
+    ),
+    e(
+        "E-XSPICE-TIME",
+        "Invalid event time",
+        "A scheduled edge or ramp endpoint cannot be represented at the current simulation time.",
+        &["Check the units of the timing and frequency parameters."],
     ),
     e(
         "E-XSPICE-MODEL",
         "Unsupported code model",
         "The A element references an unsupported code-model family.",
-        &["See docs/xspice.md for the supported analog families."],
+        &["See docs/xspice.md for the supported families."],
     ),
     e(
         "E-ELAB-EMPTY",

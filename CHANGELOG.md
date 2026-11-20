@@ -4,6 +4,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Add event-driven digital A models and ADC/DAC bridges to OP, DC sweeps and transient simulation. Batch controls and waveform queries expose strength-resolved changes. Match the probed ADC window and equality behavior, preserve delayed transitions until overtaken, and correct divider phase, oscillator startup strength and DC feedback initialization. Four mixed-signal deck comparisons pass. The counter has a 10 ps coarse-grid sampling difference that disappears on the refined grid. [Digital models and limits](docs/xspice.md#digital-nodes-and-bridges)
+
 - Simulate analog A cards with scalar and vector signal ports, confined file input, smooth curves, dynamic transfer functions, oscillators and a controlled resistor. Missing required parameters identify the model and field. Square waves start low and honor asymmetric edge times, and slew-limited outputs resolve the instant they reach the input. [Supported code models](docs/xspice.md)
 
 - Execute batch control blocks from the CLI, session API and MCP. Scripts can run analyses, sweep circuit values, compute vectors, measure named plots and write raw or tabular results. The verifier compares script-generated files and repeated measurements. [Batch control language](docs/control.md)

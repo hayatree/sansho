@@ -15,6 +15,8 @@
 
 mod control;
 mod control_analytic;
+#[cfg(test)]
+mod digital_analytic;
 mod reference;
 
 use reference::Problem;
@@ -394,7 +396,7 @@ fn main() -> ExitCode {
         let known = entries.iter().filter(|e| e.status == "KNOWN").count();
         let analytic = entries.iter().filter(|e| e.status == "ANALYTIC").count();
         if analytic > 0 {
-            println!("{analytic} control decks passed closed-form comparisons");
+            println!("{analytic} decks passed independent analytic checks");
         }
         println!(
             "{passed}/{} decks passed, {known} known, {skipped} skipped",

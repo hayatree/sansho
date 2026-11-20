@@ -94,7 +94,7 @@ const TOOLS: &[Tool] = &[
         title: "Get waveform",
         description: "Fetch one signal of a job as x/y arrays, downsampled (LTTB, keeps peaks \
                       and edges) to at most max_points points. Signals: v(node), v(a,b), \
-                      i(vsource), or a saved device quantity such as @m.x1.m1[gm]. AC results default to dB. The reduction can also be mag, phase \
+                      i(vsource), a bare digital node name (event coordinates, symbols and packed codes), or a saved device quantity such as @m.x1.m1[gm]. AC results default to dB. The reduction can also be mag, phase \
                       (degrees), re or im.",
         read_only: true,
         schema: || {

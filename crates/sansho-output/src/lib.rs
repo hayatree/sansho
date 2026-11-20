@@ -180,9 +180,15 @@ pub enum Data {
     },
 }
 
+/// Node name to successive (axis coordinate, digital symbol) changes.
+pub type EventTraces = std::collections::BTreeMap<String, Vec<(f64, String)>>;
+
 /// Result of one analysis.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AnalysisResult {
+    /// Event-domain output retained independently of analog raw-file projection.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub events: EventTraces,
     /// Analysis kind.
     pub kind: AnalysisKind,
     /// Sweep variable (time, frequency, swept source), if any. Always real.
@@ -397,6 +403,7 @@ mod tests {
             measures: vec![],
             title: "t".into(),
             analyses: vec![AnalysisResult {
+                events: Default::default(),
                 kind: AnalysisKind::Tran,
                 scale: Some(Variable {
                     name: "time".into(),

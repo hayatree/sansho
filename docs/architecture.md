@@ -27,7 +27,7 @@
 
 - GUI / schematic editor (use Xschem etc.)
 - fast-SPICE approximations that trade accuracy (table models, partitioned approximations)
-- Mixed-signal digital (XSPICE equivalent), device simulation (CIDER equivalent)
+- Full XSPICE library compatibility and numerical device simulation (CIDER equivalent)
 
 ---
 
@@ -638,13 +638,15 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
 
 Analog A devices use the same DAE and deterministic stamp assembly as native circuit elements. Signal current inputs introduce a sensing branch. Dynamic transfer functions allocate state unknowns. [Analog code models](xspice.md)
 
+Digital connectivity and fanout are immutable after elaboration. Each analysis owns its resolved nodes, sequential state, DAC ramps and ordered queue. Trial states follow transient acceptance and rollback. Simultaneous drivers resolve as a batch ahead of fanout evaluation. [Event timing](xspice.md#event-timing-and-output)
+
 The [batch control interpreter](control.md) parses scoped command blocks in the netlist layer and runs them against isolated circuit and plot state in the session layer.
 
 ### Not yet supported
 
 Distributed lossy lines, line IC tuples, pole-zero extraction for distributed
 delays, JFET level two, full MOS2/MOS3 short-channel corrections, interactive Nutmeg,
-event-driven XSPICE, CIDER and an OSDI loader remain outside the current
+CIDER and an OSDI loader remain outside the current
 implementation. [Compatibility and numerical differences](compatibility.md)
 
 ---

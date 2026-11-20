@@ -69,6 +69,12 @@ pub(crate) fn results(r: &SimResults) -> String {
         for v in &a.variables {
             h.bytes(v.name.as_bytes());
         }
+        for (name, changes) in &a.events {
+            h.bytes(name.as_bytes());
+            for (t, s) in changes {
+                h.f64(*t).bytes(s.as_bytes());
+            }
+        }
         match &a.data {
             Data::Real { columns } => {
                 for c in columns {

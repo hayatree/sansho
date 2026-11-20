@@ -346,6 +346,7 @@ mod tests {
     fn native_binary_records_across_plot_boundaries() {
         use sansho_output::{AnalysisKind, AnalysisResult, Data, Quantity, Variable};
         let mut a = AnalysisResult {
+            events: Default::default(),
             kind: AnalysisKind::Ac,
             scale: Some(Variable {
                 name: "frequency".into(),

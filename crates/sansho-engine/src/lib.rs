@@ -11,6 +11,7 @@ mod analysis;
 mod circuit;
 mod fourier;
 pub use fourier::fourier;
+mod digital;
 mod distortion;
 mod lint;
 mod measure;
@@ -365,6 +366,7 @@ fn project_results(full: &mut SimResults, saves: &[String]) -> Option<Measuremen
                 .collect();
             use sansho_output::Data;
             sansho_output::AnalysisResult {
+                events: a.events.clone(),
                 kind: a.kind,
                 scale: a.scale.clone(),
                 scale_values: a.scale_values.clone(),

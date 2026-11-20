@@ -1,0 +1,33 @@
+Compare floating driver and resolved bus strength at release and contention
+* Provenance: original Sansho R12b black-box experiment.
+* sweep: 0.5n
+.param probe=0.5n
+Va a 0 PULSE(0 1 4n 0.2n 0.2n 12n 40n)
+Vb b 0 PULSE(0 1 10n 0.2n 0.2n 12n 40n)
+Aen [a b] [ea eb] adc
+Az z down
+Ao o up
+Al z ea bus tri
+Ah o eb bus tri
+Ap bus up
+Asolo z ea solo tri
+Adefault z ea solodef tdflt
+.model adc adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0 fall_delay=0)
+.model tdflt d_tristate
+.model tri d_tristate(delay={probe})
+.model up d_pullup
+.model down d_pulldown
+.control
+tran 0.1n 28n
+edisplay
+eprint z
+eprint o
+eprint ea
+eprint eb
+eprint bus
+eprint solo
+eprint solodef
+showmod
+quit
+.endc
+.end

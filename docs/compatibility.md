@@ -86,7 +86,8 @@ Sansho uses the manual's order. The dedicated SFFM deck records this known diffe
 | .print, .plot, .width | Partial | OP, DC, TRAN, AC and noise print tables support voltage, current, named device outputs and AC projections. .plot warns and .width is accepted. Tables use the CLI layout. |
 | .options | Partial | RELTOL, ABSTOL, VNTOL, CHGTOL, TRTOL, GMIN, ITL1, ITL2, ITL4, RSHUNT, GMINSTEPS, SRCSTEPS, TEMP, TNOM, SCALE, DEFL/DEFW/DEFAD/DEFAS, METHOD=TRAP/TRAPEZOIDAL/GEAR, MAXORD=1/2, SAVECURRENTS, SEED and BYPASS. ITL5 and listing flags are accepted. INTERP, unknown options and invalid option values warn. |
 | .control / .endc, .csparam and Nutmeg | Partial | Batch analyses, bounded control flow, plot and vector algebra, measurements, circuit alterations and confined file output. API and MCP return structured transcripts. [Commands and differences](control.md) |
-| Digital XSPICE and CIDER | Not supported | Digital and bridge A models produce an unsupported code model diagnostic. Numerical semiconductor simulation is outside coverage. |
+| Digital XSPICE | Partial | Twelve-state OP/DC/transient, ADC/DAC, gates, storage, divider, oscillator, file stimulus and single-output LUT. Raw comparisons use DAC voltages. [Digital timing and limits](xspice.md#digital-nodes-and-bridges) |
+| CIDER | Not supported | Numerical semiconductor simulation is outside coverage. |
 | OSDI / pre_osdi | Not supported | Native simulation loads VA source through .hdl. OSDI appears in the external verification workflow. |
 
 ## Numerical differences

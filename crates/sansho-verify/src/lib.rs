@@ -636,6 +636,7 @@ mod tests {
             measures: Vec::new(),
             title: String::new(),
             analyses: vec![AnalysisResult {
+                events: Default::default(),
                 kind: AnalysisKind::Tran,
                 scale: Some(Variable {
                     name: "time".into(),
@@ -693,6 +694,7 @@ mod tests {
             title: String::new(),
             measures: vec![],
             analyses: vec![AnalysisResult {
+                events: Default::default(),
                 kind: AnalysisKind::Pz,
                 scale: None,
                 scale_values: vec![],

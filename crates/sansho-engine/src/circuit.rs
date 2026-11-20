@@ -62,6 +62,7 @@ impl std::ops::Deref for Circuit {
 /// Immutable connectivity, node numbering, slot maps and sparse structure.
 #[derive(Debug)]
 pub struct CircuitTopology {
+    pub(crate) digital: crate::digital::Network,
     node_index: HashMap<String, usize>,
     group_offsets: Vec<usize>,
     va_ports: Option<VaPorts>,
@@ -256,6 +257,16 @@ impl<T: DeviceGroup + Default + 'static> Chunked<T> {
 }
 
 impl Circuit {
+    /// Sum of the connected digital input loads in farads, in elaboration order.
+    pub fn digital_load(&self, name: &str) -> Option<f64> {
+        let i = self
+            .digital
+            .names
+            .iter()
+            .position(|n| n.eq_ignore_ascii_case(name))?;
+        self.digital.loads.get(i).copied()
+    }
+
     /// Unknowns (node voltages, then branch currents).
     pub fn unknowns(&self) -> &Unknowns {
         &self.unknowns
@@ -579,9 +590,13 @@ pub(crate) fn compile_cached(
     let mut node_index: HashMap<String, usize> = HashMap::new();
     let mut node_names: Vec<String> = Vec::new();
     let mut touches = Vec::<usize>::new();
-    let mut grounded = false;
+    let digital_ports = crate::digital::Ports::check(nl)?;
+    let mut grounded = digital_ports.grounded_dac;
     for e in &nl.elements {
         for n in e.kind.nodes() {
+            if digital_ports.digital.contains_key(n) {
+                continue;
+            }
             if n == GROUND {
                 grounded = true;
                 continue;
@@ -662,7 +677,7 @@ pub(crate) fn compile_cached(
         &mut va,
         &mut diags,
     );
-    if !grounded {
+    if !grounded && (digital_ports.digital.is_empty() || !node_names.is_empty()) {
         return Err(vec![
             Diagnostic::error(
                 "E-ELAB-NOGROUND",
@@ -895,6 +910,7 @@ pub(crate) fn compile_cached(
         }
     }
     let (unknowns, layouts, group_offsets) = setup_groups(&mut groups, &node_names, &mut diags)?;
+    let digital = crate::digital::Network::bind(nl, &digital_ports, node, &unknowns)?;
     let n = unknowns.len();
     let mut pb = PatternBuilder::new(n);
     let req = |l: &[(Node, Node)], pb: &mut PatternBuilder| -> Vec<usize> {
@@ -1027,6 +1043,7 @@ pub(crate) fn compile_cached(
             linear,
             fixed_voltage,
             topology: Arc::new(CircuitTopology {
+                digital,
                 va_modules: va_modules.clone(),
                 node_index,
                 group_offsets,
@@ -1395,6 +1412,21 @@ fn native_groups<'a>(
                     );
                     continue;
                 };
+                if sansho_netlist::digital_model(&card.kind) {
+                    if card.kind == "dac_bridge"
+                        && let Some(outputs) = ports.get(1)
+                    {
+                        for (i, n) in outputs.nodes.iter().enumerate() {
+                            vsrc.cur().push(
+                                &format!("{}:{i}", e.name),
+                                node(n),
+                                None,
+                                Default::default(),
+                            );
+                        }
+                    }
+                    continue;
+                }
                 if card.kind == "filesource" {
                     match sansho_devices::xspice::file_sources(ports, card) {
                         Ok(sources) => {
@@ -2219,6 +2251,9 @@ impl Circuit {
         nl: &Netlist,
         opts: &SimOptions,
     ) -> Result<(Circuit, Vec<Diagnostic>), Vec<Diagnostic>> {
+        if !self.digital.names.is_empty() {
+            return compile_cached(nl, opts, &self.va_modules, false);
+        }
         let Some(bindings) = &self.bindings else {
             return Err(vec![Diagnostic::error(
                 "E-ELAB-INTERNAL",

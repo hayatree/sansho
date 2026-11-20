@@ -60,6 +60,9 @@ pub struct SignalStats {
 /// Summary of one analysis.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AnalysisSummary {
+    /// Event-domain nodes available by name through get_waveform.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub digital_nodes: Vec<String>,
     /// Index within the job (for `get_waveform`).
     pub index: usize,
     /// Analysis kind.
@@ -328,9 +331,14 @@ fn summarize(index: usize, a: &AnalysisResult, max_signals: usize) -> AnalysisSu
         to: a.scale_values.last().copied().unwrap_or(0.0),
     });
     let mut s = AnalysisSummary {
+        digital_nodes: a.events.keys().take(max_signals).cloned().collect(),
         index,
         kind: a.kind,
-        points: a.len(),
+        points: if a.kind == AnalysisKind::Op && !a.events.is_empty() {
+            1
+        } else {
+            a.len()
+        },
         sweep,
         noise_contributors: Vec::new(),
         values: Vec::new(),
@@ -364,7 +372,7 @@ fn summarize(index: usize, a: &AnalysisResult, max_signals: usize) -> AnalysisSu
     } else {
         max_signals.max(1)
     };
-    s.truncated = n > limit;
+    s.truncated = n > limit || s.digital_nodes.len() < a.events.len();
     for (i, v) in a.variables.iter().enumerate().take(limit) {
         let unit = v.quantity.unit();
         match (&a.data, a.kind) {

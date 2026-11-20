@@ -102,6 +102,7 @@ fn dc_lu(c: &Circuit, w: &Workspace) -> Result<SerialLu<f64>, Diagnostic> {
 fn scalars(kind: AnalysisKind, values: Vec<(Variable, f64)>) -> AnalysisResult {
     let (variables, columns) = values.into_iter().map(|(v, x)| (v, vec![x])).unzip();
     AnalysisResult {
+        events: Default::default(),
         kind,
         variables,
         data: Data::Real { columns },
@@ -260,6 +261,7 @@ pub(super) fn noise(
         vars.push(var(format!("onoise.{name}"), Quantity::VoltageDensity));
     }
     let spectrum = AnalysisResult {
+        events: Default::default(),
         kind: AnalysisKind::Noise,
         variables: vars,
         data: Data::Real { columns },
@@ -713,6 +715,7 @@ pub(super) fn pz(
         }
     }
     Ok(AnalysisResult {
+        events: Default::default(),
         kind: AnalysisKind::Pz,
         variables,
         scale: None,
@@ -803,6 +806,7 @@ pub(super) fn ac_sens(
         columns.push(column);
     }
     Ok(AnalysisResult {
+        events: Default::default(),
         kind: AnalysisKind::Sens,
         variables,
         scale: Some(var("frequency", Quantity::Frequency)),

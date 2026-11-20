@@ -720,6 +720,36 @@ impl State<'_> {
             "label" if args.split_whitespace().count() == 1 => {}
             "echo" => self.transcript.lines.push(args.trim_matches('"').into()),
             "print" | "wrdata" | "write" => self.output(cmd, args)?,
+            "showmod" if args.trim().is_empty() => {
+                self.transcript
+                    .lines
+                    .extend(self.deck.models.iter().map(sansho_netlist::write_model));
+            }
+            "edisplay" | "eprint" => {
+                let a = self.plots[self.current]
+                    .analysis
+                    .as_ref()
+                    .ok_or_else(|| error("no event plot"))?;
+                let args = args.to_ascii_lowercase();
+                let names: Vec<_> = if args.trim().is_empty() {
+                    a.events.keys().map(String::as_str).collect()
+                } else {
+                    args.split_whitespace().collect()
+                };
+                for name in names {
+                    let trace = a
+                        .events
+                        .get(name)
+                        .ok_or_else(|| error(format!("unknown event node {name}")))?;
+                    if cmd == "edisplay" {
+                        self.transcript.lines.push(format!("{name} digital"));
+                    } else {
+                        self.transcript
+                            .lines
+                            .extend(trace.iter().map(|(axis, s)| format!("{axis:e} {name} {s}")));
+                    }
+                }
+            }
             "linearize" => self.linearize(args)?,
             "meas" | "measure" => {
                 let p = &self.plots[self.current];

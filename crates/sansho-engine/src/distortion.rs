@@ -135,6 +135,7 @@ pub(super) fn analyze(
         .iter()
         .filter_map(|(_, _, kind)| {
             Some(AnalysisResult {
+                events: Default::default(),
                 kind: (*kind)?,
                 variables: variables(c),
                 scale: Some(var("frequency", Quantity::Frequency)),

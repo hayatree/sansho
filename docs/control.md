@@ -53,6 +53,8 @@ The first workspace is `const`. Analysis names use independent, increasing count
 |---|---|
 | `echo words` | One transcript line after substitution. |
 | `print [line\|col] expressions` | Named values or indexed columns, plus structured numeric columns. Use parentheses around a greater-than comparison to distinguish it from file redirection. |
+| `showmod` | Print the current model cards and their explicit parameters to the transcript. |
+| `edisplay`, `eprint [node ...]` | List digital nodes or print their successive axis coordinates, names and resolved symbols in the current plot. Both write to the transcript. |
 | `print expressions > file` | Formatted text in a file. The numeric columns remain in the transcript. |
 | `meas analysis name …` | The existing measurement grammar and engine applied to the current plot. Successful measurements also create scalar vectors. |
 | `wrdata file expressions` | Whitespace-delimited columns. Each vector has a scale and real value or complex pair. `set wr_singlescale` writes one shared scale. `set wr_vecnames` adds a header. |

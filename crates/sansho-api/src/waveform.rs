@@ -58,6 +58,9 @@ impl Reduce {
 /// A sampled signal.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Waveform {
+    /// Twelve-state symbols aligned with x and y for event nodes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub symbols: Vec<String>,
     /// Signal name as requested.
     pub signal: String,
     /// Unit of `y`.
@@ -115,6 +118,36 @@ pub(crate) fn extract(
     to: Option<f64>,
     max_points: usize,
 ) -> Option<Waveform> {
+    if let Some(trace) = a.events.get(&signal.trim().to_ascii_lowercase()) {
+        let points: Vec<_> = trace
+            .iter()
+            .filter(|(v, _)| from.is_none_or(|lo| *v >= lo) && to.is_none_or(|hi| *v <= hi))
+            .collect();
+        let count = points.len().min(max_points.max(2));
+        let mut x = Vec::with_capacity(count);
+        let mut y = Vec::with_capacity(count);
+        let mut symbols = Vec::with_capacity(count);
+        for i in 0..count {
+            let (t, s) = points[i * (points.len() - 1) / count.saturating_sub(1).max(1)];
+            x.push(*t);
+            y.push(f64::from(sansho_netlist::digital_code(s)?));
+            symbols.push(s.clone());
+        }
+        return Some(Waveform {
+            signal: signal.into(),
+            unit: "digital",
+            x_name: a
+                .scale
+                .as_ref()
+                .map_or_else(|| "index".into(), |s| s.name.clone()),
+            x_unit: a.scale.as_ref().map_or("", |s| s.quantity.unit()),
+            x,
+            y,
+            symbols,
+            source_points: points.len(),
+            downsampled: count < points.len(),
+        });
+    }
     let (vals, q) = column(a, signal)?;
     let complex = matches!(a.data, Data::Complex { .. });
     let reduce = match (complex, reduce) {
@@ -179,6 +212,7 @@ pub(crate) fn extract(
         (x, y, false)
     };
     Some(Waveform {
+        symbols: Vec::new(),
         signal: signal.trim().to_ascii_lowercase(),
         unit: reduce.unit(q.unit()),
         x_name,

@@ -445,3 +445,19 @@ The engine test suite runs each original deck in `verify/r11-decks` on one and t
 | ramp.cir | Integral of a ramp and plateau, nonzero initial output, short-circuit current sensing and differential current drive. |
 | oscillators.cir | Phase and amplitude of 1 kHz sine and triangle waves, finite square-wave edges and asymmetric slew rates. |
 | file.cir | Interpolation breakpoints and scaled differential output from the two-channel stimulus.dat file. |
+
+## R12 mixed-signal decks
+
+Run `cargo run --release -p sansho-verify -- --cached -v verify/r12-decks`. The five ngspice 44.2 reference raws contain time and the saved analog voltages. A missing or unreadable R12 raw fails verification. Independent tests check plateau levels, counter timing, the RC response and one- versus two-worker determinism.
+
+The table gives DAC **ramp starts** in ns. Durations below come from the slope between samples inside a ramp. The first sample on the final plateau can be substantially later than the actual ramp endpoint.
+
+| Deck | ngspice 44.2 measurements and cause | Worst score before → after |
+|---|---|---|
+| bus | Starts at 1 V. Ramps start at 4.64, 10.64 and 16.84 ns toward 0, 0.4 and 1 V. The measured slope magnitude is 5 V/ns across all three swings, giving durations of 0.20, 0.08 and 0.12 ns. Sampling the ADC at 4.14 ns and adding the 0.50 ns tristate delay reproduces the first edge. Release of the last strong high is invisible at the DAC. | 20 → 0.000 |
+| counter | Both outputs start at 0 V with explicit `ic=0`. The low bit ramps at 4.64, 14.64, 24.64, 34.65 and 44.64 ns. The high bit ramps at 15.04 and 35.05 ns. All swings are 1 V in 0.20 ns. The first flip-flop changes 0.50 ns after the ADC sample (0.10 + 0.30 + 0.10 ns). The second adds 0.40 ns on rising carry. At the fourth source corner the reference samples at 34.05 and 34.15 ns. Sansho samples at 34.02, 34.06 and 34.14 ns. Both fourth-edge ramps start 10 ps early, accounting for the entire 50 mV residual. | 25 → 5.000 on both bits (KNOWN) |
+| latch | Starts low, rises at 4.34 ns, holds high through the second set pulse and falls at 20.34 ns. Both ramps take 0.20 ns. The short set pulse is sampled high at 2.14 ns, passes the 2 ns buffer and sets the latch after another 0.20 ns. The previous inertial cancellation lost this edge. Q alone cannot time the trailing buffer edge. | 100 → 0.000 |
+| mixed | Initially drive = fb = 0 V and diff = −0.5 V. Drive rises at 5.25, 29.25 and 53.25 ns and falls at 18.25 and 42.25 ns. The 0.50 ns full-scale ramps have slope magnitude 2 V/ns. The first positive comparator sample is at 4.75 ns. ADC and divider delays add 0.20 and 0.30 ns. Starting the divide-by-two cycle low also establishes the RC operating point. Worst feedback error is 4.95 mV. | ≈100 → drive 0.000, fb 0.532, diff 0.352 |
+| ring | Starts at 1 V. The enable crosses 0.5 V at 5.50 ns and is sampled high at 5.75 ns. Three 2 ns delays put the first falling ramp at 11.75 ns. Subsequent ramps alternate at 6 ns intervals through 77.75 ns, with 0.20 ns full-scale transitions. | 100 → 0.000 |
+
+A score of 1 is the pass threshold. Explicit DAC levels and constant slew already match these references. The two-grid counter histories trace the residual to the fourth ADC sample and agree throughout the refined run. The supplied circuits use explicit timing parameters and none contains a digital oscillator. [Digital-history probes](probes/README.md#r12-digital-histories)

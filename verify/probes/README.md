@@ -309,3 +309,41 @@ All 12 follow-up sweeps pass against the maintainer’s ngspice 44.2 raws. The s
 | `vdmos_implicit_case` | The maintainer’s syntax check ruled out the predicted three-node implicit boundary. THERMAL needs explicit junction and case terminals. The revised deck compares an open case with node 0. At RTHCA = 1000 K/W and Vg = 2.5 V their junction voltages are 147.930 and 2.094 V, and drain currents are 120.194 and 391.765 mA. At the first bias the open junction is 27.135 V. Starting the coupled solve at the actual body bias removes the spurious 587 V starting solution. | 0.156 |
 | `vdmos_hot_channel` | At a 30 K rise the saturation and triode branches confirm the predicted KP factor `(330.15/300.15)^(2·MU)` for MU = 0, −0.75 and −1.5 and the 30 mV threshold reduction for TCVTH = 1 mV/K. In the access branch, saturation fixes RS at 0.020 Ω. Inverting the triode current at Vg = 4 V gives RD = 0.092289 Ω for all three MU values. The previous 0.080 Ω prediction missed up to 20.02 mA. The corrected RD factor `(Tj/Tamb)^1.5` fits this rise, with a maximum current error of 11.1 nA across the sweeps. | 2.91×10⁻⁶ |
 | `vdmos_diode_heat` | At Vd = −0.8 V, subtracting the idle 0.027 W from the junction clamp gives 21.666397, 0.410366 and 0.109424 W for RB = 0, 0.2 and 1 Ω. These agree with the predicted full terminal power within 3.2 µW at that bias. Excluding I²RB would give 0.357743 and 0.090716 W for the two finite resistances. | 0.0463 |
+
+## R12 digital histories
+
+The maintainer ran eight original decks at 16 parameter settings with ngspice 44.2. Replaying the expanded `verify/out/probes/r12_*.cir` decks in Sansho produced 98 histories, including both transients in the counter probe. All 404 entries match in node order, level and strength. Of these, 400 match in time to 1e−18 s. The four exceptions belong to a single clock edge. Times below are in ns.
+
+For example, replay `sansho run -j 1 verify/out/probes/r12_counter_grid_0.2n.cir` and compare each node with its “Time or Step” table in the adjacent log. All 16 expanded decks replay directly. For the 13 runs ending in `showmod`, Sansho prints the model cards with their explicit parameters. The 44.2 listing reports “No matching models”. The comparison uses the preceding event and voltage records.
+
+| Probe | 44.2 observations and Sansho replay |
+|---|---|
+| `r12_bridges` | On the rising ramp, 0.07 V still gives low, 0.15 V gives unknown, 0.85 V is still unknown and 0.95 V gives high. The default window in Sansho is 0.1–0.9 V. The instantaneous edges at 3.15, 3.95, 44.15 and 44.95 precede the default ADC by exactly 1 ns. With both thresholds at 1.5 V the comparator stays low throughout the ascending equality plateau, rises at 14.01 and falls upon reaching equality at 33. The default DAC uses 0, 0.5 and 1 V and slews at ±1 V/ns. The −1/+3 V DAC continues from −0.84 V at 4.95 and +2.60 V at 45.95, with slopes +0.2 and −0.5 V/ns. The piecewise ramps fit all 549 reference and 560 Sansho printed voltage rows within 1e−13 V. The custom DAC never settles at its unknown target in this probe. |
+| `r12_buffer` | The 0.5 ns source width gives a 0.70 ns digital pulse (3.125–3.825). Both the fixed-delay buffer and inverter pass both edges at 5.125 and 5.825. With 2 ns rise and 0.25 ns fall, the scheduled return at 4.075 overtakes the rise at 5.125 and the output stays low. For the 3 ns width, the same asymmetric output rises at 5.125 and falls at 6.575. Both sweeps match. |
+| `r12_bus` | The pulls give `0r` and `1r`. The biased bus progresses through `1r → 0s → Us → 1s → 1r` with changes at 4.65, 10.65, 16.85 and 22.85. The isolated low driver releases to `0z`. The default tristate changes at 5.15 and 17.35, exactly 1 ns after enable changes. All seven histories match, including the strength-only release. |
+| `r12_storage` | The default DFF, TFF and closed D latch start at `0s`. A DFF and closed latch with IC 0, 1 and 2 start low, high and unknown respectively. Complementary outputs invert definite levels and preserve unknown. A transparent D latch with high data starts high for all ICs. A self-fed buffer settles low. The clock rises at 4.15 and the responding storage outputs change at 6.15. The enabled SR latch goes high → unknown → high at 0, 6.15 and 9.35. All 42 histories match. |
+| `r12_load` | At both 1 and 100 pF, the ADC emits unknown/high/unknown/low at 5.035, 5.225, 12.825 and 13.000. Light and heavy branches reproduce every transition 1 ns later. The inverter complements definite values at those same times, and the NAND and cascaded buffers add another 1 ns. All 14 histories match. This measures propagation under load. The listing supplies no numeric default input capacitance. |
+| `r12_divider` | With modulo four and high widths of one and three clocks, the initial (narrow, wide) pairs for counts 0–3 are (0,0), (1,1), (0,1), (0,1). Count advances on rising input. Output is high at counts 1 through `high_cycles`, with 1 ns propagation. From count zero both first rise at 4.15, then fall at 10.15 and 22.15 respectively. All four sweeps match through 55 ns. |
+| `r12_osc` | At 100 MHz both oscillators start at `0u`. The first strong high occurs at 7.5 for duty 0.25 and 2.5 for duty 0.75. Both fall at 10 and repeat every 10. Omitted propagation delays and explicit zeros give identical histories in both simulators. |
+| `r12_counter_grid` | On the coarse grid ngspice samples 0.25 and 0.75 V at 34.05 and 34.15. Sansho samples 0.30 and 0.70 V at 34.06 and 34.14. The resulting (clock, Q0, carry, Q1) transitions are (34.25, 34.65, 34.65, 35.05) versus (34.24, 34.64, 34.64, 35.04). At 20 ps maximum step all transitions agree, including this quartet at (34.21, 34.61, 34.61, 35.01). |
+
+### Counter timestep and TRTOL
+
+The 44.2 logs announce `Reducing trtol to 1 for xspice 'A' devices`. Both counter runs report zero transient event timestep backups. The counter contains resistors, ideal voltage drives and event storage. Its analog equations have no dynamic charge for the truncation-error test. Adding `.options trtol=1` and `.options trtol=7` in separate Sansho replays yields byte-identical event histories and printed analog samples (276 output lines each). The measured 10 ps comes from the first accepted sample above threshold after the 34 ns source corner. A 5 V/ns DAC slew converts it to the observed 50 mV peak error.
+
+The available offline documentation did not establish an automatic A-device TRTOL override. Sansho keeps the specified tolerance. The coarse counter is a known numerical difference at the original verification threshold. Its regression bounds that edge to the measured 10 ps and checks the other output edges against the coarse reference.
+
+### R12d boundary measurements
+
+Run `sansho run -j 1 verify/out/probes/r12c_boundaries_0.1.cir` and compare with the adjacent ngspice 44.2 log. All 22 entries across the four histories agree in level and strength, with event times within 1e−18 s.
+
+| Node | Successive states | Times in both simulators (ns) |
+|---|---|---|
+| `d`, zero-delay ADC | 0s → Us → 1s → Us → 0s | 0, 5.01, 16, 22.15, 22.90 |
+| `w`, asymmetric ADC | 0s → Us → 1s → Us → 0s | 0, 7.01, 18, 22.40, 23.15 |
+| `q`, asymmetric buffer on `d` | 0s → Us → 1s → Us → 0s | 0, 7.01, 18, 22.40, 23.15 |
+| `osc`, 100 MHz, duty 0.25 | 0u → 1s → 0s → 1s → 0s → 1s → 0s | 0, 7.5, 10, 17.5, 20, 27.5, 30 |
+
+The default ADC stays low on the 0.1 V plateau, reports unknown at 0.101 and 0.899 V, and reaches high at 0.9 V. Relative to `d`, both `w` and `q` take the 2 ns rise delay for low → unknown and unknown → high. Both take the 0.25 ns fall delay for high → unknown and unknown → low. Before the correction, Sansho’s mean-delay rule put the first unknown at 6.135 ns and suppressed the second. The oscillator drives at the phase crossings even with the same explicit delay pair. Sansho previously added those delays and placed the first two edges at 9.5 and 10.25 ns.
+
+With DAC rails of −1 and +3 V and 1 ns full-swing times, the output reaches the implicit +1 V midpoint at 5.51 ns and holds it through 16 ns. Linearly interpolating Sansho’s 419 analog samples onto all 355 reference times gives maximum absolute differences below 6e−15 V for the input and 5e−14 V for the DAC output.
