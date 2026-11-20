@@ -4,6 +4,12 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Reconcile VDMOS channel and capacitance defaults, incremental Statz gate charge and URC diode shunts with cached ngspice 44.2 measurements. Document the static LTRA AC reference and nonphysical bipolar QCO transient.
+- Support diode TCV in V/K with BV(T) = BV − TCV·(T − TNOM). TBV1 and TBV2 produce `W-MODEL-IGNORED`, matching ngspice 44.2 behavior.
+- Add electrical VDMOS and level-one MESFET models with gate charge, small-signal noise and terminal vectors.
+- Add lossy O lines with distributed AC transfer and transient convolution, and graded U-element RC ladders with truncated FMAX lump counts and inverse-area diode access resistances.
+- Implement Kull static quasi-saturation with field-dependent drift and base–collector diffusion area. Add epitaxial storage, independent bipolar junction areas and quadratic junction-diode temperature coefficients. [R8 parameter coverage](docs/r8-semiconductors.md)
+
 - Correct the doping-derived body coefficients used by the default BSIM3 and BSIM4 cards, improving threshold voltage and drain current.
 - Record device currents, power, small-signal parameters and MOS charge derivatives through `.save`, `.print`, `.meas`, session results and MCP waveform queries.
 - Sweep numeric resistors on either DC axis, use signal-dependent R/C/L values and initialize semiconductor junctions and lossless lines under UIC.

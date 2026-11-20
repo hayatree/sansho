@@ -746,17 +746,34 @@ pub(crate) fn compile_cached(
             | ElementKind::Diode { .. } => {
                 dc.union(p, n);
             }
-            ElementKind::Jfet { .. } | ElementKind::Bjt { .. } => {
+            ElementKind::Mesfet { .. } | ElementKind::Jfet { .. } | ElementKind::Bjt { .. } => {
                 // Both intrinsic junctions have a DC conductance.
                 let b = g_id(node(e.kind.nodes()[2]));
                 dc.union(p, n);
                 dc.union(n, b);
+            }
+            ElementKind::Vdmos { d, s, .. } => {
+                dc.union(g_id(node(d)), g_id(node(s)));
             }
             ElementKind::Mosfet { d, s, b, .. } => {
                 // The gate has no DC path; drain/source/bulk are connected via the junctions.
                 let (d, s, b) = (g_id(node(d)), g_id(node(s)), g_id(node(b)));
                 dc.union(d, b);
                 dc.union(s, b);
+            }
+            ElementKind::Urc { .. } => {
+                dc.union(p, n);
+            }
+            ElementKind::Ltra { ports, .. } => {
+                let (a, b) = (g_id(node(&ports[2])), g_id(node(&ports[3])));
+                if n == b {
+                    dc.union(p, a);
+                } else if p == a {
+                    dc.union(n, b);
+                } else {
+                    dc.union(p, n);
+                    dc.union(a, b);
+                }
             }
             ElementKind::Line { ports, .. } => {
                 // Each port carries a differential current; its common mode is independent.
@@ -1346,6 +1363,74 @@ fn native_groups<'a>(
     for e in elements {
         match &e.kind {
             ElementKind::Va { .. } => {}
+            ElementKind::Urc {
+                ports,
+                model,
+                params,
+            } => {
+                let Some(card) = model_cache.card(model) else {
+                    errors.push(
+                        Diagnostic::error("E-ELAB-MODEL", format!("undefined URC model {model}"))
+                            .with_span(e.span),
+                    );
+                    continue;
+                };
+                let p = ModelParams::new(&card.params);
+                let inst = ModelParams::new(params);
+                match instance_temperature(&inst, opts, None).and_then(|t| {
+                    sansho_devices::urc::Urc::new(
+                        &e.name,
+                        ports.each_ref().map(|v| node(v)),
+                        &p,
+                        &inst,
+                        t,
+                    )
+                }) {
+                    Ok(dev) => {
+                        nonlinear_count += usize::from(!dev.is_linear());
+                        controlled.push(Box::new(dev));
+                    }
+                    Err(d) => errors.push(d.with_span(e.span)),
+                }
+                ModelCache::warn_ignored(card, &p.unused(), diags);
+                warn_instance(e, &inst, diags);
+            }
+            ElementKind::Ltra { ports, model } => {
+                let Some(card) = model_cache.card(model) else {
+                    errors.push(
+                        Diagnostic::error("E-ELAB-MODEL", format!("undefined LTRA model {model}"))
+                            .with_span(e.span),
+                    );
+                    continue;
+                };
+                let p = ModelParams::new(&card.params);
+                let ends = ports.each_ref().map(|s| node(s));
+                let result = sansho_devices::ltra::LineConstants::new(&p).and_then(
+                    |v| -> Result<Box<dyn DeviceGroup>, Diagnostic> {
+                        if v.r == 0. {
+                            Ok(Box::new(sansho_devices::line::Line::new(
+                                &e.name,
+                                ends,
+                                (v.l / v.c).sqrt(),
+                                v.delay(),
+                            )?))
+                        } else {
+                            Ok(Box::new(sansho_devices::ltra::Ltra::new(
+                                &e.name,
+                                ends,
+                                v,
+                                p.get("nosteplimit", 0.) == 0.,
+                            )))
+                        }
+                    },
+                );
+                p.accept(&["lininterp", "steplimit"]);
+                match result {
+                    Ok(dev) => controlled.push(dev),
+                    Err(d) => errors.push(d.with_span(e.span)),
+                }
+                ModelCache::warn_ignored(card, &p.unused(), diags);
+            }
             ElementKind::Line { ports, z0, td } => {
                 match sansho_devices::line::Line::new(
                     &e.name,
@@ -1380,7 +1465,51 @@ fn native_groups<'a>(
                 }
                 nonlinear_count += 1;
             }
+            ElementKind::Vdmos {
+                d,
+                g,
+                s,
+                model,
+                params,
+                off,
+            } => {
+                let Some(card) = model_cache.card(model) else {
+                    errors.push(
+                        Diagnostic::error("E-ELAB-MODEL", format!("undefined VDMOS model {model}"))
+                            .with_span(e.span),
+                    );
+                    continue;
+                };
+                let Some((p, _)) = model_cache.prepare(card, &mut errors) else {
+                    continue;
+                };
+                let inst = ModelParams::new(params);
+                match instance_temperature(&inst, opts, p.opt(&["tnom"])).and_then(|t| {
+                    sansho_devices::vdmos::Vdmos::new(
+                        &e.name,
+                        [node(d), node(g), node(s)],
+                        &p,
+                        &inst,
+                        t,
+                        *off,
+                    )
+                }) {
+                    Ok(dev) => controlled.push(Box::new(dev)),
+                    Err(err) => errors.push(err.with_span(e.span)),
+                }
+                ModelCache::warn_ignored(card, &p.unused(), diags);
+                warn_instance(e, &inst, diags);
+                nonlinear_count += 1;
+            }
             ElementKind::Jfet {
+                d,
+                g,
+                s,
+                model,
+                params,
+                off,
+            }
+            | ElementKind::Mesfet {
                 d,
                 g,
                 s,
@@ -1400,7 +1529,12 @@ fn native_groups<'a>(
                 };
                 let inst = ModelParams::new(params);
                 let result = instance_temperature(&inst, opts, p.opt(&["tnom"])).and_then(|t| {
-                    sansho_devices::jfet::Jfet::new(
+                    let builder = if matches!(e.kind, ElementKind::Mesfet { .. }) {
+                        sansho_devices::jfet::Jfet::mesfet
+                    } else {
+                        sansho_devices::jfet::Jfet::new
+                    };
+                    builder(
                         &e.name,
                         [node(d), node(g), node(s)],
                         &p,
@@ -1668,6 +1802,19 @@ fn native_groups<'a>(
                         continue;
                     }
                 }
+                if m.bv <= 0.
+                    || m.bv.is_nan()
+                    || ![m.rs, m.tt, m.m].iter().all(|v| v.is_finite() && *v >= 0.)
+                {
+                    errors.push(
+                        Diagnostic::error(
+                            "E-ELAB-PARAM",
+                            format!("{}: invalid temperature-adjusted diode parameter", e.name),
+                        )
+                        .with_span(e.span),
+                    );
+                    continue;
+                }
                 let copies = inst.opt(&["m", "mult"]).unwrap_or(1.);
                 // The bottom-current knee match uses the target of each parallel copy.
                 if m.is > 0. {
@@ -1709,8 +1856,14 @@ fn native_groups<'a>(
                         continue;
                     }
                 }
-                let area = inst.get("area", 1.0) * inst.opt(&["m", "mult"]).unwrap_or(1.);
-                if !area.is_finite() || area <= 0. {
+                let emitter = inst.get("area", 1.);
+                let base = inst.get("areab", emitter);
+                let collector = inst.get("areac", emitter);
+                let area = emitter * inst.opt(&["m", "mult"]).unwrap_or(1.);
+                if ![area, base, collector]
+                    .iter()
+                    .all(|v| v.is_finite() && *v > 0.)
+                {
                     errors.push(
                         Diagnostic::error(
                             "E-ELAB-PARAM",
@@ -1720,6 +1873,7 @@ fn native_groups<'a>(
                     );
                     continue;
                 }
+                m.junction_areas(emitter, base, collector);
                 warn_instance(e, &inst, diags);
                 let sub = s.as_deref().and_then(&node);
                 nonlinear_count += 1;
@@ -2127,7 +2281,7 @@ impl<'a> ModelCache<'a> {
             return None;
         }
         let polarity = match card.kind.as_str() {
-            "pnp" | "pmos" | "pjf" => -1.0,
+            "pnp" | "pmos" | "pjf" | "pmf" => -1.0,
             _ => 1.0,
         };
         Some((params, polarity))
@@ -2200,6 +2354,11 @@ impl<'a> ModelCache<'a> {
                 || m.rbm < 0.
                 || m.rbm > m.rb
                 || m.irb < 0.
+                || !m.vo.is_finite()
+                || m.vo <= 0.
+                || [m.rco, m.gamma, m.qco]
+                    .iter()
+                    .any(|v| !v.is_finite() || *v < 0.)
                 || m.ptf < 0.
                 || !matches!(m.subs, 1. | -1.)
                 || m.iss < 0.

@@ -107,6 +107,14 @@ impl DeviceGroup for Line {
         Ok(())
     }
     fn eval(&self, ctx: &EvalCtx, x: &[f64], _: StateRef<'_>, out: &mut Slots) {
+        if let Some(o) = out.outputs.first_mut() {
+            o.extend([
+                ("i1", volt(x, self.currents[0])),
+                ("i2", volt(x, self.currents[1])),
+                ("v1", self.voltage(x, 0)),
+                ("v2", self.voltage(x, 1)),
+            ]);
+        }
         let propagating = ctx.mode == Mode::Tran && ctx.time > 0.;
         let waves = if propagating {
             [0.; 2]

@@ -1,6 +1,7 @@
-//! Level-one junction FET with two depletion junctions.
+//! Level-one JFET and MESFET channel, gate junctions and terminal charges.
 //! Provenance: Massobrio & Antognetti, Semiconductor Device Modeling with SPICE,
-//! JFET model, and ngspice user manual, JFET level-one parameter definitions.
+//! JFET model; H. Statz et al., IEEE TED 34 (1987), 160–169 (MESFET
+//! current and gate charge); ngspice user manual, JFET and MESFET sections.
 
 use crate::dual::Dual;
 use crate::junction::{depletion_charge, ideal_current, limit_junction, vcrit};
@@ -24,6 +25,7 @@ pub struct Jfet {
     lambda: f64,
     b: f64,
     doping_slope: f64,
+    mes_alpha: Option<f64>,
     rd: f64,
     rs: f64,
     is: f64,
@@ -48,12 +50,53 @@ impl Jfet {
         copies: f64,
         off: bool,
     ) -> Result<Self, Diagnostic> {
+        Self::build(name, nodes, p, polarity, t, area, copies, off, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn mesfet(
+        name: &str,
+        nodes: [Node; 3],
+        p: &ModelParams,
+        polarity: f64,
+        t: Temperature,
+        area: f64,
+        copies: f64,
+        off: bool,
+    ) -> Result<Self, Diagnostic> {
+        let alpha = p.get("alpha", 2.);
+        if !alpha.is_finite() || alpha <= 0. {
+            return Err(Diagnostic::error(
+                "E-ELAB-PARAM",
+                format!("{name}: MESFET ALPHA must be positive"),
+            ));
+        }
+        Self::build(name, nodes, p, polarity, t, area, copies, off, Some(alpha))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        name: &str,
+        nodes: [Node; 3],
+        p: &ModelParams,
+        polarity: f64,
+        t: Temperature,
+        area: f64,
+        copies: f64,
+        off: bool,
+        mes_alpha: Option<f64>,
+    ) -> Result<Self, Diagnostic> {
         let scale = area * copies;
         let pb = p.get("pb", 1.);
         let vto = p.get("vto", -2.);
-        let b = p.get("b", 1.);
+        let mes = mes_alpha.is_some();
+        let b = p.get("b", if mes { 0.3 } else { 1. });
         let delta = t.kelvin - t.nominal;
-        let capacitance = t.capacitance(pb, 0.5) * scale;
+        let capacitance = if mes {
+            scale
+        } else {
+            t.capacitance(pb, 0.5) * scale
+        };
         let model = Self {
             name: name.into(),
             ext: nodes,
@@ -61,17 +104,38 @@ impl Jfet {
             off,
             polarity,
             kelvin: t.kelvin,
-            beta: p.get("beta", 1e-4) * scale * t.ratio().powf(p.get("bex", 0.)),
-            vto: vto - p.get("vtotc", 0.) * delta,
+            beta: p.get("beta", if mes { 2.5e-3 } else { 1e-4 })
+                * scale
+                * if mes {
+                    1.
+                } else {
+                    t.ratio().powf(p.get("bex", 0.))
+                },
+            vto: if mes {
+                vto
+            } else {
+                vto - p.get("vtotc", 0.) * delta
+            },
             lambda: p.get("lambda", 0.),
             b,
-            doping_slope: if b == 1. { 0. } else { (1. - b) / (pb - vto) },
+            mes_alpha,
+            doping_slope: if mes || b == 1. {
+                0.
+            } else {
+                (1. - b) / (pb - vto)
+            },
             rd: p.get("rd", 0.) / scale,
             rs: p.get("rs", 0.) / scale,
-            is: p.get("is", 1e-14) * scale * t.saturation(1.11, 3.).exp(),
+            is: p.get("is", 1e-14)
+                * scale
+                * if mes {
+                    1.
+                } else {
+                    t.saturation(1.11, 3.).exp()
+                },
             cgs: p.get("cgs", 0.) * capacitance,
             cgd: p.get("cgd", 0.) * capacitance,
-            pb: t.potential(pb),
+            pb: if mes { pb } else { t.potential(pb) },
             fc: p.get("fc", 0.5),
             kf: p.get("kf", 0.),
             af: p.get("af", 1.),
@@ -94,17 +158,36 @@ impl Jfet {
             ]
             .iter()
             .all(|v| v.is_finite())
+            || (mes && b < 0.)
             || !(0. ..1.).contains(&model.fc)
         {
             return Err(Diagnostic::error(
                 "E-ELAB-PARAM",
-                format!("{name}: invalid JFET geometry, junction or channel parameters"),
+                format!("{name}: invalid junction FET geometry, junction or channel parameters"),
             ));
         }
         Ok(model)
     }
 
     fn channel<const N: usize>(&self, gs: Dual<N>, gd: Dual<N>) -> Dual<N> {
+        if let Some(alpha) = self.mes_alpha {
+            let (drive, ds, sign) = if gs.v >= gd.v {
+                (gs, gs - gd, 1.)
+            } else {
+                (gd, gd - gs, -1.)
+            };
+            let u = drive - self.vto;
+            if u.v <= 0. {
+                return Dual::cst(0.);
+            }
+            let z = ds * (alpha / 3.);
+            let knee = if z.v < 1. {
+                z * (3. - z * (3. - z))
+            } else {
+                Dual::cst(1.)
+            };
+            return sign * self.beta * u.sq() / (1. + self.b * u) * knee * (1. + self.lambda * ds);
+        }
         // Integrate the channel charge between the two ends. Pinch-off
         // clamps the overdrive of either end to zero.
         let pinch = |v: Dual<N>| {
@@ -119,6 +202,37 @@ impl Jfet {
         let magnitude = if ds.v < 0. { -ds } else { ds };
         (pinch(gs) - pinch(gd)) * self.beta * (magnitude * self.lambda + 1.)
     }
+    /// Statz effective gate potential interpolates continuously between the
+    /// two ends of the channel. Split the gate charge by averaging the two
+    /// rectangular integration paths from the last accepted bias.
+    fn charges<const N: usize>(
+        &self,
+        gs: Dual<N>,
+        gd: Dual<N>,
+        accepted: &[f64],
+    ) -> (Dual<N>, Dual<N>) {
+        let dep = |v, c| depletion_charge(v, c, self.pb, 0.5, self.fc);
+        let Some(alpha) = self.mes_alpha else {
+            return (dep(gs, self.cgs), dep(gd, self.cgd));
+        };
+        let gate = |s: Dual<N>, d: Dual<N>| {
+            let width = ((s - d).sq() + alpha.recip().powi(2)).sqrt();
+            let high = (s + d + width) * 0.5;
+            let low = (s + d - width) * 0.5;
+            let active = (high + self.vto + ((high - self.vto).sq() + 0.04).sqrt()) * 0.5;
+            dep(active, self.cgs) + low * self.cgd
+        };
+        let last_gs = Dual::cst(accepted[0]);
+        let last_gd = Dual::cst(accepted[1]);
+        let start = gate(last_gs, last_gd);
+        let end = gate(gs, gd);
+        let across_source = gate(gs, last_gd);
+        let across_drain = gate(last_gs, gd);
+        let dqs = ((across_source - start) + (end - across_drain)) * 0.5;
+        let dqd = ((across_drain - start) + (end - across_source)) * 0.5;
+        (dqs + accepted[2], dqd + accepted[3])
+    }
+
     fn series(&self) -> [(usize, f64); 2] {
         [(0, self.rd), (2, self.rs)]
     }
@@ -140,7 +254,11 @@ impl DeviceGroup for Jfet {
         }
     }
     fn type_name(&self) -> &'static str {
-        "jfet"
+        if self.mes_alpha.is_some() {
+            "mesfet"
+        } else {
+            "jfet"
+        }
     }
     fn instance_name(&self, _: usize) -> Option<&str> {
         Some(&self.name)
@@ -149,7 +267,7 @@ impl DeviceGroup for Jfet {
         1
     }
     fn state_len(&self) -> usize {
-        2
+        if self.mes_alpha.is_some() { 4 } else { 2 }
     }
     fn is_linear(&self) -> bool {
         false
@@ -188,7 +306,7 @@ impl DeviceGroup for Jfet {
         let vt = thermal_voltage(self.kelvin);
         let vc = vcrit(self.is, vt);
         let mut junctions = [sign * (g - s), sign * (g - d)];
-        for (v, old) in junctions.iter_mut().zip(st.current) {
+        for (v, old) in junctions.iter_mut().zip(st.current.iter_mut()) {
             if ctx.init_junctions {
                 *v = if self.off { 0. } else { self.vto * 0.5 };
             } else if ctx.limit {
@@ -205,17 +323,22 @@ impl DeviceGroup for Jfet {
         let ids = self.channel(gs, gd) * sign;
         let junction = |v| (ideal_current(v, self.is, vt) + v * ctx.gmin) * sign;
         let (igs, igd) = (junction(gs), junction(gd));
-        let charge = |v, c| depletion_charge(v, c, self.pb, 0.5, self.fc) * sign;
-        if let Some(values) = out.outputs.get_mut(0) {
-            values.extend([
-                ("id", ids.v - igd.v),
-                ("ig", igs.v + igd.v),
-                ("is", -ids.v - igs.v),
-                ("gm", ids.d[1]),
-                ("gds", ids.d[0]),
-            ]);
+        let (qgs, qgd) = self.charges(gs, gd, st.accepted);
+        if self.mes_alpha.is_some() {
+            st.current[2..4].copy_from_slice(&[qgs.v, qgd.v]);
         }
-        let (qgs, qgd) = (charge(gs, self.cgs), charge(gd, self.cgd));
+        let (qgs, qgd) = (qgs * sign, qgd * sign);
+        if let Some(values) = out.outputs.get_mut(0) {
+            crate::observables::three_terminal_fet(
+                values,
+                ids,
+                [ids.v - igd.v, igs.v + igd.v, -ids.v - igs.v],
+            );
+            if self.mes_alpha.is_some() {
+                values.extend([("qgs", qgs.v), ("qgd", qgd.v), ("vgs", gs.v), ("vgd", gd.v)]);
+            }
+        }
+
         out.core(
             &mut at,
             &[ids - igd, igs + igd, -ids - igs],

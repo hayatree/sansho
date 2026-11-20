@@ -18,7 +18,10 @@ pub(crate) fn currents(nl: &Netlist) -> impl Iterator<Item = String> + '_ {
             Some(b'i') => &["current"],
             Some(b'd') => &["id"],
             Some(b'q') => &["ic", "ib", "ie", "is"],
-            Some(b'j') => &["id", "ig", "is"],
+            Some(b'j' | b'z') => &["id", "ig", "is"],
+            Some(b'm') if matches!(e.kind, sansho_netlist::ElementKind::Vdmos { .. }) => {
+                &["id", "ig", "is", "ibd"]
+            }
             Some(b'm') => &["id", "is", "ig", "ib", "ibd", "ibs"],
             _ => &[],
         };
@@ -83,15 +86,22 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
             Power
         }
         "ic" | "ie" if kind == "bjt" => Current,
-        "ig" if mos || kind == "jfet" => Current,
-        "is" if mos || matches!(kind, "bjt" | "jfet") => Current,
+        "ig" if mos || matches!(kind, "jfet" | "mesfet" | "vdmos") => Current,
+        "is" if mos || matches!(kind, "bjt" | "jfet" | "mesfet" | "vdmos") => Current,
         "ib" if mos || kind == "bjt" => Current,
-        "id" if mos || matches!(kind, "diode" | "jfet") => Current,
+        "id" if mos || matches!(kind, "diode" | "jfet" | "mesfet" | "vdmos") => Current,
+        "ibd" if kind == "vdmos" => Current,
+        "vgs" | "vds" if kind == "vdmos" => Voltage,
+        "cgs" | "cgd" if kind == "vdmos" => Capacitance,
         "ibd" | "ibs" if mos => Current,
         "isub" if bsim => Current,
         "igs" | "igd" | "igb" | "igcd" | "igcs" if kind == "bsim4" => Current,
-        "gm" if mos || matches!(kind, "bjt" | "jfet") => Admittance,
-        "gds" if mos || kind == "jfet" => Admittance,
+        "gm" if mos || matches!(kind, "bjt" | "jfet" | "mesfet" | "vdmos") => Admittance,
+        "gds" if mos || matches!(kind, "jfet" | "mesfet" | "vdmos") => Admittance,
+        "qgs" | "qgd" if kind == "mesfet" => Charge,
+        "vgs" | "vgd" if kind == "mesfet" => Voltage,
+        "i1" | "i2" if matches!(kind, "urc" | "ltra" | "tline") => Current,
+        "v1" | "v2" if matches!(kind, "ltra" | "tline") => Voltage,
         "capcur" if kind == "diode" => Current,
         "gd" if kind == "diode" => Admittance,
         "go" | "gpi" | "gmu" if kind == "bjt" => Admittance,

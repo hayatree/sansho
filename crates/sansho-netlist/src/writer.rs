@@ -331,6 +331,17 @@ pub fn write(nl: &Netlist) -> String {
                 let _ = write!(l, "{name} {} {model}", nodes.join(" "));
                 params(&mut l, ps);
             }
+            ElementKind::Ltra { ports, model } => {
+                let _ = write!(l, "{name} {} {model}", ports.join(" "));
+            }
+            ElementKind::Urc {
+                ports,
+                model,
+                params: ps,
+            } => {
+                let _ = write!(l, "{name} {} {model}", ports.join(" "));
+                params(&mut l, ps);
+            }
             ElementKind::Line { ports, z0, td } => {
                 let _ = write!(
                     l,
@@ -361,6 +372,22 @@ pub fn write(nl: &Netlist) -> String {
                 let _ = write!(l, " {}", list(coefficients));
             }
             ElementKind::Jfet {
+                d,
+                g,
+                s,
+                model,
+                params: ps,
+                off,
+            }
+            | ElementKind::Mesfet {
+                d,
+                g,
+                s,
+                model,
+                params: ps,
+                off,
+            }
+            | ElementKind::Vdmos {
                 d,
                 g,
                 s,

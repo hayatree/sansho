@@ -8,7 +8,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | Code | Severity | Summary |
 |---|---|---|
 | [`E-PARSE-COND`](#e-parse-cond) | error | Invalid conditional netlist block |
-| [`E-LINE-PARAM`](#e-line-param) | error | Invalid lossless line parameters |
+| [`E-LINE-PARAM`](#e-line-param) | error | Invalid transmission line parameters |
 | [`E-POLY-ARITY`](#e-poly-arity) | error | Invalid polynomial dimension or controls |
 | [`E-COUPLING-K`](#e-coupling-k) | error | Invalid coupling coefficient |
 | [`E-COUPLING-L`](#e-coupling-l) | error | Undefined or invalid winding |
@@ -88,9 +88,10 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## E-LINE-PARAM
 
-**Invalid lossless line parameters.** An ideal line requires positive finite characteristic impedance and propagation delay.
+**Invalid transmission line parameters.** The line parameters do not define a supported passive two-port or RC ladder.
 
-- Supply Z0 and either TD in seconds or F in hertz with optional NL in wavelengths. Each assignment may occur once.
+- For T, supply Z0 and either TD in seconds or F in hertz with optional NL in wavelengths.
+- For O, specify positive LEN and RLC, RC, LC or RG per-unit-length parameters. For U, specify positive L and K greater than one. An explicit N must be an integer from 1 through 4096.
 
 ## E-POLY-ARITY
 
@@ -373,6 +374,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Model parameter ignored.** A `.model` parameter is not implemented in this version and has no effect.
 
 - Check the model documentation for the supported parameters.
+- For a diode, TBV1 and TBV2 are unrecognized. Use TCV (V/K) to subtract TCV × (T − TNOM) from BV.
 
 ## W-MODEL-TEMP
 

@@ -28,6 +28,9 @@ pub struct DiodeModel {
     pub tnom: Option<f64>,
     pub eg: f64,
     pub xti: f64,
+    pub trs: [f64; 2],
+    pub ttt: [f64; 2],
+    pub tm: [f64; 2],
 
     /// Saturation current (A).
     pub is: f64,
@@ -47,6 +50,8 @@ pub struct DiodeModel {
     pub tt: f64,
     /// Reverse breakdown voltage (V); infinite if not given.
     pub bv: f64,
+    /// Breakdown voltage decreases by TCV volts per kelvin above TNOM.
+    pub tcv: f64,
     /// Current at breakdown voltage (A).
     pub ibv: f64,
     pub nbv: f64,
@@ -68,6 +73,11 @@ impl DiodeModel {
         if t.kelvin == t.nominal {
             return;
         }
+        let delta = t.kelvin - t.nominal;
+        let factor = |[a, b]: [f64; 2]| 1. + delta * (a + delta * b);
+        self.bv -= self.tcv * delta;
+        self.rs *= factor(self.trs);
+        self.tt *= factor(self.ttt);
         self.is *= (t.saturation(self.eg, self.xti) / self.n).exp();
         self.isr *= (t.saturation(self.eg, self.xti) / self.nr).exp();
         self.jsw *= (t.saturation(self.eg, self.xti) / self.ns).exp();
@@ -75,6 +85,7 @@ impl DiodeModel {
         self.php = t.potential(self.php);
         self.cjo *= t.capacitance(self.vj, self.m);
         self.vj = t.potential(self.vj);
+        self.m *= factor(self.tm);
     }
     /// Build from `.model` parameters. Returns the model and the names of ignored parameters.
     pub fn from_params(p: &ModelParams) -> (Self, Vec<String>) {
@@ -85,6 +96,9 @@ impl DiodeModel {
             tnom: p.opt(&["tnom"]),
             eg: p.get("eg", 1.11),
             xti: p.get("xti", 3.0),
+            trs: [p.opt(&["trs", "trs1"]).unwrap_or(0.), p.get("trs2", 0.)],
+            ttt: [p.get("ttt1", 0.), p.get("ttt2", 0.)],
+            tm: [p.get("tm1", 0.), p.get("tm2", 0.)],
 
             is: p.get("is", 1e-14),
             n: p.get("n", 1.0),
@@ -95,6 +109,7 @@ impl DiodeModel {
             fc: p.get("fc", 0.5),
             tt: p.get("tt", 0.0),
             bv: p.get("bv", f64::INFINITY),
+            tcv: p.get("tcv", 0.),
             ibv: p.get("ibv", 1e-3),
             nbv: p.get("nbv", p.get("n", 1.)),
             isr: p.get("isr", 0.),
@@ -124,7 +139,7 @@ fn diffusion_current(v: Dual<2>, saturation: f64, nvt: f64) -> Dual<2> {
     }
 }
 
-/// Avalanche knee (signed junction voltage) and reverse current at nominal BV.
+/// Avalanche knee (signed junction voltage) and reverse current at BV(T).
 #[derive(Debug, Clone, Copy)]
 struct Breakdown {
     knee: f64,
@@ -431,6 +446,38 @@ mod tests {
     fn breakdown_inherits_emission_coefficient_without_override() {
         let m = DiodeModel::from_params(&ModelParams::new(&[("n".into(), 1.05)])).0;
         assert_eq!(m.nbv, m.n);
+    }
+
+    #[test]
+    fn tcv_shifts_the_fixed_current_breakdown_voltage() {
+        let terminal_voltage = |celsius: f64, tcv: f64| {
+            let (mut m, ignored) = DiodeModel::from_params(&ModelParams::new(&[
+                ("tcv".into(), tcv),
+                ("bv".into(), 6.2),
+                ("is".into(), 2e-12),
+                ("rs".into(), 3.),
+                ("trs1".into(), 0.004),
+                ("trs2".into(), 2e-6),
+            ]));
+            assert!(ignored.is_empty());
+            let kelvin = celsius + 273.15;
+            m.at_temperature(crate::temperature::Temperature {
+                kelvin,
+                nominal: 293.15,
+            });
+            let vt = thermal_voltage(kelvin);
+            let current = 1e-3;
+            // Invert the avalanche exponential at the probe's 1 mA reverse bias.
+            let junction = -m.bv - m.nbv * vt * (current / m.breakdown(1., vt).at_bv).ln();
+            junction - current * m.rs
+        };
+        let shift = |t| terminal_voltage(t, 0.0007) - terminal_voltage(t, 0.);
+        // Subtraction cancels the common offset in the two 44.2 .op readings.
+        let measured: f64 = -6.148482324 - (-6.204485200);
+        assert!((shift(100.) - measured).abs() < 1e-6 * measured.abs());
+        assert_eq!(shift(20.), 0.);
+        // At -20 °C saturation current is negligible, so the shift is TCV × (-40 K).
+        assert!((shift(-20.) + 0.028).abs() < 1e-10);
     }
 
     #[test]

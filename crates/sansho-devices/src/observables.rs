@@ -1,7 +1,23 @@
-//! Intrinsic quasi-static MOS operating-point quantities.
+//! Intrinsic FET operating-point currents, conductances and MOS charge derivatives.
 //! Provenance: BSIM3v3.3 and BSIM4.8.2 technical manuals, terminal-charge derivatives.
 
 use crate::dual::Dual;
+
+/// Total terminal currents include junction conduction. Small-signal gm and
+/// gds are derivatives of the intrinsic channel at the operating bias.
+pub(crate) fn three_terminal_fet(
+    values: &mut Vec<(&'static str, f64)>,
+    channel: Dual<3>,
+    [id, ig, is]: [f64; 3],
+) {
+    values.extend([
+        ("id", id),
+        ("ig", ig),
+        ("is", is),
+        ("gm", channel.d[1]),
+        ("gds", channel.d[0]),
+    ]);
+}
 
 pub(crate) fn mos(
     values: &mut Vec<(&'static str, f64)>,

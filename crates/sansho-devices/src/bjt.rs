@@ -20,7 +20,8 @@
 //! Provenance: original implementation of the model equations published in H. K. Gummel &
 //! H. C. Poon, "An integral charge control model of bipolar transistors", Bell Syst. Tech. J.
 //! 49 (1970), and I. Getreu, *Modeling the Bipolar Transistor* (Tektronix, 1976), in the
-//! parameterization of Antognetti & Massobrio (1993), ch. 2. See `docs/PROVENANCE.md`.
+//! parameterization of Antognetti & Massobrio (1993), ch. 2. The epitaxial
+//! collector branch follows Kull et al., IEEE TED 32 (1985). See `docs/PROVENANCE.md`.
 
 use sansho_diag::Diagnostic;
 
@@ -71,6 +72,12 @@ pub struct BjtModel {
     pub ptf: f64,
     pub re: f64,
     pub rc: f64,
+    pub rco: f64,
+    pub vo: f64,
+    pub gamma: f64,
+    pub qco: f64,
+    /// Ratio of the base–collector junction area to the emitter area.
+    pub bc_area_ratio: f64,
     pub cje: f64,
     pub vje: f64,
     pub mje: f64,
@@ -89,6 +96,21 @@ pub struct BjtModel {
 }
 
 impl BjtModel {
+    /// Vertical devices locate the collector junction under the base.
+    /// In the lateral geometry the base is the substrate-facing region.
+    pub fn junction_areas(&mut self, emitter: f64, base: f64, collector: f64) {
+        let (bc, sub) = if self.subs > 0. {
+            (base, collector)
+        } else {
+            (collector, base)
+        };
+        self.bc_area_ratio = bc / emitter;
+        self.cjc *= self.bc_area_ratio;
+        self.isc *= self.bc_area_ratio;
+        self.cjs *= sub / emitter;
+        self.iss *= sub / emitter;
+    }
+
     pub fn at_temperature(&mut self, t: crate::temperature::Temperature) {
         self.temperature = Some(t.kelvin);
         if t.kelvin == t.nominal {
@@ -150,6 +172,11 @@ impl BjtModel {
             ptf: p.get("ptf", 0.),
             re: p.get("re", 0.0),
             rc: p.get("rc", 0.0),
+            rco: p.get("rco", 0.),
+            vo: p.get("vo", 10.),
+            gamma: p.get("gamma", 1e-11),
+            qco: p.get("qco", 0.),
+            bc_area_ratio: 1.,
             cje: p.get("cje", 0.0),
             vje: p.opt(&["vje", "pe"]).unwrap_or(0.75),
             mje: p.opt(&["mje", "me"]).unwrap_or(0.33),
@@ -180,6 +207,7 @@ pub struct Bjts {
     /// Internal c', b', e' (equal to external when the resistance is zero), s.
     int: Vec<[Node; 4]>,
     area: Vec<f64>,
+    collector_contact: Vec<Node>,
     off: Vec<bool>,
     model: Vec<BjtModel>,
     at: Vec<SlotOffsets>,
@@ -194,12 +222,40 @@ impl Bjts {
         self.ext.push(nodes);
         self.int.push(nodes);
         self.area.push(area);
+        self.collector_contact.push(nodes[0]);
         self.off.push(off);
         self.phase_index
             .push((model.ptf > 0. && model.tf > 0.).then_some(self.phase_count));
         self.phase_count += usize::from(model.ptf > 0. && model.tf > 0.);
         self.model.push(model);
     }
+}
+
+/// Kull et al., IEEE TED 32 (1985), epitaxial-region conductivity modulation.
+/// Integrate the neutral-region conductivity between the two collector
+/// potentials. Subtract equilibrium charge at each end of the region.
+fn epitaxial<const N: usize>(
+    m: &BjtModel,
+    area: f64,
+    vt: f64,
+    cx: Dual<N>,
+    ci: Dual<N>,
+    base: Dual<N>,
+) -> (Dual<N>, Dual<N>, Dual<N>) {
+    let carriers = |v| (1. + m.gamma * crate::junction::safe_exp(v / vt)).sqrt();
+    let ki = carriers((base - ci) * m.polarity);
+    let kx = carriers((base - cx) * m.polarity);
+    let density = ki - kx;
+    let modulation = density - (density / (1. + kx)).ln_1p();
+    let drop = cx - ci;
+    // Drift velocity depends on the electric field across the epi layer.
+    let magnitude = if drop.v < 0. { -drop } else { drop };
+    let current = (drop + m.polarity * vt * modulation) / (1. + magnitude / m.vo);
+    (
+        current * (area / m.rco),
+        m.polarity * m.qco * area * (ki - 1.),
+        m.polarity * m.qco * area * (kx - 1.),
+    )
 }
 
 const SUFFIX: [&str; 3] = ["c", "b", "e"];
@@ -248,6 +304,16 @@ impl DeviceGroup for Bjts {
         if row < 2 && self.model[i].xcjc != 1. && self.model[i].cjc != 0. {
             terms.push((first + 4 + usize::from(row == 0), 1.));
         }
+        if self.model[i].rco > 0. {
+            let split = usize::from(self.model[i].xcjc != 1. && self.model[i].cjc != 0.);
+            let epi = first + 4 + 2 * split;
+            if row == 0 {
+                terms.extend([(epi, 1.), (epi + 1, 1.)]);
+            }
+            if row == 1 {
+                terms.push((epi + 2, 1.));
+            }
+        }
         terms
     }
     fn instance_ic(&self, i: usize, ic: &[f64], _: &mut [f64], edges: &mut Vec<(Node, Node, f64)>) {
@@ -286,7 +352,16 @@ impl DeviceGroup for Bjts {
             let [c, b, e, sub] = self.int[i];
             for (k, r) in [m.rc, m.rb, m.re].into_iter().enumerate() {
                 if r > 0. {
-                    emit(self.ext[i][k], self.int[i][k], thermal * slots.g[at.g], 0.);
+                    emit(
+                        self.ext[i][k],
+                        if k == 0 {
+                            self.collector_contact[i]
+                        } else {
+                            self.int[i][k]
+                        },
+                        thermal * slots.g[at.g],
+                        0.,
+                    );
                     at.f += 2;
                     at.g += 4;
                 }
@@ -337,6 +412,10 @@ impl DeviceGroup for Bjts {
                     self.int[i][k] = Some(u.alloc_internal_node(&self.names[i], SUFFIX[k]));
                 }
             }
+            self.collector_contact[i] = self.int[i][0];
+            if m.rco > 0. {
+                self.int[i][0] = Some(u.alloc_internal_node(&self.names[i], "ci"));
+            }
         }
     }
     fn setup(&mut self, b: &mut StampBuilder<'_>) -> Result<(), Diagnostic> {
@@ -346,12 +425,22 @@ impl DeviceGroup for Bjts {
             let m = &self.model[i];
             for (k, r) in [m.rc, m.rb, m.re].into_iter().enumerate() {
                 if r > 0.0 {
-                    b.resistor(self.ext[i][k], self.int[i][k]);
+                    b.resistor(
+                        self.ext[i][k],
+                        if k == 0 {
+                            self.collector_contact[i]
+                        } else {
+                            self.int[i][k]
+                        },
+                    );
                 }
             }
             b.charge_core(&self.int[i]);
             if m.xcjc != 1. && m.cjc != 0. {
                 b.charge_core(&[self.ext[i][1], self.int[i][0]]);
+            }
+            if m.rco > 0. {
+                b.charge_core(&[self.collector_contact[i], self.int[i][0], self.int[i][1]]);
             }
         }
         Ok(())
@@ -370,6 +459,7 @@ impl DeviceGroup for Bjts {
             let [vc, vb, ve, vs] = act;
             let sgn = m.polarity;
             let is = m.is * area;
+            let is_bc = is * m.bc_area_ratio;
             let (nf_vt, nr_vt) = (m.nf * vt, m.nr * vt);
             let vbe_act = sgn * (vb - ve);
             let vbc_act = sgn * (vb - vc);
@@ -382,7 +472,7 @@ impl DeviceGroup for Bjts {
             } else if ctx.limit {
                 let (a, la) = limit_junction(vbe_act, st.current[2 * i], nf_vt, vcrit(is, nf_vt));
                 let (b, lb) =
-                    limit_junction(vbc_act, st.current[2 * i + 1], nr_vt, vcrit(is, nr_vt));
+                    limit_junction(vbc_act, st.current[2 * i + 1], nr_vt, vcrit(is_bc, nr_vt));
                 if la || lb {
                     out.noncon = true;
                 }
@@ -403,7 +493,7 @@ impl DeviceGroup for Bjts {
             let vsc = (ds - if substrate_node == 0 { dc } else { db }) * sub_sign;
 
             let ibf = ideal_current(vbe, is, nf_vt);
-            let ibr = ideal_current(vbc, is, nr_vt);
+            let ibr = ideal_current(vbc, is_bc, nr_vt);
             let ile = ideal_current(vbe, m.ise * area, m.ne * vt);
             let ilc = ideal_current(vbc, m.isc * area, m.nc * vt);
             let q1 = 1.0 / (1.0 - vbc / m.vaf - vbe / m.var);
@@ -467,7 +557,14 @@ impl DeviceGroup for Bjts {
                         &mut at,
                         area / r,
                         volt(x, self.ext[i][k]),
-                        volt(x, self.int[i][k]),
+                        volt(
+                            x,
+                            if k == 0 {
+                                self.collector_contact[i]
+                            } else {
+                                self.int[i][k]
+                            },
+                        ),
                     );
                 }
             }
@@ -511,6 +608,19 @@ impl DeviceGroup for Bjts {
                 let v = (Dual::<2>::var(bias[0], 0) - Dual::var(vc, 1)) * sgn;
                 let q = depletion_charge(v, (1. - m.xcjc) * m.cjc * area, m.vjc, m.mjc, m.fc) * sgn;
                 out.core(&mut at, &[Dual::cst(0.); 2], &[q, -q], &bias, &bias);
+            }
+            if m.rco > 0. {
+                let cx = volt(x, self.collector_contact[i]);
+                let epi_lin = [cx, lin[0], lin[1]];
+                let [xnode, inode, base] = [0, 1, 2].map(|k| Dual::var(epi_lin[k], k));
+                let (current, qi, qx) = epitaxial(m, area, vt, xnode, inode, base);
+                out.core(
+                    &mut at,
+                    &[current, -current, Dual::cst(0.)],
+                    &[-qx, -qi, qi + qx],
+                    &[cx, vc, vb],
+                    &epi_lin,
+                );
             }
         }
     }

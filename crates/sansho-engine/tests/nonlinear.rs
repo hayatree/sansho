@@ -42,6 +42,21 @@ fn diode_resistor_operating_point() {
 }
 
 #[test]
+fn diode_tbv_parameters_warn_and_leave_breakdown_unchanged() {
+    let probe = include_str!("../../../verify/probes/r8_diode_tbv_temp.cir");
+    let nl = parse(&probe.replace(".temp 20", ".temp 100")).unwrap();
+    let out = run(&nl).unwrap();
+    assert_eq!(op(&out.results, "v(test)"), op(&out.results, "v(control)"));
+    for name in ["tbv1", "tbv2"] {
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.code == "W-MODEL-IGNORED" && w.message.contains(name))
+        );
+    }
+}
+
+#[test]
 fn bjt_forward_active_gain() {
     let r = simulate(
         "q\nVCE c 0 5\nIB 0 b 10u\nQ1 c b 0 qm\n.model qm npn is=1e-15 bf=120 br=2\n.op\n",

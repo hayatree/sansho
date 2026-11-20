@@ -374,3 +374,21 @@ The standalone MOS deck keeps the same physical circuit and first-order method. 
 ```sh
 cargo run --release -p sansho-verify -- verify/decks/r7_{device,diode,mos}_uic.cir
 ```
+
+## R8 built-in device decks
+
+The R8 diode temperature sweep now uses TCV and awaits a regenerated 44.2 reference. The earlier raw used TBV1/TBV2. The other ten R8 decks have 44.2 references, including the QCO=0 static deck. [Paired diode probes](probes/README.md#diode-breakdown-under-temp) · [Semiconductor measurements](../docs/r8-semiconductors.md) · [Distributed line measurements](../docs/distributed-lines.md)
+
+| Deck in `verify/decks` | Observable |
+|---|---|
+| `r8_vdmos_output.cir` | Drain current against drain voltage at three gate biases, with access resistance and MTRIODE. |
+| `r8_vdmos_recovery.cir` | Current and drain voltage during commutation of a forward-biased body diode. |
+| `r8_vdmos_gate.cir` | Gate charging current, Miller interval and loaded drain transition under resistive gate drive. |
+| `r8_mesfet.cir` | Loaded GaAs output curve, complex gain and gate-pulse response. |
+| `r8_bjt_quasisaturation.cir` | Static collector and base voltages versus drive, with RCO=50 Ω, VO=2 V and QCO=0. |
+| `r8_bjt_switch.cir` | Collector voltage and recovery current following a saturating base pulse, with RCO/GAMMA/QCO and unequal junction areas. |
+| `r8_ltra_rc.cir` | Diffusive far-end voltage step and near-end charging current. |
+| `r8_ltra_rlc.cir` | Attenuated pulse and repeated delayed reflections at mismatched ports. |
+| `r8_ltra_ac.cir` | Complex RLC transfer, static RG leakage and input admittance. |
+| `r8_urc.cir` | Loaded transfer and step response with explicit segmentation and an automatically sized ladder with diode shunts. |
+| `r8_diode_temperature.cir` | Forward series drop and avalanche operating voltage from −20 through 100 °C. |

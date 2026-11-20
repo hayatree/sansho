@@ -205,3 +205,58 @@ moves the knee and sets the slope while preserving the high-current intercept.
 All six probe families use positive IS, N = 1 and one copy. The multiplier
 scales parallel copies in Sansho, and IS = 0 retains the previous nominal
 area-scaled target because the bottom-current match is undefined there. [ngspice manual, §7.2.2](https://ngspice.sourceforge.io/docs/ngspice-manual.pdf#page=139)
+
+## R8b epitaxial collector and URC
+
+All 23 exact circuits in the five R8b families have ngspice 44.2 raw files. Each comparison below uses the saved circuit for that setting. All 23 pass the ordinary verifier tolerances.
+
+### Uniform line measurements
+
+In `r8_urc_fmax`, compare complex `v(a)` with `v(e1)` through `v(e7)` in the **same** 1 GHz sample. Only FMAX changes between runs. The estimate uses the line totals R = 200 Ω and C = 60 pF, with K = 1.6.
+
+| FMAX (GHz) | 0.10 | 0.70 | 0.85 | 1.00 | 1.30 | 1.50 | 1.70 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Logarithmic estimate | 0.125 | 4.265 | 4.678 | 5.024 | 5.582 | 5.886 | 6.153 |
+| Matching explicit N | 3 | 4 | 4 | 5 | 5 | 5 | 6 |
+
+The low-frequency sample fixes the lower bound. The two samples between 5.5 and 6 distinguish truncation from nearest-integer rounding. In `r8_urc_resistance`, the end access resistance is N·L·RSPERL. Moving one tap toward the centre divides resistance by K. For N = 1, 2, 4, 5 and 8, the end values are 0.6, 1.2, 2.4, 3.0 and 4.8 Ω. Across all 35 samples from 10 MHz to 1 GHz, this ladder reproduces both complex port observables within 1.7e−13 V and 2.2e−15 A. [Ladder normalization and automatic count](../../docs/distributed-lines.md#uniform-rc-ladder)
+
+### Epitaxial current and reverse junction area
+
+On the VO and GAMMA cards the collector and base sources directly measure terminal currents. Let Ic = −i(Vc) and Ib = −i(Vb). With unity base charge, negligible shunt current, BF = 150 and BR = 3, the forward and reverse diffusion currents satisfy `If = (Ic + 4 Ib)/(1 + 4/150)` and `Ir = 3 (Ib − If/150)`. In saturation, recover the intrinsic collector voltage as `Vi = Vb − Vt log1p(Ir/(IS·Abc))`, where Abc is the base–collector junction area. The ideal contacts in these two sweeps give Vx = Vc, Vb = 0.8 V and Abc = 1.
+
+At Vc = 0.25 V and VO = 2 V, write d for Vx − Vi and u for the integrated conductivity-modulation voltage. The following currents are in mA. Both calculated columns use (d + u)/RCO as the low-field current.
+
+| GAMMA | d (V) | u (V) | Measured Ic | Divide by 1 + d/VO | Divide by 1 + (d + u)/VO |
+|---:|---:|---:|---:|---:|---:|
+| 0 | 0.23814 | 0 | 4.2560 | 4.2560 | 4.2560 |
+| 1e−13 | 0.23795 | 0.00942 | 4.4214 | 4.4214 | 4.4028 |
+| 1e−11 | 0.23302 | 0.23345 | 8.3557 | 8.3557 | 7.5649 |
+| 1e−9 | 0.18634 | 1.12555 | 24.0015 | 24.0015 | 15.8446 |
+
+The independent VO sweep checks 0.5, 2, 5 and 100,000 V. Across the eight fixed-base runs of 61 points each, the implemented model’s largest absolute deviations are 0.285 µA on collector current and 0.073 µA on base current.
+
+For the loaded RCO sweeps first subtract the measured RC and RB drops from the external collector and base voltages. At 3 V drive the measured collector currents are 48.827, 39.658 and 24.219 mA for RCO = 3, 20 and 50 Ω. Reconstructing Vi using Abc = AREA = 1 gives 89.751, 43.710 and 25.258 mA from the branch law. With Abc = AREAB = 2 the law gives 48.831, 39.658 and 24.219 mA. Across each full drive sweep the worst verifier scores are 0.0594, 0.0731 and 0.0414 respectively. The 50 Ω run supplies the reference for `r8_bjt_quasisaturation`. [Current and charge equations](../../docs/r8-semiconductors.md#bipolar-junction-transistor-and-diode)
+
+### Diode breakdown under .temp
+
+Each probe drives two otherwise identical diodes at 1 mA reverse current. Both have BV = 6.2 V, IBV = 1 mA and model TNOM = 20 °C. Subtracting `v(control)` from `v(test)` cancels the common series drop.
+
+In `r8_diode_tbv_temp.cir`, only the test diode specifies TBV1 and TBV2. The maintainer’s ngspice 44.2 runs gave exactly equal node voltages at −20, 20, 60 and 100 °C. Each log in `verify/out/probes/r8_diode_tbv_temp_*.log` reports both parameters as unrecognized and ignored.
+
+In `r8_diode_tcv_temp.cir`, only the test diode specifies TCV = 0.0007 V/K. At 100 °C the maintainer measured −6.148482324 V at the test node and −6.204485200 V at the control. The remaining TCV sweep points are predictions awaiting measurement.
+
+| Temperature (°C) | 44.2 TCV shift (mV) | Sansho knee prediction (mV) |
+|---:|---:|---:|
+| −20 | Pending | −28.000000 |
+| 20 | Pending | 0 |
+| 60 | Pending | +28.000016 |
+| 100 | +56.002876 | +56.002876 |
+
+The prediction uses `BV(T) = BV − TCV·(T − TNOM)`. At 100 °C, solving the avalanche exponential at exactly 1 mA and including the series drop gives −6.148294617 V and −6.204297493 V. Both are about 0.188 mV above the respective 44.2 operating points. Their difference agrees to better than 1e−6 relative. The 2.876 µV beyond the 56 mV change in BV comes from matching the knee at the adjusted breakdown voltage.
+
+To repeat the sweeps, run
+
+```sh
+verify/probes/sweep.sh verify/probes/r8_diode_{tbv,tcv}_temp.cir
+```

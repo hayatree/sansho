@@ -36,6 +36,10 @@ Select a quantity with `.save @m1[gm]`. A transistor inside subcircuit instance 
 | D | `id`, incremental `gd`, differential capacitance `cd`, `charge`, displacement current `capcur`. |
 | Q | `ic ib ie is gm gpi gmu go cpi cmu`. |
 | J | `id is ig gm gds`. |
+| Z | `id ig is gm gds vgs vgd qgs qgd`. |
+| M, VDMOS | `id ig is ibd gm gds vgs vds cgs cgd`. |
+| O, T | Port voltages `v1 v2` and currents `i1 i2` entering the line. |
+| U | End currents `i1 i2` entering the ladder. |
 | M, levels 1/2/3 | `id is ig ib ibd ibs gm gds gmbs vth von vdsat cgg cgs cgd`. The gate capacitances use the classical Meyer and overlap terms. |
 | BSIM3 and BSIM4 | `id is ig ib ibd ibs isub gm gds gmbs vth vdsat`. Intrinsic charges `qd qg qs qb` and their 16 signed derivatives `cxy`, where x and y are d, g, s or b. Junction outputs `qbd qbs capbd capbs`. BSIM4 also exposes `igd igs igb igcd igcs`. |
 
@@ -51,7 +55,7 @@ OP and DC sample the converged point. TRAN samples accepted timesteps. Capacitor
 
 `R1 p n R='expr'`, `C1 p n C={expr}` and `L1 p n L='expr'` accept differential node voltages, branch-current probes, `time` in seconds and `temper` in °C. R stamps the current V/R. C and L use differential capacitance and inductance, with terminal laws i = C(x,t) dV/dt and V = L(x,t) di/dt. An auxiliary differential equation supplies the derivative. Equal and opposite currents conserve charge at the pins. For C(V) the transferred charge is the integral of C(V) dV. Standalone Q and flux expressions are outside the supported grammar. Numeric and behavioral resistors accept TC1, TC2, parallel multiplicity and a separate AC resistance. A resistor sweep changes its nominal value and retains its temperature factor and parallel multiplicity.
 
-With `.tran … uic`, D accepts its junction voltage, Q takes VBE,VCE, M takes VDS,VGS,VBS, and J takes VDS,VGS. For a lossless T line the tuple V1,I1,V2,I2 initializes the two port currents and outgoing wave histories V + Z0 I. Device voltage constraints initialize the reported time-zero voltages. Each initialized junction uses its own local voltage for startup charge. Device IC tuples apply only to UIC startup. The standalone diode comparison records the ngspice 44.2 exception. [Numerical differences](compatibility.md#numerical-differences)
+With `.tran … uic`, D accepts its junction voltage, Q takes VBE,VCE, M takes VDS,VGS,VBS, and J, Z and three-terminal VDMOS take VDS,VGS. For a lossless T line the tuple V1,I1,V2,I2 initializes the two port currents and outgoing wave histories V + Z0 I. Device voltage constraints initialize the reported time-zero voltages. Each initialized junction uses its own local voltage for startup charge. Device IC tuples apply only to UIC startup. The standalone diode comparison records the ngspice 44.2 exception. [Numerical differences](compatibility.md#numerical-differences)
 
 ## Stochastic sources
 
@@ -135,6 +139,8 @@ point-by-point listing. The interval has no effect on integration.
 |---|---|
 | Resistor | Johnson–Nyquist noise with the effective resistance and instance temperature. `noisy=0` disables it. |
 | Diode | Junction shot noise, KF/AF flicker proportional to the junction current raised to AF, and series-resistance thermal noise. |
+| Z and VDMOS | Series-resistance thermal noise, channel thermal and KF/AF flicker noise. VDMOS also includes body-junction shot noise. |
+| URC | Series-resistance thermal noise and shot noise from enabled shunt junctions. |
 | BJT | Collector and base shot noise, base-current KF/AF flicker, and RC/RB/RE thermal noise at the internal terminals. |
 | MOS1, MOS2 and MOS3 | Channel thermal noise with conductance 2·abs(gm)/3, gate-referred KF/AF flicker projected through gm, and drain/source series-resistance noise. |
 | BSIM3v3.3 | noiMod 1–4 select SPICE2 or inversion-charge thermal noise and empirical or trap-density flicker. Diffusion sheet resistances contribute independent thermal sources. [Mode mapping and units](bsim3.md) |
@@ -196,6 +202,8 @@ The basic diode IS/N, BJT IS/BF/BR and MOS1 threshold, body, channel-length and
 gain defaults are also considered. An implicit mobility-derived KP retains its
 dependence on oxide thickness and mobility. Discrete selectors and topology-changing zero-resistance perturbations are outside
 this coverage.
+
+Positive model-card RCO, VO and QCO on Q are available as sensitivities. Explicit AREAB/AREAC on Q, AREA and M on Z, M on VDMOS, and length L on U are available as instance sensitivities. The URC derivative requires the perturbations to preserve the ladder topology.
 
 AC sensitivity stores complex derivatives versus frequency. It solves the nominal
 forward and adjoint equations with one LU per frequency. For each parameter a

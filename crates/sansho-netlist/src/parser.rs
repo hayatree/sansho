@@ -339,7 +339,7 @@ impl Parser {
         let name = head.to_string();
         let mut ic = Vec::new();
         let mut stripped;
-        let line = if head.starts_with(['d', 'q', 'm', 'j', 't'])
+        let line = if head.starts_with(['d', 'q', 'm', 'j', 'z', 't', 'o'])
             && let Some(index) = line
                 .tokens
                 .windows(2)
@@ -348,7 +348,7 @@ impl Parser {
             let count = match head.as_bytes()[0] {
                 b'd' => 1,
                 b'm' => 3,
-                b't' => 4,
+                b't' | b'o' => 4,
                 _ => 2,
             };
             for token in line.tokens.iter().skip(index + 2).take(count) {
@@ -358,7 +358,7 @@ impl Parser {
                     break;
                 }
             }
-            if ic.len() != count {
+            if ic.len() != count && !(head.starts_with('m') && ic.len() == 2) {
                 self.err(
                     "E-PARSE-ARITY",
                     format!("{name} IC requires {count} values"),
@@ -367,14 +367,25 @@ impl Parser {
                 return;
             }
             stripped = line.clone();
-            stripped.tokens.drain(index..index + 2 + count);
+            stripped.tokens.drain(index..index + 2 + ic.len());
             &stripped
         } else {
             line
         };
         let kind = match head.as_bytes().first() {
+            Some(b'o') => {
+                let Some(t) = self.need(line, 6, "Oname p1 n1 p2 n2 model") else {
+                    return;
+                };
+                self.no_extra(t, 6);
+                Some(ElementKind::Ltra {
+                    ports: [1, 2, 3, 4].map(|i| node_name(&t[i])),
+                    model: t[5].lower(),
+                })
+            }
+            Some(b'u') => self.urc(line),
             Some(b't') => self.line_device(line),
-            Some(b'j') => self.jfet(line),
+            Some(b'j' | b'z') => self.jfet(line),
             Some(b'e' | b'f' | b'g' | b'h') if line.polynomial() => self.polynomial(line),
             Some(b'k') => self.coupling(line),
             Some(b's' | b'w') => self.switch(line),
@@ -402,6 +413,17 @@ impl Parser {
             }
         };
         if let Some(kind) = kind {
+            if !ic.is_empty()
+                && (matches!(kind, ElementKind::Mosfet { .. }) && ic.len() != 3
+                    || matches!(kind, ElementKind::Vdmos { .. }) && ic.len() != 2)
+            {
+                self.err(
+                    "E-PARSE-ARITY",
+                    format!("invalid IC tuple for {name}"),
+                    span,
+                );
+                return;
+            }
             if !self.element_names.insert(name.clone()) {
                 self.err(
                     "E-PARSE-DUPLICATE",
@@ -522,6 +544,18 @@ impl Parser {
         })
     }
 
+    fn urc(&mut self, line: &Line) -> Option<ElementKind> {
+        let f = self.device_fields(line)?;
+        let [a, b, sub, model] = f.positional.as_slice() else {
+            return self.arity(line, "Uname n1 n2 ref model L=length [N=lumps]");
+        };
+        Some(ElementKind::Urc {
+            ports: [a, b, sub].map(node_name),
+            model: model.lower(),
+            params: f.params,
+        })
+    }
+
     fn jfet(&mut self, line: &Line) -> Option<ElementKind> {
         let mut f = self.device_fields(line)?;
         let p = &f.positional;
@@ -529,6 +563,16 @@ impl Parser {
             return self.arity(line, "Jname drain gate source model [area] [off]");
         }
         self.area(p.get(4), &mut f.params)?;
+        if line.tokens[0].lower().starts_with('z') {
+            return Some(ElementKind::Mesfet {
+                d: node_name(&p[0]),
+                g: node_name(&p[1]),
+                s: node_name(&p[2]),
+                model: p[3].lower(),
+                params: f.params,
+                off: f.off,
+            });
+        }
         Some(ElementKind::Jfet {
             d: node_name(&p[0]),
             g: node_name(&p[1]),
@@ -1122,6 +1166,16 @@ impl Parser {
     fn mosfet(&mut self, line: &Line) -> Option<ElementKind> {
         let usage = "Mname nd ng ns nb model [l=..] [w=..] [ad=..] [as=..] [pd=..] [ps=..] [off]";
         let f = self.device_fields(line)?;
+        if let [d, g, s, model] = f.positional.as_slice() {
+            return Some(ElementKind::Vdmos {
+                d: node_name(d),
+                g: node_name(g),
+                s: node_name(s),
+                model: model.lower(),
+                params: f.params,
+                off: f.off,
+            });
+        }
         if f.positional.len() != 5 {
             return self.arity(line, usage);
         }
@@ -1381,9 +1435,14 @@ impl Parser {
                     params,
                     ..
                 } => (model, params),
-                ElementKind::Switch { model, .. } => (model, &mut empty),
+                ElementKind::Ltra { model, .. } | ElementKind::Switch { model, .. } => {
+                    (model, &mut empty)
+                }
                 ElementKind::Mosfet { model, params, .. }
                 | ElementKind::Jfet { model, params, .. }
+                | ElementKind::Mesfet { model, params, .. }
+                | ElementKind::Vdmos { model, params, .. }
+                | ElementKind::Urc { model, params, .. }
                 | ElementKind::Diode { model, params, .. }
                 | ElementKind::Bjt { model, params, .. }
                 | ElementKind::Va { model, params, .. } => (model, params),
@@ -1494,6 +1553,10 @@ impl Parser {
                 ElementKind::Capacitor { .. } => &["c"],
                 ElementKind::Inductor { .. } => &["l"],
                 ElementKind::Jfet { .. } => &["njf", "pjf"],
+                ElementKind::Urc { .. } => &["urc"],
+                ElementKind::Ltra { .. } => &["ltra"],
+                ElementKind::Mesfet { .. } => &["nmf", "pmf"],
+                ElementKind::Vdmos { .. } => &["vdmos"],
                 ElementKind::Diode { .. } => &["d"],
                 ElementKind::Bjt { .. } => &["npn", "pnp"],
                 ElementKind::Va { .. } => &[],
@@ -1570,6 +1633,11 @@ impl Parser {
         while i < t.len() {
             let k = t[i].lower();
             if !t.get(i + 1).is_some_and(Token::is_eq) {
+                if kind == "vdmos" && matches!(k.as_str(), "pchan" | "nchan") {
+                    params.push((k, 1.));
+                    i += 1;
+                    continue;
+                }
                 self.err(
                     "E-PARSE-UNEXPECTED",
                     format!("expected `name=value` in .model, found `{}`", t[i].text),
@@ -2273,7 +2341,7 @@ R2 ignored after end 1
 
     #[test]
     fn reports_all_errors_with_spans() {
-        let src = "t\nR1 a b\nZ1 c b e mod\nC1 a 0 xyz\n";
+        let src = "t\nR1 a b\nY1 c b e mod\nC1 a 0 xyz\n";
         let diags = parse(src).err().unwrap_or_default();
         let codes: Vec<_> = diags.iter().map(|d| d.code).collect();
         assert_eq!(

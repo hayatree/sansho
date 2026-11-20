@@ -303,6 +303,7 @@ pub(super) fn noise(
 enum Parameter {
     Element(usize),
     Model(usize, usize),
+    Instance(usize, usize),
     LineImpedance(usize),
     LineDelay(usize),
     Polynomial(usize, usize),
@@ -314,6 +315,23 @@ impl Parameter {
         } else {
             value.abs() * 1e-5
         };
+        if let Self::Model(m, p) = self {
+            let card = &nl.models[m];
+            if card.kind == "vdmos" {
+                let get = |name: &str| {
+                    card.params
+                        .iter()
+                        .rev()
+                        .find(|(key, _)| key == name)
+                        .map_or(0., |(_, v)| *v)
+                };
+                match card.params[p].0.as_str() {
+                    "cgdmin" => return ((value + h).min(get("cgdmax")), (value - h).max(0.)),
+                    "cgdmax" => return (value + h, (value - h).max(get("cgdmin"))),
+                    _ => {}
+                }
+            }
+        }
         let lower_bound = value == 0.
             && matches!(self, Self::Model(m,p) if matches!(nl.models[m].params[p].0.as_str(),"gamma"|"kp"|"beta"|"is"));
         (value + h, if lower_bound { value } else { value - h })
@@ -337,6 +355,13 @@ impl Parameter {
                 }
             }
             Self::Model(m, p) => nl.models[m].params[p].1 = v,
+            Self::Instance(i, j) => match &mut nl.elements[i].kind {
+                ElementKind::Bjt { params, .. }
+                | ElementKind::Urc { params, .. }
+                | ElementKind::Vdmos { params, .. }
+                | ElementKind::Mesfet { params, .. } => params[j].1 = v,
+                _ => {}
+            },
             Self::Element(i) => match &mut nl.elements[i].kind {
                 ElementKind::Resistor { value, .. }
                 | ElementKind::Capacitor { value, .. }
@@ -353,6 +378,34 @@ fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
     let mut params = vec![];
     for (i, e) in nl.elements.iter().enumerate() {
         let value = match &e.kind {
+            ElementKind::Bjt {
+                params: instance, ..
+            }
+            | ElementKind::Urc {
+                params: instance, ..
+            }
+            | ElementKind::Vdmos {
+                params: instance, ..
+            }
+            | ElementKind::Mesfet {
+                params: instance, ..
+            } => {
+                let selected: &[&str] = match &e.kind {
+                    ElementKind::Bjt { .. } => &["areab", "areac"],
+                    ElementKind::Urc { .. } => &["l"],
+                    ElementKind::Mesfet { .. } => &["area", "m", "mult"],
+                    _ => &["m", "mult"],
+                };
+                for (j, (key, v)) in instance.iter().enumerate() {
+                    if selected.contains(&key.as_str())
+                        && *v > 0.
+                        && !instance[j + 1..].iter().any(|(k, _)| k == key)
+                    {
+                        params.push((format!("{}:{key}", e.name), Parameter::Instance(i, j), *v));
+                    }
+                }
+                continue;
+            }
             ElementKind::Line { z0, td, .. } => {
                 params.push((format!("{}:z0", e.name), Parameter::LineImpedance(i), *z0));
                 params.push((format!("{}:td", e.name), Parameter::LineDelay(i), *td));
@@ -394,6 +447,7 @@ fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
             .map_or(1., |(_, v)| *v);
         let defaults: &[(&str, f64)] = match m.kind.as_str() {
             "d" => &[("is", 1e-14), ("n", 1.)],
+            "nmf" | "pmf" => &[("vto", -2.), ("beta", 2.5e-3), ("alpha", 2.)],
             "njf" | "pjf" => &[("vto", -2.), ("beta", 1e-4), ("lambda", 0.)],
             "npn" | "pnp" => &[("is", 1e-16), ("bf", 100.), ("br", 1.)],
             "nmos" | "pmos" if level == 1. => &[("gamma", 0.), ("lambda", 0.), ("phi", 0.6)],
@@ -467,9 +521,38 @@ fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
                         | "kappa"
                         | "xj"
                 ))
-                || (matches!(m.kind.as_str(), "njf" | "pjf")
-                    && matches!(key.as_str(), "beta" | "b" | "pb" | "cgs" | "cgd")
+                || (matches!(m.kind.as_str(), "njf" | "pjf" | "nmf" | "pmf")
+                    && matches!(key.as_str(), "beta" | "alpha" | "b" | "pb" | "cgs" | "cgd")
                     && *v != 0.)
+                || (matches!(m.kind.as_str(), "urc" | "ltra")
+                    && *v > 0.
+                    && matches!(
+                        key.as_str(),
+                        "r" | "l" | "g" | "c" | "len" | "rperl" | "cperl" | "isperl" | "rsperl"
+                    ))
+                || (matches!(m.kind.as_str(), "npn" | "pnp")
+                    && *v > 0.
+                    && matches!(key.as_str(), "rco" | "vo" | "qco"))
+                || (m.kind == "d"
+                    && matches!(
+                        key.as_str(),
+                        "trs" | "trs1" | "trs2" | "ttt1" | "ttt2" | "tm1" | "tm2"
+                    ))
+                || (m.kind == "vdmos"
+                    && *v > 0.
+                    && matches!(
+                        key.as_str(),
+                        "mtriode"
+                            | "theta"
+                            | "cgs"
+                            | "cgdmin"
+                            | "cgdmax"
+                            | "a"
+                            | "rg"
+                            | "cjo"
+                            | "tt"
+                            | "bv"
+                    ))
                 || (*v > 0. && matches!(key.as_str(), "rs" | "rd" | "rb" | "rc" | "re"))
             {
                 params.push((format!("{}:{key}", m.name), Parameter::Model(i, j), *v));
@@ -553,7 +636,10 @@ pub(super) fn pz(
     poles: bool,
     zeros: bool,
 ) -> Result<AnalysisResult, Diagnostic> {
-    if c.groups.iter().any(|g| g.line().is_some()) {
+    if c.groups
+        .iter()
+        .any(|g| g.line().is_some() || g.ltra().is_some_and(|line| line.values.c > 0.))
+    {
         return Err(error(
             "pole-zero analysis requires lumped elements; a distributed line has an exponential delay",
         ));

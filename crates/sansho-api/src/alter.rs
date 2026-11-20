@@ -39,7 +39,11 @@ fn alter_error(msg: String) -> Diagnostic {
 /// Instance parameters accepted per device letter.
 fn device_params(kind: &ElementKind) -> &'static [&'static str] {
     match kind {
-        ElementKind::Jfet { .. } | ElementKind::Diode { .. } | ElementKind::Bjt { .. } => &["area"],
+        ElementKind::Mesfet { .. } | ElementKind::Jfet { .. } | ElementKind::Diode { .. } => {
+            &["area"]
+        }
+        ElementKind::Bjt { .. } => &["area", "areab", "areac"],
+        ElementKind::Vdmos { .. } => &["m"],
         ElementKind::Mosfet { .. } => &["l", "w", "ad", "as", "pd", "ps"],
         _ => &[],
     }
@@ -138,6 +142,8 @@ pub(crate) fn apply(nl: &mut Netlist, c: &Change) -> Result<Applied, Diagnostic>
                 Some(std::mem::replace(g, value))
             }
             ElementKind::Jfet { params, .. }
+            | ElementKind::Mesfet { params, .. }
+            | ElementKind::Vdmos { params, .. }
             | ElementKind::Diode { params, .. }
             | ElementKind::Bjt { params, .. }
             | ElementKind::Mosfet { params, .. }

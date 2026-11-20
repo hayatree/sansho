@@ -1,0 +1,12 @@
+DC epitaxial collector current versus VO
+* Provenance: original Sansho R8b black-box experiment.
+* sweep: 0.5 2 5 100k
+.param probe=2
+Vc c 0 0
+Vb b 0 0.8
+Qdut c b 0 device
+.model device npn(is=1e-15 bf=150 br=3 rco=50 gamma=1e-11 vo={probe} qco=0)
+.options reltol=1e-7 abstol=1e-14 vntol=1e-9
+.dc Vc 0.05 3.05 0.05
+.save v(c) i(Vc) i(Vb)
+.end

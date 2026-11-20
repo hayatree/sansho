@@ -23,6 +23,7 @@ pub mod jfet;
 pub mod junction;
 pub mod line;
 mod linear;
+pub mod ltra;
 pub mod model;
 pub mod mos1;
 mod mos23;
@@ -30,7 +31,9 @@ mod observables;
 mod random;
 mod sources;
 pub mod temperature;
+pub mod urc;
 pub mod va;
+pub mod vdmos;
 pub mod waveform;
 
 pub use bjt::Bjts;
@@ -620,6 +623,10 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
     fn is_linear(&self) -> bool;
     /// Distributed element whose delayed waves require accepted transient samples.
     fn line(&self) -> Option<&line::Line> {
+        None
+    }
+
+    fn ltra(&self) -> Option<&ltra::Ltra> {
         None
     }
 

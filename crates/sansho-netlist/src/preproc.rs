@@ -799,6 +799,41 @@ impl Flat<'_> {
                         }
                         // Keep model expressions in their lexical scope until the parser
                         // knows which geometry bin and primitive arguments are in use.
+                        let mut normalized;
+                        let line = if matches!(
+                            line.tokens.get(2).map(Token::lower).as_deref(),
+                            Some("vdmos" | "ltra")
+                        ) {
+                            normalized = line.clone();
+                            normalized.tokens.truncate(3);
+                            for (i, t) in line.tokens.iter().enumerate().skip(3) {
+                                normalized.tokens.push(t.clone());
+                                if matches!(
+                                    t.lower().as_str(),
+                                    "pchan"
+                                        | "nchan"
+                                        | "steplimit"
+                                        | "nosteplimit"
+                                        | "lininterp"
+                                        | "quadinterp"
+                                        | "mixedinterp"
+                                        | "truncnr"
+                                        | "truncdontcut"
+                                        | "nocontrol"
+                                ) && !line.tokens.get(i + 1).is_some_and(Token::is_eq)
+                                    && !line.tokens[i - 1].is_eq()
+                                {
+                                    for value in ["=", "1"] {
+                                        let mut token = t.clone();
+                                        token.text = value.into();
+                                        normalized.tokens.push(token);
+                                    }
+                                }
+                            }
+                            &normalized
+                        } else {
+                            line
+                        };
                         let deferred = line.tokens.get(3..).is_some_and(|tail| {
                             tail.chunks(3)
                                 .any(|kv| kv.get(2).is_some_and(|v| !is_number_literal(&v.text)))
@@ -938,12 +973,21 @@ impl Flat<'_> {
                 'e' | 'g' if poly => (1..3.min(n))
                     .chain(5..5usize.saturating_add(dimensions.saturating_mul(2)).min(n))
                     .collect(),
-                'j' => (1..4.min(n)).collect(),
+                'j' | 'z' | 'u' => (1..4.min(n)).collect(),
+                'm' if toks
+                    .get(4)
+                    .is_some_and(|v| self.defs.models.contains(&v.lower()))
+                    && !toks
+                        .get(5)
+                        .is_some_and(|v| self.defs.models.contains(&v.lower())) =>
+                {
+                    (1..4.min(n)).collect()
+                }
                 'w' | 'b' | 'r' | 'c' | 'l' | 'v' | 'i' | 'd' | 'f' | 'h' => {
                     (1..3.min(n)).collect()
                 }
                 'e' | 'g' if toks.get(4).is_some_and(Token::is_eq) => (1..3.min(n)).collect(),
-                's' | 'e' | 'g' | 'm' | 't' => (1..5.min(n)).collect(),
+                's' | 'e' | 'g' | 'm' | 't' | 'o' => (1..5.min(n)).collect(),
                 'n' => {
                     let end = (1..n)
                         .find(|&i| toks.get(i + 1).is_some_and(Token::is_eq))
@@ -1003,7 +1047,7 @@ impl Flat<'_> {
                     t.text = ctx.element(&t.text);
                 }
                 // Model reference of D/Q/M: the first positional token after the nodes.
-                if matches!(letter, 's' | 'd' | 'q' | 'j' | 'm' | 'n') {
+                if matches!(letter, 's' | 'd' | 'q' | 'j' | 'z' | 'm' | 'n' | 'o' | 'u') {
                     let at = node_slots.last().map_or(1, |&i| i + 1);
                     if let Some(t) = toks.get_mut(at)
                         && !t.is_eq()
@@ -1013,7 +1057,7 @@ impl Flat<'_> {
                 }
             }
             if (ctx.copies != 1. || ctx.copies_expr.is_some())
-                && matches!(letter, 'm' | 'r' | 'l' | 'c' | 'd' | 'q' | 'j')
+                && matches!(letter, 'm' | 'r' | 'l' | 'c' | 'd' | 'q' | 'j' | 'z')
             {
                 let start = node_slots.last().copied().unwrap_or(0) + 1;
                 if let Some(k) = toks[start..]

@@ -141,6 +141,14 @@ pub enum ElementKind {
         /// Numeric instance overrides.
         params: Vec<(String, f64)>,
     },
+    /// Distributed RC ladder with common substrate.
+    Urc {
+        ports: [String; 3],
+        model: String,
+        params: Vec<(String, f64)>,
+    },
+    /// Convolutional lossy two-port.
+    Ltra { ports: [String; 4], model: String },
     /// Ideal lossless line, port order [+1, -1, +2, -2].
     Line {
         ports: [String; 4],
@@ -157,6 +165,24 @@ pub enum ElementKind {
     },
     /// Gate-junction field-effect transistor.
     Jfet {
+        d: String,
+        g: String,
+        s: String,
+        model: String,
+        params: Vec<(String, f64)>,
+        off: bool,
+    },
+    /// Statz metal-semiconductor field-effect transistor.
+    Mesfet {
+        d: String,
+        g: String,
+        s: String,
+        model: String,
+        params: Vec<(String, f64)>,
+        off: bool,
+    },
+    /// Three-terminal vertical double-diffused MOS transistor.
+    Vdmos {
         d: String,
         g: String,
         s: String,
@@ -359,7 +385,11 @@ impl ElementKind {
             | Self::Inductor { model, .. } => model.as_deref(),
             Self::Switch { model, .. }
             | Self::Va { model, .. }
+            | Self::Urc { model, .. }
+            | Self::Ltra { model, .. }
             | Self::Jfet { model, .. }
+            | Self::Mesfet { model, .. }
+            | Self::Vdmos { model, .. }
             | Self::Diode { model, .. }
             | Self::Bjt { model, .. }
             | Self::Mosfet { model, .. } => Some(model),
@@ -389,8 +419,13 @@ impl ElementKind {
     pub fn nodes(&self) -> Vec<&str> {
         match self {
             Self::Coupling { .. } => vec![],
-            Self::Line { ports, .. } => ports.iter().map(String::as_str).collect(),
-            Self::Jfet { d, g, s, .. } => vec![d, g, s],
+            Self::Urc { ports, .. } => ports.iter().map(String::as_str).collect(),
+            Self::Line { ports, .. } | Self::Ltra { ports, .. } => {
+                ports.iter().map(String::as_str).collect()
+            }
+            Self::Mesfet { d, g, s, .. }
+            | Self::Vdmos { d, g, s, .. }
+            | Self::Jfet { d, g, s, .. } => vec![d, g, s],
             Self::Polynomial { p, n, controls, .. } => {
                 let mut nodes = vec![p.as_str(), n.as_str()];
                 for control in controls {

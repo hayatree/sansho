@@ -1,0 +1,10 @@
+Power FET output characteristics at three gate biases
+* Provenance: original Sansho R8 circuit.
+Vd d 0 0
+Vg g 0 0
+M1 d g 0 power
+.model power vdmos(nchan vto=2 kp=0.9 theta=0.08 lambda=0.015
++ mtriode=1.3 rd=0.1 rs=0.05)
+.dc Vd 0 6 0.1 Vg 2.5 4.5 1
+.save i(vd)
+.end

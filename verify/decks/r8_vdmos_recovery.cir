@@ -1,0 +1,10 @@
+Reverse recovery of a power MOSFET body diode
+* Provenance: original Sansho R8 circuit.
+Vdrive in 0 pulse(-1.5 4 10n 1n 1n 50n 100n)
+Rload in d 5
+M1 d 0 0 power
+.model power vdmos(vto=3 kp=1 is=3p n=1.1 rb=0.3
++ cjo=50p vj=0.8 m=0.4 fc=0.5 tt=12n bv=40 ibv=1m)
+.tran 0.25n 42n
+.save v(d) i(vdrive)
+.end

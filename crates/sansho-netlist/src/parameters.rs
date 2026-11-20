@@ -146,11 +146,16 @@ pub(crate) fn bind_models(
                 params,
                 ..
             } => (model, params),
-            ElementKind::Switch { model, .. } => (model, &mut empty),
+            ElementKind::Ltra { model, .. } | ElementKind::Switch { model, .. } => {
+                (model, &mut empty)
+            }
             ElementKind::Mosfet { model, params, .. }
             | ElementKind::Va { model, params, .. }
             | ElementKind::Bjt { model, params, .. }
             | ElementKind::Jfet { model, params, .. }
+            | ElementKind::Mesfet { model, params, .. }
+            | ElementKind::Vdmos { model, params, .. }
+            | ElementKind::Urc { model, params, .. }
             | ElementKind::Diode { model, params, .. } => (model, params),
             _ => continue,
         };
@@ -303,6 +308,10 @@ impl ParameterPlan {
                 | ElementKind::Bjt { model: m, .. }
                 | ElementKind::Va { model: m, .. }
                 | ElementKind::Jfet { model: m, .. }
+                | ElementKind::Mesfet { model: m, .. }
+                | ElementKind::Vdmos { model: m, .. }
+                | ElementKind::Urc { model: m, .. }
+                | ElementKind::Ltra { model: m, .. }
                 | ElementKind::Diode { model: m, .. } => {
                     if let Some(model) = model {
                         *m = model

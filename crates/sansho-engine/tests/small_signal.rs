@@ -507,3 +507,164 @@ fn bsim3_parallel_chunks_are_bit_deterministic() {
     };
     assert_eq!(raw(1), raw(2));
 }
+
+#[test]
+fn lossy_line_matches_diffusion_and_wavefront_solutions() {
+    let tau = 1e-8;
+    // Open far end, unit step at the near end. At t=RC the higher
+    // diffusion eigenmodes have already decayed by more than nine decades.
+    let r = simulate(
+        "RC diffusion\nVin in 0 pulse(0 1 0 1p 1p 100n 200n)\nO1 in 0 far 0 wire\n.model wire ltra(r=100 c=100p len=1)\n.tran 0.025n 10n\n.ac lin 1 1meg 1meg\n.save v(far)\n",
+    );
+    let tr = &r.analyses[0];
+    let t = *tr.scale_values.last().unwrap();
+    let pi = std::f64::consts::PI;
+    let reference = 1. - 4. / pi * (-pi * pi * t / (4. * tau)).exp();
+    check(*tr.real("v(far)").unwrap().last().unwrap(), reference, 1e-4);
+    // A matched source launches half a volt. An open end doubles the
+    // wavefront, whose attenuation is exp(-R/(2 Z0)).
+    let r = simulate(
+        "wave\nVin in 0 pulse(0 1 1n 5p 5p 50n 100n)\nRs in n 50\nO1 n 0 far 0 wire\n.model wire ltra(r=10 l=250n c=100p len=1)\n.tran 0.05n 6.01n\n.save v(far)\n",
+    );
+    let tr = &r.analyses[0];
+    let v = tr.real("v(far)").unwrap();
+    for (&t, &v) in tr.scale_values.iter().zip(v) {
+        if t < 5.999e-9 {
+            assert!(v.abs() < 1e-12);
+        }
+    }
+    check(*v.last().unwrap(), (-0.1f64).exp(), 0.001);
+}
+
+#[test]
+fn rc_and_rg_ac_two_ports_match_open_circuit_solution() {
+    let r = simulate(
+        "open line\nVin in 0 dc 1 ac 1\nO1 in 0 out 0 a\nO2 in 0 rg 0 b\n.model a ltra(r=200 c=50p len=1)\n.model b ltra(r=250 g=1m len=2)\n.ac lin 1 100meg 100meg\n",
+    );
+    let (re, im) = r.analyses[0].complex("v(out)").unwrap()[0];
+    let phase = std::f64::consts::PI.sqrt();
+    let (a, b) = (phase.cosh() * phase.cos(), phase.sinh() * phase.sin());
+    check(re, a / (a * a + b * b), 1e-10);
+    check(im, -b / (a * a + b * b), 1e-10);
+    check(
+        r.analyses[0].complex("v(rg)").unwrap()[0].0,
+        1. / 1f64.cosh(),
+        1e-12,
+    );
+}
+
+#[test]
+fn loaded_rlc_line_has_phase_delay_in_ac() {
+    let r = simulate(include_str!("../../../verify/decks/r8_ltra_ac.cir"));
+    let ac = &r.analyses[0];
+    let k = ac.scale_values.partition_point(|&f| f < 50e6);
+    // Loaded ABCD solution at 10^7.7 Hz, with Z and Y for the full length.
+    // A=D=cosh(sqrt(ZY)); (B,C)=(Z,Y)*sinh(sqrt(ZY))/sqrt(ZY).
+    // Vf = 1 / (A+B/Rload+Rs*(C+D/Rload)), Iline = Vf*(C+D/Rload).
+    let (re, im) = ac.complex("v(far)").unwrap()[k];
+    check(re, -0.334616965715733, 1e-11);
+    check(im, 0.024240328286045, 1e-11);
+    // The source supplies the static RG port in parallel with the RLC port.
+    let (re, im) = ac.complex("i(vin)").unwrap()[k];
+    check(re, -0.0106624590849174, 1e-11);
+    check(im, -0.000708175245429, 1e-11);
+}
+
+#[test]
+fn single_urc_lump_reduces_to_a_center_shunt() {
+    let r = simulate(
+        "one lump\nVin in 0 dc 1 ac 1\nU1 in out 0 sheet l=1 n=1\n.model sheet urc(rperl=200 cperl=1n)\nRload out 0 200\n.op\n.ac lin 1 1meg 1meg\n.sens v(out)\n.save all @u1[i1]\n",
+    );
+    check(first(&r.analyses[0], "@u1[i1]"), 0.0025, 1e-12);
+    check(first(&r.analyses[0], "v(out)"), 0.5, 1e-12);
+    let h = sansho_sparse::c64::from(0.5)
+        / sansho_sparse::c64::new(1., std::f64::consts::TAU * 1e6 * 75e-9);
+    let (re, im) = r.analyses[1].complex("v(out)").unwrap()[0];
+    check(re, h.re, 1e-12);
+    check(im, h.im, 1e-12);
+    check(
+        first(&r.analyses[2], "sheet:rperl"),
+        -200. / 400f64.powi(2),
+        1e-7,
+    );
+}
+
+#[test]
+fn statz_polarity_noise_sensitivity_and_power_mos_vectors() {
+    for (model, sign) in [("nmf", 1.), ("pmf", -1.)] {
+        let r = simulate(&format!(
+            "Schottky gate\nVd d 0 {}\nVg g 0 {} ac 1\nZ1 d g 0 ga\n.model ga {model}(vto=-2 beta=2m alpha=2 b=0.25 is=0)\n.options gmin=0\n.op\n.ac lin 1 1meg 1meg\n.sens i(vd)\n.save all @z1[id] @z1[gm]\n",
+            3. * sign,
+            -sign
+        ));
+        check(first(&r.analyses[0], "@z1[id]"), sign * 0.002 / 1.25, 1e-12);
+        check(
+            r.analyses[1].complex("i(vd)").unwrap()[0].0,
+            -0.002 * 2.25 / 1.25f64.powi(2),
+            1e-12,
+        );
+        check(first(&r.analyses[2], "ga:beta"), -sign / 1.25, 1e-8);
+    }
+    let r = simulate(
+        "noise\nVg g 0 -1 ac 1\nVdd rail 0 4\nRd rail d 10 noisy=0\nZ1 d g 0 ga\n.model ga nmf(vto=-2 beta=1m b=0 lambda=0 is=0)\n.noise v(d) Vg lin 1 1000 1000\n",
+    );
+    check(
+        first(&r.analyses[0], "onoise.z1"),
+        10. * (4. * sansho_devices::BOLTZMANN * 300.15 * (2. / 3.) * 0.002).sqrt(),
+        1e-8,
+    );
+    let r = simulate(
+        "p-channel\n.subckt switch d g s\nMcore d g s pw\n.model pw vdmos(pchan vto=-1 kp=2 cgs=2n cgdmin=10p cgdmax=30p)\n.ends\nX1 d g 0 switch\nVg g 0 -2 ac 1\nVd d 0 -3\n.op\n.ac lin 1 1meg 1meg\n.sens i(vd)\n.options savecurrents\n.save all @m.x1.mcore[gm]\n",
+    );
+    let drive = 1. + 0.1 * (-10_f64).exp().ln_1p();
+    let gm = 2. * drive / (1. + (-10_f64).exp());
+    check(
+        first(&r.analyses[0], "@m.x1.mcore[id]"),
+        -drive * drive,
+        1e-8,
+    );
+    check(first(&r.analyses[0], "@m.x1.mcore[gm]"), gm, 1e-12);
+    check(r.analyses[1].complex("i(vd)").unwrap()[0].0, -gm, 1e-10);
+}
+
+#[test]
+fn vdmos_and_mesfet_local_startup_and_parameterized_model_flags() {
+    let r = simulate(
+        "intrinsic UIC\n.param cap=2n\nM1 d g 0 pf ic=-0.1,-0.5\nRg g 0 10k\nRd d 0 100\n.model pf vdmos(pchan vto=-2 kp=1 cgs={cap} cgdmin=0 cgdmax=0 cjo=0)\nZ1 zd zg 0 ga ic=0.1,-0.3\nRz zg 0 10k\nRzd zd 0 100\n.model ga nmf(vto=-2 cgs=3p cgd=0.4p)\n.tran 1n 100n uic\n.save v(g) v(zg) @m1[cgs] @z1[qgs]\n",
+    );
+    let a = &r.analyses[0];
+    check(first(a, "v(g)"), -0.5, 1e-12);
+    check(first(a, "v(zg)"), -0.3, 1e-12);
+    check(first(a, "@m1[cgs]"), 2e-9, 1e-12);
+    assert_ne!(first(a, "@z1[qgs]"), 0.);
+    check(
+        *a.real("v(g)").unwrap().last().unwrap(),
+        -0.5 * (-100e-9f64 / 20e-6).exp(),
+        1e-5,
+    );
+}
+
+#[test]
+fn bjt_area_factors_scale_independent_ac_junction_currents() {
+    // At zero DC bias and unit collector AC voltage, the base and substrate
+    // drive currents give independent measurements of the two depletion caps.
+    let r = simulate(
+        "junction areas\nVc c 0 dc 0 ac 1\nVb b 0 0\nVs sub 0 0\nQ1 c b 0 sub sw area=4 areab=2 areac=3 m=2\n.model sw npn(cjc=3p cjs=5p cje=0)\n.ac lin 1 1meg 1meg\n.sens i(vb) ac lin 1 1meg 1meg\n",
+    );
+    let omega = std::f64::consts::TAU * 1e6;
+    check(
+        r.analyses[0].complex("i(vb)").unwrap()[0].1,
+        omega * 12e-12,
+        1e-12,
+    );
+    check(
+        r.analyses[0].complex("i(vs)").unwrap()[0].1,
+        omega * 30e-12,
+        1e-12,
+    );
+    check(
+        r.analyses[1].complex("q1:areab").unwrap()[0].1,
+        omega * 6e-12,
+        1e-8,
+    );
+}

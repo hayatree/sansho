@@ -539,9 +539,15 @@ pub(crate) fn ac_rhs(ckt: &Circuit) -> Vec<c64> {
 }
 
 /// Coefficients of the nonlocal terms in each line's two wave equations.
-pub(crate) struct DelayedStamp {
-    delay: f64,
-    entries: Vec<(usize, f64)>,
+pub(crate) enum DelayedStamp {
+    Delay {
+        delay: f64,
+        entries: Vec<(usize, f64)>,
+    },
+    Line {
+        constants: sansho_devices::ltra::LineConstants,
+        entries: Vec<(usize, usize, f64)>,
+    },
 }
 impl DelayedStamp {
     pub(crate) fn collect(c: &Circuit, ws: &Workspace) -> Vec<Self> {
@@ -549,7 +555,7 @@ impl DelayedStamp {
             .groups
             .iter()
             .filter_map(|g| g.line())
-            .map(|line| Self {
+            .map(|line| Self::Delay {
                 delay: line.delay,
                 entries: line
                     .delayed_entries()
@@ -558,11 +564,20 @@ impl DelayedStamp {
             })
             .collect();
         for (group, state) in c.groups.iter().zip(&ws.state) {
+            if let Some(line) = group.ltra().filter(|line| line.values.c > 0.) {
+                stamps.push(Self::Line {
+                    constants: line.values,
+                    entries: line
+                        .admittance_entries()
+                        .filter_map(|(r, col, k, v)| Some((c.pattern.find(r?, col?)?, k, v)))
+                        .collect(),
+                });
+            }
             group.transport_delays(state, &mut |delay, row, col, g| {
                 if let (Some(r), Some(c0)) = (row, col)
                     && let Some(slot) = c.pattern.find(r, c0)
                 {
-                    stamps.push(Self {
+                    stamps.push(Self::Delay {
                         delay,
                         entries: vec![(slot, g)],
                     });
@@ -572,13 +587,46 @@ impl DelayedStamp {
         stamps
     }
     pub(crate) fn apply(&self, omega: f64, sign: f64, values: &mut [c64]) {
-        let phase = omega * self.delay;
-        // DC assembly already includes a propagation factor of one.
-        let change = c64::new(-2. * (phase * 0.5).sin().powi(2), -phase.sin());
-        for &(slot, coefficient) in &self.entries {
-            values[slot] += change * (sign * coefficient);
+        match self {
+            Self::Delay { delay, entries } => {
+                let phase = omega * delay;
+                let change = c64::new(-2. * (phase * 0.5).sin().powi(2), -phase.sin());
+                for &(slot, coefficient) in entries {
+                    values[slot] += change * (sign * coefficient);
+                }
+            }
+            Self::Line { constants, entries } => {
+                let y = line_admittance(*constants, omega);
+                for &(slot, k, v) in entries {
+                    values[slot] += y[k] * (sign * v);
+                }
+            }
         }
     }
+}
+
+/// Exact uniform-line two-port. The attenuating exponential remains bounded
+/// for electrically long lines. A series at the origin avoids cancellation.
+fn line_admittance(v: sansho_devices::ltra::LineConstants, omega: f64) -> [c64; 2] {
+    let series = c64::new(v.r, omega * v.l);
+    let square = series * c64::new(v.g, omega * v.c);
+    let one = c64::from(1.);
+    if square.norm() < 1e-5 {
+        return [
+            (one + square / 3. - square * square / 45.) / series,
+            (one - square / 6. + square * square * (7. / 360.)) / series,
+        ];
+    }
+    let im = ((square.norm() - square.re) * 0.5).max(0.).sqrt();
+    let re = if im > 0. {
+        square.im / (2. * im)
+    } else {
+        square.re.sqrt()
+    };
+    let z = c64::new(re, im);
+    let h = c64::new(im.cos(), -im.sin()) * (-re).exp();
+    let factor = (z / series) / (one - h * h);
+    [factor * (one + h * h), factor * h * 2.]
 }
 
 pub(crate) fn ac_matrix(
@@ -1013,6 +1061,25 @@ pub(crate) fn tran(
         })
         .collect();
     let mut hmax = lines.iter().fold(hmax, |h, l| h.min(l.line.delay));
+    let mut lossy: Vec<_> = ckt
+        .groups
+        .iter()
+        .enumerate()
+        .filter_map(|(i, g)| {
+            let line = g.ltra().filter(|v| v.values.c > 0.)?;
+            let initial = ws.slots[i]
+                .initial_conditions
+                .first()
+                .and_then(|ic| ic.as_slice().try_into().ok())
+                .unwrap_or_else(|| line.sample(&x));
+            Some((i, line, vec![(0., initial)]))
+        })
+        .collect();
+    for (_, line, _) in &lossy {
+        if line.step_limit && line.values.l > 0. {
+            hmax = hmax.min(line.values.delay());
+        }
+    }
     let mut step_limits = Vec::new();
 
     let mut bps: Vec<f64> = Vec::new();
@@ -1039,6 +1106,12 @@ pub(crate) fn tran(
     let hmin = 1e-9 * smallest_cap.min(tstep).min(tstop - tstart);
     let eps = hmin;
     let mut step_limits = step_limits.into_iter().peekable();
+    bps.extend(
+        lossy
+            .iter()
+            .filter(|(_, l, _)| l.step_limit)
+            .map(|(_, l, _)| l.values.delay()),
+    );
     bps.push(tstop);
     bps.retain(|&t| t > eps && t <= tstop);
     bps.sort_by(f64::total_cmp);
@@ -1157,6 +1230,9 @@ pub(crate) fn tran(
                 "E-CONV-TRAN",
                 "timestep below floating-point time resolution",
             ));
+        }
+        for (i, line, samples) in &lossy {
+            line.trial(ctx.time, samples, &mut ws.slots[*i]);
         }
         for history in &lines {
             let [from_first, from_second] = history.delayed_outgoing(ctx.time);
@@ -1331,6 +1407,12 @@ pub(crate) fn tran(
         if crossing.is_some() {
             hist.clear();
             grow = grow.min(1.);
+        }
+        for (_, line, samples) in &mut lossy {
+            samples.push((t, line.sample(&x_new)));
+            if line.step_limit && line.values.l > 0. && (hit_bp || crossing.is_some()) {
+                schedule_arrival(&mut bps, t + line.values.delay(), eps, tstop);
+            }
         }
         for history in &mut lines {
             history.accept(t, &x_new);
