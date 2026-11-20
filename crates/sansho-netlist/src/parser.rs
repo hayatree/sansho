@@ -147,7 +147,7 @@ fn parse_expanded(
         models: model_bindings,
         nominal: Netlist {
             hdl: pre.hdl,
-            title: pre.title,
+            title: p.title.unwrap_or(pre.title),
             sources: pre.sources,
             initial_conditions: p.ics,
             nodesets: p.nodesets,
@@ -156,6 +156,7 @@ fn parse_expanded(
             options: p.options,
             models: p.models,
             saves: p.saves,
+            prints: p.prints,
             measures: p.measures,
             warnings: p.diags,
         },
@@ -209,6 +210,8 @@ pub(crate) type DynamicCards<'a> =
 
 #[derive(Default)]
 struct Parser {
+    title: Option<String>,
+    prints: Vec<crate::PrintCard>,
     has_hdl: bool,
     elements: Vec<Element>,
     element_names: std::collections::HashSet<String>,
@@ -334,6 +337,41 @@ impl Parser {
     fn element(&mut self, head: &str, line: &Line) {
         let span = line.span();
         let name = head.to_string();
+        let mut ic = Vec::new();
+        let mut stripped;
+        let line = if head.starts_with(['d', 'q', 'm', 'j', 't'])
+            && let Some(index) = line
+                .tokens
+                .windows(2)
+                .position(|w| w[0].lower() == "ic" && w[1].is_eq())
+        {
+            let count = match head.as_bytes()[0] {
+                b'd' => 1,
+                b'm' => 3,
+                b't' => 4,
+                _ => 2,
+            };
+            for token in line.tokens.iter().skip(index + 2).take(count) {
+                if let Some(v) = parse_number(&token.text) {
+                    ic.push(v);
+                } else {
+                    break;
+                }
+            }
+            if ic.len() != count {
+                self.err(
+                    "E-PARSE-ARITY",
+                    format!("{name} IC requires {count} values"),
+                    line.tokens[index].span,
+                );
+                return;
+            }
+            stripped = line.clone();
+            stripped.tokens.drain(index..index + 2 + count);
+            &stripped
+        } else {
+            line
+        };
         let kind = match head.as_bytes().first() {
             Some(b't') => self.line_device(line),
             Some(b'j') => self.jfet(line),
@@ -372,7 +410,12 @@ impl Parser {
                 );
                 return;
             }
-            self.elements.push(Element { name, span, kind });
+            self.elements.push(Element {
+                name,
+                span,
+                kind,
+                ic,
+            });
         }
     }
 
@@ -603,6 +646,7 @@ impl Parser {
             n: node_name(&t[2]),
             voltage,
             expr,
+            params: Vec::new(),
             table,
         })
     }
@@ -612,6 +656,7 @@ impl Parser {
         let usage = format!("{letter}name n+ n- value");
         let t = self.need(line, 3, &usage)?;
         let (p, n) = (node_name(&t[1]), node_name(&t[2]));
+        let mut expr = None;
         let mut value = None;
         let mut model = None;
         let mut mult = 1.;
@@ -628,6 +673,16 @@ impl Parser {
                     );
                     return None;
                 };
+                if k == key && vt.text.starts_with('{') {
+                    expr = Some(
+                        vt.text
+                            .trim_start_matches('{')
+                            .trim_end_matches('}')
+                            .to_owned(),
+                    );
+                    i += 3;
+                    continue;
+                }
                 let v = self.number(vt, &k)?;
                 if k == "tc" {
                     params.push(("tc1".into(), v));
@@ -639,7 +694,7 @@ impl Parser {
                     value = Some(v);
                 } else if matches!(k.as_str(), "m" | "mult") {
                     mult = v;
-                } else if (k == "noisy" && letter == "R")
+                } else if (matches!(k.as_str(), "noisy" | "ac") && letter == "R")
                     || (k == "ic" && letter != "R")
                     || matches!(k.as_str(), "tc1" | "tc2" | "temp" | "dtemp")
                 {
@@ -676,6 +731,30 @@ impl Parser {
                 return None;
             }
         }
+        if mult <= 0. || !mult.is_finite() {
+            self.err(
+                "E-PARSE-VALUE",
+                "multiplicity must be positive",
+                line.span(),
+            );
+            return None;
+        }
+        if let Some(expr) = expr {
+            if model.is_some() || value.is_some() {
+                return self.arity(line, "expected one behavioral value expression");
+            }
+            if mult != 1. {
+                params.push(("m".into(), mult));
+            }
+            return Some(ElementKind::Behavioral {
+                p,
+                n,
+                voltage: letter == "L",
+                expr,
+                params,
+                table: Vec::new(),
+            });
+        }
         let Some(value) = value else {
             self.diags.push(
                 Diagnostic::error("E-PARSE-ARITY", "missing element value")
@@ -684,13 +763,16 @@ impl Parser {
             );
             return None;
         };
-        if mult <= 0. || !mult.is_finite() {
-            self.err(
-                "E-PARSE-VALUE",
-                "multiplicity must be positive",
-                line.span(),
-            );
-            return None;
+        if let Some((_, ac)) = params.iter_mut().find(|(k, _)| k == "ac") {
+            *ac /= mult;
+            if *ac == 0. {
+                self.err(
+                    "E-PARSE-VALUE",
+                    "AC resistance must be nonzero",
+                    line.span(),
+                );
+                return None;
+            }
         }
         let value = if letter == "C" {
             value * mult
@@ -707,6 +789,7 @@ impl Parser {
         }
         Some(match letter {
             "R" => ElementKind::Resistor {
+                mult,
                 p,
                 n,
                 value,
@@ -762,7 +845,7 @@ impl Parser {
                         }
                     }
                 }
-                "pulse" | "sin" | "exp" | "pwl" | "sffm" | "am" => {
+                "pulse" | "sin" | "exp" | "pwl" | "sffm" | "am" | "trnoise" | "trrandom" => {
                     let start = i;
                     i += 1;
                     let mut vals = Vec::new();
@@ -799,6 +882,8 @@ impl Parser {
     fn tran_fn(&mut self, word: &str, vals: Vec<f64>, span: Span) -> Option<TranFn> {
         let (min, max) = match word {
             "pulse" | "sffm" | "am" => (2, 8),
+            "trnoise" => (2, 7),
+            "trrandom" => (2, 5),
             "sin" => (2, 6),
             "exp" => (2, 6),
             _ => (2, usize::MAX),
@@ -822,6 +907,36 @@ impl Parser {
             return None;
         }
         Some(match word {
+            "trrandom" => {
+                if vals.iter().any(|v| !v.is_finite())
+                    || !matches!(vals[0], 1. | 2. | 3. | 4.)
+                    || vals[1] <= 0.
+                    || vals.iter().skip(2).take(2).any(|&v| v < 0.)
+                {
+                    self.err("E-PARSE-VALUE","TRRANDOM requires type 1 through 4, positive TS and nonnegative delay and scale",span);
+                    return None;
+                }
+                let mut parameters = [0., 0., 0., 1., 0.];
+                parameters[..vals.len()].copy_from_slice(&vals);
+                TranFn::TrRandom(parameters)
+            }
+            "trnoise" => {
+                if vals.iter().any(|&v| !v.is_finite() || v < 0.)
+                    || vals.get(2).is_some_and(|&v| v > 2.)
+                    || (vals.get(4).is_some_and(|&v| v != 0.)
+                        && (vals.len() != 7 || vals[5] <= 0. || vals[6] <= 0.))
+                {
+                    self.err(
+                        "E-PARSE-VALUE",
+                        "invalid TRNOISE amplitude, interval, exponent or RTS dwell time",
+                        span,
+                    );
+                    return None;
+                }
+                let mut parameters = [0.; 7];
+                parameters[..vals.len()].copy_from_slice(&vals);
+                TranFn::TrNoise(parameters)
+            }
             "pulse" => TranFn::Pulse(vals),
             "sin" => TranFn::Sin(vals),
             "sffm" => TranFn::Sffm(vals),
@@ -1865,7 +1980,18 @@ impl Parser {
                             return;
                         };
                         if name == "method" {
-                            // `method=gear|trap` is stored as a flag named after the method.
+                            if !matches!(vt.lower().as_str(), "gear" | "trap" | "trapezoidal") {
+                                self.diags.push(
+                                    Diagnostic::warning(
+                                        "W-OPT-IGNORED",
+                                        format!("unsupported integration method {}", vt.text),
+                                    )
+                                    .with_span(vt.span),
+                                );
+                                i += 3;
+                                continue;
+                            }
+                            // Store the chosen integration method as a flag.
                             self.options.push(OptionCard {
                                 name: vt.lower(),
                                 value: None,
@@ -1910,6 +2036,7 @@ impl Parser {
                     let name = field.lower();
                     let signal = match name.as_str() {
                         "all" => name,
+                        _ if name.starts_with('@') => name,
                         "v" | "i" => {
                             let Some(arg) = fields.next() else {
                                 self.err("E-PARSE-ARITY", "missing .save signal name", field.span);
@@ -1949,7 +2076,25 @@ impl Parser {
                     });
                 }
             }
-            ".title" => {}
+            ".title" => {
+                self.title = Some(
+                    line.raw
+                        .trim_start()
+                        .get(6..)
+                        .unwrap_or("")
+                        .trim()
+                        .to_string(),
+                )
+            }
+            ".width" => {}
+            ".plot" => self.diags.push(
+                Diagnostic::warning("W-PLOT-IGNORED", "ASCII plotting is unavailable")
+                    .with_span(span),
+            ),
+            ".print" => match crate::meas::parse_print(line) {
+                Ok(card) => self.prints.push(card),
+                Err(d) => self.diags.push(d),
+            },
             ".ic" | ".nodeset" => {
                 // `v(node)=value` lexes as `v node = value`.
                 let mut out = Vec::new();

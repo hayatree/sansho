@@ -2,6 +2,13 @@
 
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions before 1.0 may change public interfaces.
 
+## [Unreleased]
+
+- Correct the doping-derived body coefficients used by the default BSIM3 and BSIM4 cards, improving threshold voltage and drain current.
+- Record device currents, power, small-signal parameters and MOS charge derivatives through `.save`, `.print`, `.meas`, session results and MCP waveform queries.
+- Sweep numeric resistors on either DC axis, use signal-dependent R/C/L values and initialize semiconductor junctions and lossless lines under UIC.
+- Add repeatable TRNOISE and TRRANDOM sources, noise-spectrum measurements, batch print tables, title overrides, Gear order selection and option diagnostics.
+
 ## [0.1.0] - 2026-11-20
 
 First public release, distributed on GitHub.

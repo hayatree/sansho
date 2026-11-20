@@ -20,6 +20,9 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Quantity {
+    Power,
+    Capacitance,
+    Charge,
     VoltageDensity,
     CurrentDensity,
     Resistance,
@@ -43,6 +46,9 @@ pub enum Quantity {
 impl Quantity {
     fn raw_name(self) -> &'static str {
         match self {
+            Self::Power => "power",
+            Self::Capacitance => "capacitance",
+            Self::Charge => "charge",
             Self::VoltageDensity => "voltage-density",
             Self::CurrentDensity => "current-density",
             Self::Resistance => "resistance",
@@ -62,6 +68,9 @@ impl Quantity {
     /// SI unit symbol.
     pub fn unit(self) -> &'static str {
         match self {
+            Self::Power => "W",
+            Self::Capacitance => "F",
+            Self::Charge => "C",
             Self::VoltageDensity => "V/√Hz",
             Self::CurrentDensity => "A/√Hz",
             Self::Resistance => "Ω",
@@ -217,9 +226,19 @@ pub struct Measurement {
     pub error: Option<String>,
 }
 
+/// Selected batch output columns in deck order.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PrintTable {
+    pub analysis: AnalysisKind,
+    pub headings: Vec<String>,
+    pub columns: Vec<Vec<f64>>,
+}
+
 /// Results of all analyses of one run.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SimResults {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub prints: Vec<PrintTable>,
     /// Netlist title.
     pub title: String,
     /// One entry per analysis, in netlist order.
@@ -271,7 +290,11 @@ fn write_raw(results: &SimResults, w: &mut impl Write, binary: bool) -> io::Resu
         writeln!(w, "No. Points: {npoints}")?;
         writeln!(w, "Variables:")?;
         for (i, v) in vars.iter().enumerate() {
-            writeln!(w, "\t{i}\t{}\t{}", v.name, v.quantity.raw_name())?;
+            match (v.name.starts_with('@'), v.quantity) {
+                (true, Quantity::Current) => writeln!(w, "\t{i}\ti({})\tcurrent", v.name)?,
+                (true, Quantity::Voltage) => writeln!(w, "\t{i}\tv({})\tvoltage", v.name)?,
+                _ => writeln!(w, "\t{i}\t{}\t{}", v.name, v.quantity.raw_name())?,
+            }
         }
         if binary {
             writeln!(w, "Binary:")?;
@@ -341,6 +364,7 @@ mod tests {
     #[test]
     fn raw_ascii_layout() {
         let r = SimResults {
+            prints: Vec::new(),
             measures: vec![],
             title: "t".into(),
             analyses: vec![AnalysisResult {

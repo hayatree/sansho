@@ -235,6 +235,27 @@ fn base_resistance(m: &BjtModel, ib: f64, qb: f64) -> f64 {
 const PHASE_STATE: usize = 7;
 
 impl DeviceGroup for Bjts {
+    fn output_charges(&self, i: usize, p: &str) -> Vec<(usize, f64)> {
+        let row = match p {
+            "ic" => 0,
+            "ib" => 1,
+            "ie" => 2,
+            "is" => 3,
+            _ => return Vec::new(),
+        };
+        let first = self.at[i].q;
+        let mut terms = vec![(first + row, 1.)];
+        if row < 2 && self.model[i].xcjc != 1. && self.model[i].cjc != 0. {
+            terms.push((first + 4 + usize::from(row == 0), 1.));
+        }
+        terms
+    }
+    fn instance_ic(&self, i: usize, ic: &[f64], _: &mut [f64], edges: &mut Vec<(Node, Node, f64)>) {
+        if let [be, ce] = ic {
+            let [c, b, e, _] = self.int[i];
+            edges.extend([(b, e, *be), (c, e, *ce)]);
+        }
+    }
     fn transport_delays(&self, state: &[f64], emit: &mut dyn FnMut(f64, Node, Node, f64)) {
         for (i, index) in self.phase_index.iter().enumerate() {
             if let Some(index) = index {
@@ -341,7 +362,11 @@ impl DeviceGroup for Bjts {
             let vt = thermal_voltage(m.temperature.unwrap_or(ctx.temp));
             let area = self.area[i];
             let mut at = self.at[i];
-            let act = self.int[i].map(|n| volt(x, n));
+            let mut act = self.int[i].map(|n| volt(x, n));
+            if let [be, ce] = out.initial_bias(i) {
+                act[0] = act[2] + ce;
+                act[1] = act[2] + be;
+            }
             let [vc, vb, ve, vs] = act;
             let sgn = m.polarity;
             let is = m.is * area;
@@ -463,8 +488,22 @@ impl DeviceGroup for Bjts {
             let substrate = ideal_current(vsc, m.iss * area, m.ns * vt) * sub_sign;
             let sub_charge = qcs * sub_sign;
             let mut i_t = [ic * sgn, ib * sgn, -(ic + ib) * sgn, substrate];
-            let mut q_t = [-qbc * sgn, (qbe + qbc) * sgn, -qbe * sgn, sub_charge];
             i_t[substrate_node] = i_t[substrate_node] - substrate;
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.extend([
+                    ("ic", i_t[0].v),
+                    ("ib", i_t[1].v),
+                    ("ie", -(ic.v + ib.v) * sgn),
+                    ("is", substrate.v),
+                    ("gm", (ict.d[1]) * sgn),
+                    ("go", ict.d[0] * sgn),
+                    ("gpi", -ib.d[2] * sgn),
+                    ("gmu", -ib.d[0] * sgn),
+                    ("cpi", -qbe.d[2] * sgn),
+                    ("cmu", -qbc.d[0] * sgn),
+                ]);
+            }
+            let mut q_t = [-qbc * sgn, (qbe + qbc) * sgn, -qbe * sgn, sub_charge];
             q_t[substrate_node] = q_t[substrate_node] - sub_charge;
             out.core(&mut at, &i_t, &q_t, &act, &lin);
             if m.xcjc != 1. && m.cjc != 0. {

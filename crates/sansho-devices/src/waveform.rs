@@ -144,6 +144,23 @@ impl Modulation {
 /// or the maximum instantaneous FM frequency, including a rapidly varying modulator.
 pub fn step_limit(f: &TranFn, tp: &TranParams) -> Option<(f64, f64)> {
     let (m, frequency) = match f {
+        TranFn::TrRandom(p) => {
+            return p
+                .get(1)
+                .copied()
+                .filter(|v| *v > 0.)
+                .map(|step| (p.get(2).copied().unwrap_or(0.), step));
+        }
+        TranFn::TrNoise(p) => {
+            return p
+                .get(1)
+                .into_iter()
+                .chain(p.get(5..).unwrap_or_default())
+                .copied()
+                .filter(|v| *v > 0.)
+                .reduce(f64::min)
+                .map(|step| (0., step));
+        }
         TranFn::Am(p) => {
             let m = Modulation::new(p, 4, 3, tp);
             let frequency = m.fc.abs() + m.fm.abs();
@@ -166,6 +183,7 @@ pub fn step_limit(f: &TranFn, tp: &TranParams) -> Option<(f64, f64)> {
 /// Evaluate a transient function at time `t`.
 pub fn value(f: &TranFn, t: f64, tp: &TranParams) -> f64 {
     match f {
+        TranFn::TrNoise(_) | TranFn::TrRandom(_) => crate::random::Stream::default().value(f, t),
         TranFn::Pulse(p) => Pulse::new(p, tp).value(t),
         TranFn::Sin(p) => {
             let vo = param_or(p, 0, 0.0, false);
@@ -243,6 +261,7 @@ fn pwl(pts: &[(f64, f64)], t: f64) -> f64 {
 /// DC value of sources that have a transient function but no explicit DC value.
 pub fn initial_value(f: &TranFn) -> f64 {
     match f {
+        TranFn::TrNoise(_) | TranFn::TrRandom(_) => 0.,
         TranFn::Pulse(p) | TranFn::Exp(p) => param_or(p, 0, 0.0, false),
         TranFn::Sin(p) => {
             let phase = param_or(p, 5, 0.0, false).to_radians();
@@ -264,6 +283,7 @@ pub fn initial_value(f: &TranFn) -> f64 {
 pub fn breakpoints(f: &TranFn, tp: &TranParams, out: &mut Vec<f64>) {
     let tstop = tp.tstop;
     match f {
+        TranFn::TrNoise(_) | TranFn::TrRandom(_) => {}
         TranFn::Pulse(p) => Pulse::new(p, tp).breakpoints(tstop, out),
         TranFn::Sin(p) => out.extend(param(p, 3).filter(|&td| td > 0.0 && td <= tstop)),
         TranFn::Exp(p) => {

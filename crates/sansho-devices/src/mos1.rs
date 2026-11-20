@@ -450,6 +450,26 @@ fn meyer(vgst: f64, vds: f64, phi: f64, cox: f64) -> (f64, f64, f64) {
 }
 
 impl DeviceGroup for Mos1s {
+    fn output_charges(&self, i: usize, p: &str) -> Vec<(usize, f64)> {
+        if !self.derived[i].has_storage {
+            return Vec::new();
+        }
+        let first = self.at[i].q + 4;
+        let sign = self.model[i].polarity;
+        match p {
+            "id" => vec![(first + 1, -sign), (first + 3, -sign)],
+            "ig" => vec![(first, sign), (first + 1, sign), (first + 2, sign)],
+            "is" => vec![(first, -sign), (first + 4, -sign)],
+            "ib" => vec![(first + 2, -sign), (first + 3, sign), (first + 4, sign)],
+            _ => Vec::new(),
+        }
+    }
+    fn instance_ic(&self, i: usize, ic: &[f64], _: &mut [f64], edges: &mut Vec<(Node, Node, f64)>) {
+        if let [ds, gs, bs] = ic {
+            let [d, g, s, b] = self.int[i];
+            edges.extend([(d, s, *ds), (g, s, *gs), (b, s, *bs)]);
+        }
+    }
     fn noise(
         &self,
         ctx: &EvalCtx,
@@ -594,7 +614,7 @@ impl Mos1s {
                     volt(x, self.int[i][2]),
                 );
             }
-            let act = self.int[i].map(|n| volt(x, n));
+            let act = out.mos_voltages(i, self.int[i].map(|n| volt(x, n)));
             let [vd, vg, vs, vb] = act;
             let sgn = m.polarity;
             let vto = sgn * m.vto;
@@ -705,6 +725,32 @@ impl Mos1s {
                 s[3 + k] = ctrl[k].v;
                 s[6 + k] = qg[k].v;
                 s[9 + k] = caps[k];
+            }
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.extend([
+                    ("id", (ids.v - ibd.v) * sgn),
+                    ("ig", 0.),
+                    ("ibd", ibd.v),
+                    ("ibs", ibs.v),
+                    ("is", (-ids.v - ibs.v) * sgn),
+                    ("ib", (ibd.v + ibs.v) * sgn),
+                    ("gm", ids.d[1] * sgn * if reverse { -1. } else { 1. }),
+                    ("gmbs", ids.d[3] * sgn * if reverse { -1. } else { 1. }),
+                    (
+                        "gds",
+                        if reverse {
+                            -ids.d[2] * sgn
+                        } else {
+                            ids.d[0] * sgn
+                        },
+                    ),
+                    ("vth", sgn * (vgs_e.v - vgst)),
+                    ("von", sgn * (vgs_e.v - vgst)),
+                    ("vdsat", sgn * vdsat),
+                    ("cgg", caps.iter().sum()),
+                    ("cgs", caps[0]),
+                    ("cgd", caps[1]),
+                ]);
             }
             let [qgs, qgd, qgb] = qg;
 

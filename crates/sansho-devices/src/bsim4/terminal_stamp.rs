@@ -292,7 +292,7 @@ impl Batch {
         {
             let model = self.binding[index];
             let m = &self.models[model].size;
-            let act = self.voltages(index, x);
+            let act = out.mos_voltages(index, self.voltages(index, x));
             let [d, g, s, b] = act;
             let mut biases = [g - s, d - s, b - s, b - d, b - s].map(|v| v * m.sign);
             let (bias, mut limited) =

@@ -1,0 +1,12 @@
+Quasi-static BSIM bias and intrinsic charge derivatives
+* Provenance: original Sansho R7 circuit.
+* verify: atol_v=1e-21 atol_i=1e-12
+Vd d 0 1.2
+Vg g 0 1
+M3 d g 0 0 n3 l=1u w=10u
+M4 d g 0 0 n4 l=1u w=10u
+.model n3 nmos(level=49 version=3.3.0)
+.model n4 nmos(level=54 version=4.8.2)
+.dc Vg 0.8 1.4 0.1
+.save v(g) @m3[id] @m3[gm] @m3[gds] @m3[vth] @m4[id] @m4[gm] @m4[gds] @m4[vth] @m4[cgg] @m4[cgd]
+.end

@@ -1,0 +1,11 @@
+Ramp across a nonlinear capacitor and a controlled RL branch
+* Provenance: original Sansho R7 circuit.
+Vdrive in 0 PWL(0 0 20u 1)
+Rfeed in out R='1000*(1+0.2*v(out))'
+Cstore out 0 C='1n*(1+v(out))'
+Rcoil in coil 100
+Lcoil coil 0 L='100u*(1+0.2*v(out))'
+.options method=gear maxord=2
+.tran 50n 20u
+.save v(out) v(coil) i(Vdrive)
+.end

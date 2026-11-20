@@ -11,6 +11,87 @@ use sansho_netlist::{
 };
 use sansho_output::{AnalysisKind, AnalysisResult, Data, Measurement, SimResults};
 
+/// Build requested batch tables before application of .save.
+pub(crate) fn print_tables(
+    nl: &sansho_netlist::Netlist,
+    results: &mut SimResults,
+    warnings: &mut Vec<sansho_diag::Diagnostic>,
+) {
+    use sansho_diag::Diagnostic;
+    for card in &nl.prints {
+        let kind = match card.analysis.as_str() {
+            "op" => AnalysisKind::Op,
+            "dc" => AnalysisKind::Dc,
+            "ac" => AnalysisKind::Ac,
+            "tran" => AnalysisKind::Tran,
+            "noise" => AnalysisKind::Noise,
+            _ => {
+                warnings.push(
+                    Diagnostic::warning(
+                        "W-PRINT",
+                        format!("unknown print analysis {}", card.analysis),
+                    )
+                    .with_span(card.span),
+                );
+                continue;
+            }
+        };
+        let mut matched = false;
+        for a in results.analyses.iter().filter(|a| a.kind == kind) {
+            matched = true;
+            let mut headings = Vec::new();
+            let mut columns = Vec::new();
+            if let Some(scale) = &a.scale {
+                headings.push(scale.name.clone());
+                columns.push(a.scale_values.clone());
+            }
+            for s in &card.signals {
+                if a.kind == AnalysisKind::Ac && s.func == SignalFn::Plain {
+                    for (fun, component) in [(SignalFn::Re, "real"), (SignalFn::Im, "imag")] {
+                        let signal = Signal {
+                            func: fun,
+                            ..s.clone()
+                        };
+                        match samples(&signal, a) {
+                            Ok(values) => {
+                                headings.push(format!("{} ({component})", s.expression()));
+                                columns.push(values);
+                            }
+                            Err(e) => {
+                                warnings
+                                    .push(Diagnostic::warning("W-PRINT", e).with_span(card.span));
+                                break;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                match samples(s, a) {
+                    Ok(values) => {
+                        headings.push(s.expression());
+                        columns.push(values);
+                    }
+                    Err(e) => warnings.push(Diagnostic::warning("W-PRINT", e).with_span(card.span)),
+                }
+            }
+            results.prints.push(sansho_output::PrintTable {
+                analysis: kind,
+                headings,
+                columns,
+            });
+        }
+        if !matched {
+            warnings.push(
+                Diagnostic::warning(
+                    "W-PRINT",
+                    format!("no {} analysis for .print", card.analysis),
+                )
+                .with_span(card.span),
+            );
+        }
+    }
+}
+
 /// Evaluate all measurements against the results.
 pub(crate) fn evaluate(cards: &[MeasureCard], results: &SimResults) -> Vec<Measurement> {
     let mut prior = results
@@ -23,6 +104,7 @@ pub(crate) fn evaluate(cards: &[MeasureCard], results: &SimResults) -> Vec<Measu
         .map(|c| {
             let (label, kind) = match c.analysis {
                 MeasAnalysis::Tran => ("tran", AnalysisKind::Tran),
+                MeasAnalysis::Noise => ("noise", AnalysisKind::Noise),
                 MeasAnalysis::Ac => ("ac", AnalysisKind::Ac),
                 MeasAnalysis::Dc => ("dc", AnalysisKind::Dc),
             };
@@ -45,7 +127,7 @@ pub(crate) fn evaluate(cards: &[MeasureCard], results: &SimResults) -> Vec<Measu
             }
             let sweep_unit = match c.analysis {
                 MeasAnalysis::Tran => "s",
-                MeasAnalysis::Ac => "Hz",
+                MeasAnalysis::Ac | MeasAnalysis::Noise => "Hz",
                 MeasAnalysis::Dc => results
                     .analyses
                     .iter()
@@ -57,7 +139,11 @@ pub(crate) fn evaluate(cards: &[MeasureCard], results: &SimResults) -> Vec<Measu
                 name: c.name.clone(),
                 analysis: label.into(),
                 value: r.as_ref().ok().copied(),
-                unit: unit(&c.kind, sweep_unit),
+                unit: unit(
+                    &c.kind,
+                    sweep_unit,
+                    results.analyses.iter().find(|a| a.kind == kind),
+                ),
                 error: r.err(),
             }
         })
@@ -65,11 +151,14 @@ pub(crate) fn evaluate(cards: &[MeasureCard], results: &SimResults) -> Vec<Measu
 }
 
 /// Unit of a measurement result.
-fn unit(kind: &MeasKind, sweep: &str) -> String {
+fn unit(kind: &MeasKind, sweep: &str, analysis: Option<&AnalysisResult>) -> String {
     let sig = |s: &Signal| -> &'static str {
         match s.func {
             SignalFn::Db => "dB",
             SignalFn::Phase => "rad",
+            _ if s.is_vector() => analysis
+                .and_then(|a| a.variables.iter().find(|v| v.name == s.pos))
+                .map_or("", |v| v.quantity.unit()),
             _ if s.current => "A",
             _ => "V",
         }
@@ -93,6 +182,9 @@ fn unit(kind: &MeasKind, sweep: &str) -> String {
 }
 
 fn signal_name(s: &Signal) -> String {
+    if s.is_vector() {
+        return s.pos.clone();
+    }
     let f = if s.current { "i" } else { "v" };
     match &s.neg {
         Some(n) => format!("{f}({},{n})", s.pos),
@@ -106,7 +198,9 @@ fn samples(s: &Signal, a: &AnalysisResult) -> Result<Vec<f64>, String> {
         if !s.current && node == GROUND {
             return Ok(None);
         }
-        let name = if s.current {
+        let name = if s.is_vector() {
+            node.to_owned()
+        } else if s.current {
             format!("i({node})")
         } else {
             format!("v({node})")

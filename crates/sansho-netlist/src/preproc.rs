@@ -721,7 +721,30 @@ impl Flat<'_> {
             let emitted = !h.starts_with('.')
                 || ctx.prefix.is_empty()
                 || matches!(h.as_str(), ".ic" | ".nodeset" | ".save");
-            let behavioral = h.starts_with('b')
+            let passive_expression = h.starts_with(['r', 'c', 'l'])
+                && line.tokens.get(3).is_some_and(|k| k.lower() == h[..1])
+                && line.tokens.get(4).is_some_and(Token::is_eq)
+                && line.tokens.get(5).is_some_and(|v| {
+                    is_expr_token(&v.text)
+                        && scope
+                            .expression(&v.text)
+                            .and_then(|e| {
+                                eval(
+                                    &e,
+                                    &|name| {
+                                        if name == "temper" {
+                                            Err("runtime temperature".into())
+                                        } else {
+                                            scope.get(name, &self.defs.funcs)
+                                        }
+                                    },
+                                    &self.defs.funcs,
+                                )
+                            })
+                            .is_err()
+                });
+            let behavioral = passive_expression
+                || h.starts_with('b')
                 || (h.starts_with(['e', 'g']) && line.tokens.get(4).is_some_and(Token::is_eq));
             // PARAM measurements resolve earlier measurement names after simulation.
             if ctx.prefix.is_empty()
@@ -818,6 +841,11 @@ impl Flat<'_> {
                                 "i" => {
                                     if let Some(device) = fields.next() {
                                         device.text = ctx.element(&device.text);
+                                    }
+                                }
+                                name if name.starts_with('@') => {
+                                    if let Some((dev, param)) = name[1..].split_once('[') {
+                                        probe.text = format!("@{}[{param}", ctx.element(dev));
                                     }
                                 }
                                 _ => {}

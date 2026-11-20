@@ -103,6 +103,9 @@ fn meas_signals(nl: &Netlist, ckt: &Circuit, out: &mut Vec<Diagnostic>) {
     };
     for m in &nl.measures {
         for s in m.kind.signals() {
+            if s.is_vector() {
+                continue;
+            }
             if let Some(name) = missing(s) {
                 let mut d = Diagnostic::warning(
                     "W-LINT-MEAS-SIGNAL",

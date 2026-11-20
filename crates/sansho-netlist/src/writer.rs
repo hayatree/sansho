@@ -42,6 +42,12 @@ fn source(out: &mut String, s: &SourceSpec) {
         Some(TranFn::Pulse(v)) => {
             let _ = write!(out, " pulse({})", list(v));
         }
+        Some(TranFn::TrNoise(v)) => {
+            let _ = write!(out, " trnoise({})", list(v));
+        }
+        Some(TranFn::TrRandom(v)) => {
+            let _ = write!(out, " trrandom({})", list(v));
+        }
         Some(TranFn::Sin(v)) => {
             let _ = write!(out, " sin({})", list(v));
         }
@@ -62,7 +68,10 @@ fn source(out: &mut String, s: &SourceSpec) {
     }
 }
 
-fn signal(s: &Signal) -> String {
+pub(crate) fn signal(s: &Signal) -> String {
+    if s.is_vector() {
+        return s.pos.clone();
+    }
     let base = if s.current { "i" } else { "v" };
     let f = match s.func {
         SignalFn::Plain => "",
@@ -121,6 +130,7 @@ pub fn write_measure(m: &MeasureCard) -> String {
         MeasAnalysis::Tran => "tran",
         MeasAnalysis::Ac => "ac",
         MeasAnalysis::Dc => "dc",
+        MeasAnalysis::Noise => "noise",
     };
     let body = match &m.kind {
         MeasKind::TrigTarg { trig, targ } => {
@@ -372,9 +382,12 @@ pub fn write(nl: &Netlist) -> String {
                 n,
                 voltage,
                 expr,
+                params: ps,
                 table,
             } => {
-                let key = if !table.is_empty() {
+                let key = if name.starts_with(['r', 'l', 'c']) {
+                    &name[..1]
+                } else if !table.is_empty() {
                     "table"
                 } else if !name.starts_with('b') {
                     "value"
@@ -384,6 +397,7 @@ pub fn write(nl: &Netlist) -> String {
                     "i"
                 };
                 let _ = write!(l, "{name} {p} {n} {key}={{{expr}}}");
+                params(&mut l, ps);
                 for (x, y) in table {
                     let _ = write!(l, " ({},{})", num(*x), num(*y));
                 }
@@ -410,6 +424,7 @@ pub fn write(nl: &Netlist) -> String {
                 value,
                 model,
                 params: ps,
+                ..
             }
             | ElementKind::Capacitor {
                 p,
@@ -425,11 +440,23 @@ pub fn write(nl: &Netlist) -> String {
                 model,
                 params: ps,
             } => {
-                let _ = write!(l, "{name} {p} {n} {}", num(*value));
+                let mult = match &e.kind {
+                    ElementKind::Resistor { mult, .. } => *mult,
+                    _ => 1.,
+                };
+                let _ = write!(l, "{name} {p} {n} {}", num(*value * mult));
                 if let Some(model) = model {
                     let _ = write!(l, " {model}");
                 }
-                params(&mut l, ps);
+                if mult != 1. {
+                    let _ = write!(l, " m={}", num(mult));
+                    for (key, v) in ps {
+                        let _ =
+                            write!(l, " {key}={}", num(if key == "ac" { v * mult } else { *v }));
+                    }
+                } else {
+                    params(&mut l, ps);
+                }
             }
             ElementKind::VoltageSource { p, n, source: s }
             | ElementKind::CurrentSource { p, n, source: s } => {
@@ -501,6 +528,13 @@ pub fn write(nl: &Netlist) -> String {
                 }
             }
         }
+        if !e.ic.is_empty() {
+            let _ = write!(
+                l,
+                " ic={}",
+                e.ic.iter().map(|&v| num(v)).collect::<Vec<_>>().join(",")
+            );
+        }
         let _ = writeln!(out, "{l}");
     }
     for m in &nl.models {
@@ -522,7 +556,7 @@ pub fn write(nl: &Netlist) -> String {
         for o in &nl.options {
             match o.value {
                 // The integration method is stored as a flag; ngspice spells it `method=`.
-                None if o.name == "gear" || o.name == "trap" => {
+                None if matches!(o.name.as_str(), "gear" | "trap" | "trapezoidal") => {
                     let _ = write!(l, " method={}", o.name);
                 }
                 Some(v) => {
@@ -546,6 +580,18 @@ pub fn write(nl: &Netlist) -> String {
     }
     for a in &nl.analyses {
         let _ = writeln!(out, "{}", write_analysis(a));
+    }
+    for card in &nl.prints {
+        let _ = writeln!(
+            out,
+            ".print {} {}",
+            card.analysis,
+            card.signals
+                .iter()
+                .map(signal)
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
     }
     if !nl.saves.is_empty() {
         let _ = writeln!(out, ".save {}", nl.saves.join(" "));

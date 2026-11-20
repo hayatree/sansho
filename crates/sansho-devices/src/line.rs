@@ -38,6 +38,9 @@ impl Line {
         let [p, n] = self.ports[port];
         volt(x, p) - volt(x, n)
     }
+    pub fn initial_waves(&self, [v1, i1, v2, i2]: [f64; 4]) -> [f64; 2] {
+        [v1 + self.z0 * i1, v2 + self.z0 * i2]
+    }
     pub fn outgoing(&self, x: &[f64]) -> [f64; 2] {
         [0, 1].map(|k| self.voltage(x, k) + self.z0 * volt(x, self.currents[k]))
     }
@@ -56,6 +59,16 @@ impl Line {
 }
 
 impl DeviceGroup for Line {
+    fn instance_ic(&self, _: usize, ic: &[f64], x: &mut [f64], edges: &mut Vec<(Node, Node, f64)>) {
+        if let [v1, i1, v2, i2] = ic {
+            for (k, (v, cur)) in [(*v1, *i1), (*v2, *i2)].into_iter().enumerate() {
+                edges.push((self.ports[k][0], self.ports[k][1], v));
+                if let Some(i) = self.currents[k] {
+                    x[i] = cur;
+                }
+            }
+        }
+    }
     fn type_name(&self) -> &'static str {
         "tline"
     }

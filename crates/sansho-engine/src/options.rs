@@ -29,6 +29,8 @@ pub struct SimOptions {
     pub gmin: f64,
     /// Newton iteration limit for DC analyses.
     pub itl1: usize,
+    /// Optional limit for a continued DC sweep point.
+    pub itl2: Option<usize>,
     /// Newton iteration limit per transient timepoint.
     pub itl4: usize,
     /// Optional shunt resistance from every node to ground (Ω).
@@ -49,6 +51,12 @@ pub struct SimOptions {
     pub defas: Option<f64>,
     /// Integration method for transient analysis.
     pub method: Method,
+    /// Highest transient integration order (one or two).
+    pub maxord: usize,
+    /// Include available terminal currents in exported plots.
+    pub savecurrents: bool,
+    /// Seed for independent stochastic transient sources.
+    pub seed: u64,
     /// Maximum number of gmin-stepping solves before giving up.
     pub gmin_steps: usize,
     /// Maximum number of source-stepping solves before giving up.
@@ -78,6 +86,7 @@ impl Default for SimOptions {
             trtol: 7.0,
             gmin: 1e-12,
             itl1: 100,
+            itl2: None,
             itl4: 10,
             rshunt: None,
             scale: 1.,
@@ -88,6 +97,9 @@ impl Default for SimOptions {
             defad: None,
             defas: None,
             method: Method::Trap,
+            maxord: 2,
+            savecurrents: false,
+            seed: 1,
             gmin_steps: 100,
             src_steps: 100,
         }
@@ -141,6 +153,10 @@ impl SimOptions {
                     o.itl1 = v as usize;
                     true
                 }
+                ("itl2", Some(v)) if v >= 1. && v.fract() == 0. => {
+                    o.itl2 = Some(v as usize);
+                    true
+                }
                 ("itl4", Some(v)) if v >= 1.0 => {
                     o.itl4 = v as usize;
                     true
@@ -185,7 +201,30 @@ impl SimOptions {
                     o.src_steps = v as usize;
                     true
                 }
-                ("trap", None) => {
+                ("maxord", Some(v @ (1. | 2.))) => {
+                    o.maxord = v as usize;
+                    true
+                }
+                ("itl5", Some(v)) if v >= 0. && v.fract() == 0. => true,
+                ("seed", Some(v)) if (0. ..=9007199254740991.).contains(&v) && v.fract() == 0. => {
+                    o.seed = v as u64;
+                    true
+                }
+                ("savecurrents", None) => {
+                    o.savecurrents = true;
+                    true
+                }
+                ("interp", None) => {
+                    warnings.push(
+                        Diagnostic::warning(
+                            "W-OPT-INTERP",
+                            "INTERP requested; transient output uses accepted solver timepoints",
+                        )
+                        .with_span(c.span),
+                    );
+                    true
+                }
+                ("trap" | "trapezoidal", None) => {
                     o.method = Method::Trap;
                     true
                 }

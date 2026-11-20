@@ -18,16 +18,31 @@ struct SourceSet {
     p: Vec<Node>,
     n: Vec<Node>,
     specs: Vec<SourceSpec>,
+    streams: Vec<Option<crate::random::Stream>>,
 }
 
 impl SourceSet {
-    fn push(&mut self, name: &str, p: Node, n: Node, spec: SourceSpec) {
+    fn push(&mut self, name: &str, p: Node, n: Node, spec: SourceSpec, seed: u64) {
+        self.streams.push(
+            matches!(
+                spec.tran,
+                Some(sansho_netlist::TranFn::TrRandom(_) | sansho_netlist::TranFn::TrNoise(_))
+            )
+            .then(|| crate::random::Stream::new(name, seed)),
+        );
         self.names.push(name.to_string());
         self.p.push(p);
         self.n.push(n);
         self.specs.push(spec);
     }
 
+    fn next_breakpoint(&self, t: f64) -> f64 {
+        self.specs
+            .iter()
+            .zip(&self.streams)
+            .filter_map(|(s, stream)| Some(stream.as_ref()?.next(s.tran.as_ref()?, t)))
+            .fold(f64::INFINITY, f64::min)
+    }
     fn index(&self, name: &str) -> Option<usize> {
         self.names.iter().position(|n| n == name)
     }
@@ -36,7 +51,10 @@ impl SourceSet {
     fn value(&self, i: usize, ctx: &EvalCtx) -> f64 {
         let s = &self.specs[i];
         let v = match (ctx.mode, &s.tran) {
-            (Mode::Tran, Some(f)) => waveform::value(f, ctx.time, &ctx.tran),
+            (Mode::Tran, Some(f)) => self.streams[i].as_ref().map_or_else(
+                || waveform::value(f, ctx.time, &ctx.tran),
+                |s| s.value(f, ctx.time),
+            ),
             _ => dc_value(s),
         };
         v * ctx.source_factor
@@ -100,7 +118,10 @@ pub struct VoltageSources {
 impl VoltageSources {
     /// Add an instance.
     pub fn push(&mut self, name: &str, p: Node, n: Node, spec: SourceSpec) {
-        self.set.push(name, p, n, spec);
+        self.push_seeded(name, p, n, spec, 1);
+    }
+    pub fn push_seeded(&mut self, name: &str, p: Node, n: Node, spec: SourceSpec, seed: u64) {
+        self.set.push(name, p, n, spec, seed);
     }
 }
 
@@ -145,9 +166,18 @@ impl DeviceGroup for VoltageSources {
             let cur = x[self.k[i]];
             let v = volt(x, self.set.p[i]) - volt(x, self.set.n[i]);
             out.g[4 * i..4 * i + 4].copy_from_slice(&[1.0, -1.0, 1.0, -1.0]);
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.extend([("i", cur), ("p", cur * v)]);
+            }
             out.f[3 * i..3 * i + 3].copy_from_slice(&[cur, -cur, v]);
             out.b[i] = self.set.value(i, ctx);
         }
+    }
+    fn has_random_waveform(&self) -> bool {
+        self.set.streams.iter().any(Option::is_some)
+    }
+    fn next_random_breakpoint(&self, time: f64) -> f64 {
+        self.set.next_breakpoint(time)
     }
     fn eval_ac(&self, out: &mut AcSlots) {
         for i in 0..self.len() {
@@ -177,11 +207,22 @@ pub struct CurrentSources {
 impl CurrentSources {
     /// Add an instance.
     pub fn push(&mut self, name: &str, p: Node, n: Node, spec: SourceSpec) {
-        self.set.push(name, p, n, spec);
+        self.push_seeded(name, p, n, spec, 1);
+    }
+    pub fn push_seeded(&mut self, name: &str, p: Node, n: Node, spec: SourceSpec, seed: u64) {
+        self.set.push(name, p, n, spec, seed);
     }
 }
 
 impl DeviceGroup for CurrentSources {
+    fn ac_current(
+        &self,
+        i: usize,
+        _: &Slots,
+        _: &mut dyn FnMut(Node, f64, f64),
+    ) -> Option<(f64, f64)> {
+        Some(self.set.ac(i))
+    }
     fn instance_name(&self, index: usize) -> Option<&str> {
         self.set.names.get(index).map(String::as_str)
     }
@@ -201,13 +242,26 @@ impl DeviceGroup for CurrentSources {
         }
         Ok(())
     }
-    fn eval(&self, ctx: &EvalCtx, _x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
+    fn eval(&self, ctx: &EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
             // Current leaves node p into the source and enters node n.
             let v = self.set.value(i, ctx);
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.extend([
+                    ("i", v),
+                    ("current", v),
+                    ("p", v * (volt(x, self.set.p[i]) - volt(x, self.set.n[i]))),
+                ]);
+            }
             out.b[2 * i] = -v;
             out.b[2 * i + 1] = v;
         }
+    }
+    fn has_random_waveform(&self) -> bool {
+        self.set.streams.iter().any(Option::is_some)
+    }
+    fn next_random_breakpoint(&self, time: f64) -> f64 {
+        self.set.next_breakpoint(time)
     }
     fn eval_ac(&self, out: &mut AcSlots) {
         for i in 0..self.len() {

@@ -16,6 +16,7 @@ mod measure;
 pub mod monte_carlo;
 mod options;
 mod parallel;
+mod probes;
 mod small_signal;
 mod solve;
 
@@ -160,6 +161,8 @@ pub fn check(nl: &Netlist) -> Result<Checked, Vec<Diagnostic>> {
         d.extend(warnings.iter().cloned());
         d
     })?;
+    // Validate selections even for check-only, empty, and noise-only runs.
+    probes::Probes::bind(&circuit, nl, options.savecurrents).map_err(|d| vec![d])?;
     warnings.extend(w);
     warnings.extend(lint::lint(nl, &circuit, &options));
     if nl.analyses.is_empty() {
@@ -253,7 +256,7 @@ fn run_analysis(
                 .map(|a| (vec![a], None));
         }
         AnalysisCard::Four { .. } => return Ok((vec![], None)),
-        AnalysisCard::Op { .. } => analysis::op(ckt, opts),
+        AnalysisCard::Op { .. } => analysis::op(ckt, opts, nl),
         AnalysisCard::Dc { inner, outer, .. } => {
             // A sweep modifies a source value, so it works on its own copy of the circuit.
             let mut own = if ckt.ordering.is_some() {
@@ -278,7 +281,7 @@ fn run_analysis(
             fstart,
             fstop,
             ..
-        } => analysis::ac(ckt, opts, *sweep, *points, *fstart, *fstop),
+        } => analysis::ac(ckt, nl, opts, *sweep, *points, *fstart, *fstop),
         AnalysisCard::Tran {
             tstep,
             tstop,
@@ -286,7 +289,19 @@ fn run_analysis(
             tmax,
             uic,
             ..
-        } => analysis::tran(ckt, opts, *tstep, *tstop, *tstart, *tmax, *uic).map(|(a, t)| {
+        } => analysis::tran(
+            ckt,
+            opts,
+            sansho_devices::TranParams {
+                tstep: *tstep,
+                tstop: *tstop,
+            },
+            *tstart,
+            *tmax,
+            *uic,
+            nl,
+        )
+        .map(|(a, t)| {
             stats = Some(Stats::Tran(t));
             a
         }),
@@ -356,6 +371,7 @@ fn project_results(full: &mut SimResults, saves: &[String]) -> Option<Measuremen
         })
         .collect();
     let saved = SimResults {
+        prints: full.prints.clone(),
         title: full.title.clone(),
         measures: full.measures.clone(),
         analyses,
@@ -459,6 +475,10 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
         options: opts,
         mut warnings,
     } = checked;
+    let mut saves = nl.saves.clone();
+    if !saves.is_empty() && opts.savecurrents {
+        saves.extend(probes::currents(nl));
+    }
     let mut outcomes: Vec<_> = match nl.analyses.as_slice() {
         // A lone sweep owns the already elaborated DC circuit. Concurrent
         // analysis cards still need private mutable devices for each sweep.
@@ -497,6 +517,7 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
         }
     }
     let mut results = SimResults {
+        prints: Vec::new(),
         measures: Vec::new(),
         title: nl.title.clone(),
         analyses: Vec::new(),
@@ -518,12 +539,13 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
                 diagnostics.extend(warnings);
                 return Err(RunError {
                     diagnostics,
-                    measurement_context: project_results(&mut results, &nl.saves),
+                    measurement_context: project_results(&mut results, &saves),
                     partial: Some(results),
                 });
             }
         }
     }
+    measure::print_tables(nl, &mut results, &mut warnings);
     results.measures = measure::evaluate(&nl.measures, &results);
     for m in &results.measures {
         if let Some(e) = &m.error {
@@ -533,7 +555,7 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
             ));
         }
     }
-    let measurement_context = project_results(&mut results, &nl.saves);
+    let measurement_context = project_results(&mut results, &saves);
     Ok(RunOutput {
         noise_summary_intervals: nl
             .analyses

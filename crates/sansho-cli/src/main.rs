@@ -174,6 +174,17 @@ fn summary(results: &SimResults, intervals: &[u32]) {
             ),
         }
     }
+    for table in &results.prints {
+        println!("{}", table.analysis.plot_name());
+        println!("Index\t{}", table.headings.join("\t"));
+        for i in 0..table.columns.first().map_or(0, Vec::len) {
+            print!("{i}");
+            for col in &table.columns {
+                print!("\t{:.8e}", col[i]);
+            }
+            println!();
+        }
+    }
     if !results.measures.is_empty() {
         println!("Measurements:");
         for m in &results.measures {

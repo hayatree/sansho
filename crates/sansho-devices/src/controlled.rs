@@ -89,6 +89,16 @@ impl Switch {
 }
 
 impl DeviceGroup for Switch {
+    fn ac_current(
+        &self,
+        _: usize,
+        slots: &Slots,
+        emit: &mut dyn FnMut(Node, f64, f64),
+    ) -> Option<(f64, f64)> {
+        emit(self.p, slots.g[0], 0.);
+        emit(self.n, -slots.g[0], 0.);
+        Some((0., 0.))
+    }
     fn instance_span(&self) -> Option<sansho_diag::Span> {
         Some(self.span)
     }
@@ -126,6 +136,9 @@ impl DeviceGroup for Switch {
             self.goff
         };
         out.resistor(&mut Default::default(), g, volt(x, self.p), volt(x, self.n));
+        if let Some(values) = out.outputs.first_mut() {
+            values.push(("i", out.f[0]));
+        }
     }
     fn settle(&self, x: &[f64], state: &mut [f64]) -> bool {
         let on = self.on(state[0]);

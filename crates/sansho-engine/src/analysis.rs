@@ -242,7 +242,11 @@ fn source_stepping(
 }
 
 /// `.op`
-pub(crate) fn op(ckt: &Circuit, opts: &SimOptions) -> Result<AnalysisResult, Diagnostic> {
+pub(crate) fn op(
+    ckt: &Circuit,
+    opts: &SimOptions,
+    nl: &sansho_netlist::Netlist,
+) -> Result<AnalysisResult, Diagnostic> {
     let _phase = sansho_diag::Phase::start("analysis");
     let mut ws = Workspace::new(ckt);
     let mut x = vec![0.0; ckt.dim()];
@@ -258,14 +262,17 @@ pub(crate) fn op(ckt: &Circuit, opts: &SimOptions) -> Result<AnalysisResult, Dia
         "E-CONV-OP",
         "operating point",
     )?;
+    let mut probes = crate::probes::Probes::bind(ckt, nl, opts.savecurrents)?;
+    probes.sample(ckt, &ws, &make_ctx(opts, Mode::Dc, NO_TRAN), &x, &[])?;
+    let mut vars = variables(ckt);
+    let mut cols = x.into_iter().map(|v| vec![v]).collect();
+    probes.finish(&mut vars, &mut cols);
     Ok(AnalysisResult {
         kind: AnalysisKind::Op,
         scale: None,
         scale_values: Vec::new(),
-        variables: variables(ckt),
-        data: Data::Real {
-            columns: x.into_iter().map(|v| vec![v]).collect(),
-        },
+        variables: vars,
+        data: Data::Real { columns: cols },
     })
 }
 
@@ -291,12 +298,19 @@ pub(crate) fn dc_sweep(
         .checked_mul(rows)
         .filter(|&n| n <= isize::MAX as usize / 8)
         .ok_or_else(invalid)?;
+    let parameter = |axis: &sansho_netlist::DcSweep| {
+        if axis.source.starts_with('r') {
+            "r"
+        } else {
+            "dc"
+        }
+    };
     for axis in std::iter::once(inner).chain(outer) {
-        if axis.source != "temp" && ckt.param(&axis.source, "dc").is_none() {
+        if axis.source != "temp" && ckt.param(&axis.source, parameter(axis)).is_none() {
             return Err(Diagnostic::error(
                 "E-DC-SOURCE",
                 format!(
-                    "DC sweep target `{}` is not an independent source",
+                    "DC sweep target `{}` must be an independent source, resistor or TEMP",
                     axis.source
                 ),
             ));
@@ -313,6 +327,7 @@ pub(crate) fn dc_sweep(
     }
     let mut ctx = make_ctx(opts, Mode::Dc, NO_TRAN);
     let integ = Integration::dc(n);
+    let mut probes = crate::probes::Probes::bind(ckt, nl, opts.savecurrents)?;
     let mut point = None;
     for k in 0..count {
         let v = inner.value(k % row);
@@ -364,7 +379,7 @@ pub(crate) fn dc_sweep(
         }
         let ckt = point.as_mut().unwrap_or(ckt);
         for (axis, value) in std::iter::once((inner, v)).chain(outer.zip(outer_value)) {
-            if axis.source != "temp" && !ckt.set_param(&axis.source, "dc", value) {
+            if axis.source != "temp" && !ckt.set_param(&axis.source, parameter(axis), value) {
                 return Err(Diagnostic::error(
                     "E-DC-SOURCE",
                     format!("cannot set DC value of {}", axis.source),
@@ -373,20 +388,32 @@ pub(crate) fn dc_sweep(
         }
         // Continue from the previous point; fall back to a full operating-point solve.
         let continued = k % row > 0
-            && newton(ckt, &ctx, &integ, &mut x, &mut ws, opts, opts.itl1, 0.0)
-                .map(|_| ws.commit())
-                .is_ok();
+            && newton(
+                ckt,
+                &ctx,
+                &integ,
+                &mut x,
+                &mut ws,
+                opts,
+                opts.itl2.unwrap_or(opts.itl1),
+                0.0,
+            )
+            .map(|_| ws.commit())
+            .is_ok();
         if !continued
             && let Err(d) = solve_op(ckt, &ctx, &mut x, &mut ws, opts, "E-CONV-DC", "DC sweep")
         {
             return Err(d.with_note(format!("at {source} = {v:e}, outer value {outer_value:?}")));
         }
+        probes.sample(ckt, &ws, &ctx, &x, &[])?;
         scale.push(v);
         for (c, &xv) in cols.iter_mut().zip(&x) {
             c.push(xv);
         }
     }
 
+    let mut vars = variables(ckt);
+    probes.finish(&mut vars, &mut cols);
     let stats = crate::DcStats {
         source: source.to_owned(),
         points: count,
@@ -399,6 +426,8 @@ pub(crate) fn dc_sweep(
             scale: Some(Variable {
                 name: if temperature {
                     "temp-sweep"
+                } else if source.starts_with('r') {
+                    "res-sweep"
                 } else if is_current {
                     "i-sweep"
                 } else {
@@ -407,6 +436,8 @@ pub(crate) fn dc_sweep(
                 .into(),
                 quantity: if temperature {
                     Quantity::Temperature
+                } else if source.starts_with('r') {
+                    Quantity::Resistance
                 } else if is_current {
                     Quantity::Current
                 } else {
@@ -414,7 +445,7 @@ pub(crate) fn dc_sweep(
                 },
             }),
             scale_values: scale,
-            variables: variables(ckt),
+            variables: vars,
             data: Data::Real { columns: cols },
         },
         stats,
@@ -568,6 +599,7 @@ pub(crate) fn ac_matrix(
 /// `.ac`
 pub(crate) fn ac(
     ckt: &Circuit,
+    nl: &sansho_netlist::Netlist,
     opts: &SimOptions,
     sweep: AcSweep,
     points: u32,
@@ -576,7 +608,9 @@ pub(crate) fn ac(
 ) -> Result<AnalysisResult, Diagnostic> {
     let _phase = sansho_diag::Phase::start("analysis");
     let n = ckt.dim();
-    let (_, ws, _) = linearize(ckt, opts, Mode::Ac)?;
+    let (bias, ws, ctx) = linearize(ckt, opts, Mode::Ac)?;
+    let mut probes = crate::probes::Probes::bind(ckt, nl, opts.savecurrents)?;
+    probes.sample(ckt, &ws, &ctx, &bias, &[])?;
     let b = ac_rhs(ckt);
     let mut lu = match &ckt.ordering {
         Some(order) => SerialLu::from_ordering(order.clone()),
@@ -598,6 +632,8 @@ pub(crate) fn ac(
             c.push((v.re, v.im));
         }
     }
+    let mut vars = variables(ckt);
+    probes.ac_columns(ckt, &freqs, &mut vars, &mut cols)?;
     Ok(AnalysisResult {
         kind: AnalysisKind::Ac,
         scale: Some(Variable {
@@ -605,7 +641,7 @@ pub(crate) fn ac(
             quantity: Quantity::Frequency,
         }),
         scale_values: freqs,
-        variables: variables(ckt),
+        variables: vars,
         data: Data::Complex { columns: cols },
     })
 }
@@ -871,15 +907,15 @@ fn schedule_arrival(bps: &mut Vec<f64>, time: f64, eps: f64, tstop: f64) {
 pub(crate) fn tran(
     ckt: &Circuit,
     opts: &SimOptions,
-    tstep: f64,
-    tstop: f64,
+    tp: TranParams,
     tstart: f64,
     tmax: Option<f64>,
     uic: bool,
+    nl: &sansho_netlist::Netlist,
 ) -> Result<(AnalysisResult, crate::TranStats), Diagnostic> {
     let _phase = sansho_diag::Phase::start("analysis");
     let n = ckt.dim();
-    let tp = TranParams { tstep, tstop };
+    let TranParams { tstep, tstop } = tp;
     let mut ctx = make_ctx(opts, Mode::Tran, tp);
     let mut ws = Workspace::new(ckt);
     let mut x = vec![0.0; n];
@@ -892,7 +928,24 @@ pub(crate) fn tran(
         // sample. Independent capacitor charge histories also handle conflicting
         // constraints (e.g. parallel capacitors initially at different voltages).
         let mut voltages = vec![];
-        for g in &ckt.groups {
+        let device_ics: std::collections::HashMap<_, _> = nl
+            .elements
+            .iter()
+            .filter(|e| !e.ic.is_empty())
+            .map(|e| (e.name.as_str(), &e.ic))
+            .collect();
+        for (g, slots) in ckt.groups.iter().zip(&mut ws.slots) {
+            if !device_ics.is_empty() {
+                for i in 0..g.len() {
+                    if let Some(ic) = g.instance_name(i).and_then(|name| device_ics.get(name)) {
+                        g.instance_ic(i, ic, &mut x, &mut voltages);
+                        if slots.initial_conditions.is_empty() {
+                            slots.initial_conditions.resize(g.len(), Vec::new());
+                        }
+                        slots.initial_conditions[i].clone_from(ic);
+                    }
+                }
+            }
             g.initial_values(&mut x, &mut voltages);
         }
         if !voltages.is_empty() {
@@ -968,7 +1021,17 @@ pub(crate) fn tran(
         g.step_limits(&tp, &mut step_limits);
     }
     for history in &mut lines {
-        history.accept(0., &x);
+        if let Some(&[v1, i1, v2, i2]) = ws.slots[history.group]
+            .initial_conditions
+            .first()
+            .map(Vec::as_slice)
+        {
+            history
+                .samples
+                .push_back((0., history.line.initial_waves([v1, i1, v2, i2])));
+        } else {
+            history.accept(0., &x);
+        }
         bps.push(history.line.delay);
     }
     step_limits.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -992,6 +1055,9 @@ pub(crate) fn tran(
         }
     }
     crate::solve::assemble_charges(ckt, &eval_ctx, &x, &mut ws, opts)?;
+    for slots in &mut ws.slots {
+        slots.initial_conditions.clear();
+    }
     eval_ctx.initial_charge = false;
     if uic {
         ws.commit();
@@ -1029,6 +1095,10 @@ pub(crate) fn tran(
             }
         }
     };
+    let mut probes = crate::probes::Probes::bind(ckt, nl, opts.savecurrents)?;
+    if tstart <= eps {
+        probes.sample(ckt, &ws, &eval_ctx, &x, &qdot)?;
+    }
     record(0.0, &x, &mut times, &mut cols);
 
     let mut accepted_steps = 0;
@@ -1044,10 +1114,19 @@ pub(crate) fn tran(
     let mut older_x = previous_x.clone();
     let profile = sansho_diag::profile_enabled();
     let mut control = std::time::Duration::ZERO;
+    let random: Vec<_> = ckt
+        .groups
+        .iter()
+        .filter(|g| g.has_random_waveform())
+        .collect();
     while t < tstop - eps {
         let begin = profile.then(std::time::Instant::now);
         attempted_steps += 1;
-        let next_bp = bps.get(bp_idx).copied().unwrap_or(tstop);
+        let fixed_bp = bps.get(bp_idx).copied().unwrap_or(tstop);
+        let next_bp = random
+            .iter()
+            .map(|g| g.next_random_breakpoint(t + eps))
+            .fold(fixed_bp, f64::min);
         while let Some((_, cap)) = step_limits.next_if(|&(start, _)| start <= t + eps) {
             hmax = hmax.min(cap);
         }
@@ -1064,7 +1143,7 @@ pub(crate) fn tran(
         // After a source corner one backward-Euler step gives a right-sided
         // current for every tracked charge. Trap only needs that one derivative.
         let restart_trap = has_storage && bp_idx > 0 && opts.method == Method::Trap;
-        let order = if hist.len() >= 3 || (restart_trap && hist.len() >= 2) {
+        let order = if opts.maxord == 2 && (hist.len() >= 3 || (restart_trap && hist.len() >= 2)) {
             2
         } else {
             1
@@ -1244,7 +1323,9 @@ pub(crate) fn tran(
         let hit_bp = (t - next_bp).abs() <= eps;
         if hit_bp {
             t = next_bp;
-            bp_idx += 1;
+            if (t - fixed_bp).abs() <= eps {
+                bp_idx += 1;
+            }
             hist.clear();
         }
         if crossing.is_some() {
@@ -1267,6 +1348,9 @@ pub(crate) fn tran(
         std::mem::swap(&mut x, &mut x_new);
         if let Some(t) = begin {
             control += t.elapsed();
+        }
+        if t >= tstart - eps {
+            probes.sample(ckt, &ws, &eval_ctx, &x, &qdot)?;
         }
         record(t, &x, &mut times, &mut cols);
         h *= grow;
@@ -1291,6 +1375,8 @@ pub(crate) fn tran(
             control.as_secs_f64() * 1000.
         );
     }
+    let mut vars = variables(ckt);
+    probes.finish(&mut vars, &mut cols);
     let stats = crate::TranStats {
         accepted_steps,
         rejected_steps: attempted_steps - accepted_steps,
@@ -1305,7 +1391,7 @@ pub(crate) fn tran(
                 quantity: Quantity::Time,
             }),
             scale_values: times,
-            variables: variables(ckt),
+            variables: vars,
             data: Data::Real { columns: cols },
         },
         stats,

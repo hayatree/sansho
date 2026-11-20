@@ -1,0 +1,8 @@
+Divider resistance at two ambient temperatures
+* Provenance: original Sansho R7 circuit.
+Vrail rail 0 2
+Rtest rail out 1k
+Rload out 0 1k tc1=0.002 tc2=0.00001
+.dc Rtest 500 1500 500 temp 27 47 20
+.print dc v(out) i(Vrail)
+.end

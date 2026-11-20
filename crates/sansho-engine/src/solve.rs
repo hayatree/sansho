@@ -333,7 +333,9 @@ fn assemble_for(
         s.noncon = false;
         s.error = None;
         let mut state = StateRef { accepted, current };
-        if matches!(request, Assembly::Charges(_)) && group.sample_charges(x, &mut state, s, cache)
+        if matches!(request, Assembly::Charges(_))
+            && s.initial_conditions.is_empty()
+            && group.sample_charges(x, &mut state, s, cache)
         {
             return;
         }

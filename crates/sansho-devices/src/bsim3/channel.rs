@@ -16,7 +16,6 @@ pub(super) struct Bias {
     pub mu: D,
     pub width: D,
     pub rds: D,
-    #[cfg(test)]
     pub sat: D,
     pub effective_drain: D,
     pub ids: D,
@@ -164,7 +163,6 @@ impl Model {
             mu,
             width,
             rds,
-            #[cfg(test)]
             sat,
             effective_drain: eff,
             ids,

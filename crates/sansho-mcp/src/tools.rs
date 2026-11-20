@@ -78,7 +78,7 @@ const TOOLS: &[Tool] = &[
                       analysis cards including noise, tf, sens, four and pz, e.g. [\"tran 1n 1u\", \"ac dec 20 1 1g\"]. Returns a \
                       compact summary: job_id, status, operating-point values, per-signal \
                       min/max/first/last, .meas results with units, diagnostics, input and \
-                      result hashes. Fetch waveforms with get_waveform.",
+                      result hashes. Include .save @m1[gm] @m1[gds] @m1[vth] to record MOS bias quantities for get_waveform.",
         read_only: false,
         schema: || {
             json!({"type":"object","properties":{
@@ -94,13 +94,13 @@ const TOOLS: &[Tool] = &[
         title: "Get waveform",
         description: "Fetch one signal of a job as x/y arrays, downsampled (LTTB, keeps peaks \
                       and edges) to at most max_points points. Signals: v(node), v(a,b), \
-                      i(vsource). AC results default to dB; reduce can also be mag, phase \
+                      i(vsource), or a saved device quantity such as @m.x1.m1[gm]. AC results default to dB. The reduction can also be mag, phase \
                       (degrees), re or im.",
         read_only: true,
         schema: || {
             json!({"type":"object","properties":{
                 "job_id":{"type":"string"},
-                "signal":{"type":"string","description":"e.g. v(out), v(a,b), i(v1)"},
+                "signal":{"type":"string","description":"e.g. v(out), v(a,b), i(v1), @m1[gm]"},
                 "analysis":{"type":"integer","minimum":0,
                             "description":"analysis index in the job (default: last with the signal)"},
                 "reduce":{"type":"string","enum":["auto","real","mag","db","phase","re","im"],

@@ -8,7 +8,7 @@ with `get_waveform`. The CLI writes all plots to one raw file with `sansho run d
 | Card | Result |
 |---|---|
 | `.op` | One DC operating point, with node voltages and branch currents. |
-| `.dc src1 start stop step [src2 start stop step]` | DC solutions versus independent source value or ambient temperature (`temp`) on either axis. The outer loop advances src2. Each complete inner sweep follows the previous one in the same plot, with the inner value as scale. |
+| `.dc src1 start stop step [src2 start stop step]` | DC solutions versus independent source value, nominal resistor value or ambient temperature (`temp`) on either axis. The outer loop advances src2. Each complete inner sweep follows the previous one in the same plot, with the inner value as scale. |
 | `.ac dec\|oct\|lin n start stop` | Complex node voltages and branch currents versus frequency in Hz. Sources use their AC magnitude and phase. |
 | `.tran step stop [start [maxstep]] [uic]` | Node voltages and branch currents versus time in seconds. The integrator adapts its internal step. |
 | `.noise v(out[,ref]) source dec\|oct\|lin n start stop [interval]` | A noise spectrum and a separate plot of integrated RMS noise. |
@@ -23,6 +23,47 @@ first solve the nonlinear DC bias. The frequency grid uses points per decade or 
 or a total count for a linear sweep.
 
 An outer TEMP axis rebinds temperature-dependent devices once per inner curve. An inner TEMP axis rebinds at every point and reapplies the outer source bias. Netlist parameter expressions retain their preprocessing-time values.
+
+## Device output vectors
+
+Select a quantity with `.save @m1[gm]`. A transistor inside subcircuit instance X1 has a name such as `@m.x1.m1[gm]`. The same names work in measurements, print cards, session results, JSON and MCP `get_waveform`. A misspelled device or field gives E-OUTPUT-VECTOR. Print and measure cards can use signals excluded by an explicit .save list.
+
+| Element | Available quantities |
+|---|---|
+| R, C, L | Current `i`. Resistors also report absorbed power `p`. |
+| V and I | Current `i` and absorbed power `p`. Independent current sources also accept `current`. |
+| B, E, F, G, H, S, W | Output current `i`, positive into the first terminal. |
+| D | `id`, incremental `gd`, differential capacitance `cd`, `charge`, displacement current `capcur`. |
+| Q | `ic ib ie is gm gpi gmu go cpi cmu`. |
+| J | `id is ig gm gds`. |
+| M, levels 1/2/3 | `id is ig ib ibd ibs gm gds gmbs vth von vdsat cgg cgs cgd`. The gate capacitances use the classical Meyer and overlap terms. |
+| BSIM3 and BSIM4 | `id is ig ib ibd ibs isub gm gds gmbs vth vdsat`. Intrinsic charges `qd qg qs qb` and their 16 signed derivatives `cxy`, where x and y are d, g, s or b. Junction outputs `qbd qbs capbd capbs`. BSIM4 also exposes `igd igs igb igcd igcs`. |
+
+OP and DC sample the converged point. TRAN samples accepted timesteps. Capacitor and junction displacement currents use local charge history. BSIM channel and leakage quantities are quasi-static at the sampled bias. AC returns complex branch and two-terminal small-signal currents for `i` and `current`. Other device quantities give the real bias value across the frequency sweep. BSIM derivatives use the intrinsic channel model. External parasitics can change gain measured at circuit terminals.
+
+`.options savecurrents` adds R/C/L/V/B/E/F/G/H/S/W currents, independent I-source `current`, diode `id`, BJT `ic ib ie is`, JFET `id ig is` and MOS `id is ig ib ibd ibs`. There is no need to add a sensing voltage source.
+
+## Batch output
+
+`.print op|dc|tran|ac|noise` lists the requested signals for each matching plot. The CLI prints an indexed table to stdout. JSON and session results expose `prints` with the analysis, headings and numeric columns, including the independent scale when present. A plain complex signal has real and imaginary columns. `vm`, `vp`, `vdb`, `vr` and `vi` select magnitude, phase in radians, 20 log10 magnitude, real and imaginary parts. Noise tables accept names such as `onoise_spectrum`. `.title` overrides the first-line title. `.width` is accepted, and `.plot` emits W-PLOT-IGNORED.
+
+## Behavioral passives and startup
+
+`R1 p n R='expr'`, `C1 p n C={expr}` and `L1 p n L='expr'` accept differential node voltages, branch-current probes, `time` in seconds and `temper` in °C. R stamps the current V/R. C and L use differential capacitance and inductance, with terminal laws i = C(x,t) dV/dt and V = L(x,t) di/dt. An auxiliary differential equation supplies the derivative. Equal and opposite currents conserve charge at the pins. For C(V) the transferred charge is the integral of C(V) dV. Standalone Q and flux expressions are outside the supported grammar. Numeric and behavioral resistors accept TC1, TC2, parallel multiplicity and a separate AC resistance. A resistor sweep changes its nominal value and retains its temperature factor and parallel multiplicity.
+
+With `.tran … uic`, D accepts its junction voltage, Q takes VBE,VCE, M takes VDS,VGS,VBS, and J takes VDS,VGS. For a lossless T line the tuple V1,I1,V2,I2 initializes the two port currents and outgoing wave histories V + Z0 I. Device voltage constraints initialize the reported time-zero voltages. Each initialized junction uses its own local voltage for startup charge. Device IC tuples apply only to UIC startup. The standalone diode comparison records the ngspice 44.2 exception. [Numerical differences](compatibility.md#numerical-differences)
+
+## Stochastic sources
+
+`TRRANDOM(type TS TD P1 P2)` draws a new value every TS seconds after delay TD and holds it to the next sample. The source is zero before TD. Types 1 through 4 give a symmetric uniform variate with half-width P1, Gaussian with standard deviation P1, exponential with mean P1 and Poisson with mean P1. P2 adds an offset. TD and P2 default to zero and P1 defaults to one.
+
+`TRNOISE(NA NT NALPHA NAMP RTSAM RTSCAPT RTSEMT)` sums interpolated Gaussian white noise (knot RMS NA), colored noise and a two-state telegraph signal. NT is the sample spacing. Twenty independent octave bands approximate a spectrum proportional to 1/f^NALPHA with RMS scale NAMP. The slope applies inside that finite band. RTS alternates between zero and RTSAM with exponential low and high dwell times of means RTSCAPT and RTSEMT. Source knots and telegraph transitions introduce transient breakpoints.
+
+`.options seed=N` selects a nonnegative integer through 2^53−1, default 1. A 64-bit counter mixer combines the seed, flattened source name, sample index and variate lane using XOR shifts and odd modular multipliers. The upper 52 bits yield an open-interval uniform draw. Gaussian samples use Box–Muller, and RTS dwell times use the inverse exponential distribution. Each event timeline is indexed by event number, so step retries and thread scheduling reuse the same draws. Independent simulator implementations generate different samples.
+
+## Integration options
+
+`METHOD=GEAR` uses variable-step BDF2 after startup. `METHOD=TRAPEZOIDAL` and `METHOD=TRAP` select trapezoidal integration. MAXORD=1 uses backward Euler and MAXORD=2 allows second order. The default maximum order is two. Higher orders warn and leave the current setting in place. ITL2 selects the continued DC sweep iteration limit. ITL5 is accepted without imposing a total transient iteration limit. INTERP warns because the output grid contains accepted timepoints. Accepted listing flags are NOPAGE, NOMOD, NOACCT, NOINIT, ACCT, LIST and NODE. Other unknown options emit W-OPT-IGNORED.
 
 ## Measurements
 
@@ -55,7 +96,7 @@ specified point or crossing. [ngspice user manual, §11.4](https://ngspice.sourc
 
 PARAM evaluates scalar arithmetic and built-in math functions in card order.
 An unknown or failed measurement used by a later expression produces W-MEAS-FAILED.
-Measurements operate on TRAN, AC or DC results.
+Measurements operate on TRAN, AC, DC or the frequency plot of a noise analysis. For example, `.meas noise floor FIND onoise_spectrum AT=1k` reads output amplitude density in V/√Hz. The integrated RMS noise plot is separate. A nested DC sweep with a repeated scale has no unique crossing or interpolation interval and reports W-MEAS-FAILED.
 
 ## BJT transport delay
 
@@ -131,8 +172,7 @@ and the outstanding flicker discrepancy are in the [verification notes](../verif
 BSIM4 uses the existing Sansho channel, leakage, charge and network equations, including
 their documented approximations. tnoiMod 2 correlated induced gate/channel noise
 is unsupported. Behavioral sources and ideal switches have no intrinsic generators.
-Verilog-A file-backed noise tables and transient random-noise waveforms are outside
-this implementation. [BSIM4 coverage](bsim4.md)
+Verilog-A file-backed noise tables remain outside this implementation. [BSIM4 coverage](bsim4.md)
 
 ## Transfer and sensitivity
 

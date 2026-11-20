@@ -23,6 +23,8 @@ pub struct Resistors {
     n: Vec<Node>,
     g: Vec<f64>,
     noise_temp: Vec<f64>,
+    ac_g: Vec<Option<f64>>,
+    sweep_scale: Vec<f64>,
 }
 
 impl Resistors {
@@ -32,6 +34,20 @@ impl Resistors {
     }
     /// A zero noise temperature disables the resistor noise source.
     pub fn push_at(&mut self, name: &str, p: Node, n: Node, r: f64, noise_temp: f64) {
+        self.push_ac(name, p, n, [r, r], noise_temp, None);
+    }
+    /// Bind nominal and temperature-adjusted resistance, optionally overriding the AC value.
+    pub fn push_ac(
+        &mut self,
+        name: &str,
+        p: Node,
+        n: Node,
+        [nominal, r]: [f64; 2],
+        noise_temp: f64,
+        ac: Option<f64>,
+    ) {
+        self.sweep_scale.push(r / nominal);
+        self.ac_g.push(ac.map(f64::recip));
         self.noise_temp.push(noise_temp);
         self.names.push(name.to_string());
         self.p.push(p);
@@ -41,6 +57,17 @@ impl Resistors {
 }
 
 impl DeviceGroup for Resistors {
+    fn ac_current(
+        &self,
+        i: usize,
+        slots: &Slots,
+        emit: &mut dyn FnMut(Node, f64, f64),
+    ) -> Option<(f64, f64)> {
+        let g = slots.g[4 * i];
+        emit(self.p[i], g, 0.);
+        emit(self.n[i], -g, 0.);
+        Some((0., 0.))
+    }
     fn noise(
         &self,
         _: &crate::EvalCtx,
@@ -79,10 +106,23 @@ impl DeviceGroup for Resistors {
         }
         Ok(())
     }
-    fn eval(&self, _ctx: &crate::EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
+    fn eval(&self, ctx: &crate::EvalCtx, x: &[f64], _state: crate::StateRef<'_>, out: &mut Slots) {
         for i in 0..self.len() {
-            let g = self.g[i];
+            let g = if matches!(ctx.mode, crate::Mode::Ac | crate::Mode::Noise) {
+                self.ac_g[i].unwrap_or(self.g[i])
+            } else {
+                self.g[i]
+            };
             let cur = g * (volt(x, self.p[i]) - volt(x, self.n[i]));
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.extend([
+                    ("i", cur),
+                    (
+                        "p",
+                        self.g[i] * (volt(x, self.p[i]) - volt(x, self.n[i])).powi(2),
+                    ),
+                ]);
+            }
             out.g[4 * i..4 * i + 4].copy_from_slice(&[g, -g, -g, g]);
             out.f[2 * i] = cur;
             out.f[2 * i + 1] = -cur;
@@ -91,7 +131,7 @@ impl DeviceGroup for Resistors {
     fn set_param(&mut self, instance: &str, param: &str, value: f64) -> bool {
         match self.names.iter().position(|n| n == instance) {
             Some(i) if (param == "r" || param == "resistance") && value != 0.0 => {
-                self.g[i] = 1.0 / value;
+                self.g[i] = 1.0 / (value * self.sweep_scale[i]);
                 true
             }
             _ => false,
@@ -128,6 +168,24 @@ impl Capacitors {
 }
 
 impl DeviceGroup for Capacitors {
+    fn output_charges(&self, i: usize, p: &str) -> Vec<(usize, f64)> {
+        if p == "i" {
+            vec![(2 * i, 1.)]
+        } else {
+            Vec::new()
+        }
+    }
+    fn ac_current(
+        &self,
+        i: usize,
+        slots: &Slots,
+        emit: &mut dyn FnMut(Node, f64, f64),
+    ) -> Option<(f64, f64)> {
+        let c = slots.c[4 * i];
+        emit(self.p[i], 0., c);
+        emit(self.n[i], 0., -c);
+        Some((0., 0.))
+    }
     fn instance_name(&self, index: usize) -> Option<&str> {
         self.names.get(index).map(String::as_str)
     }
@@ -168,6 +226,9 @@ impl DeviceGroup for Capacitors {
             } else {
                 v
             };
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.extend([("i", 0.)]);
+            }
             out.c[4 * i..4 * i + 4].copy_from_slice(&[c, -c, -c, c]);
             out.q[2 * i] = q;
             out.q[2 * i + 1] = -q;
@@ -247,6 +308,9 @@ impl DeviceGroup for Inductors {
             let v = volt(x, self.p[i]) - volt(x, self.n[i]);
             out.g[4 * i..4 * i + 4].copy_from_slice(&[1.0, -1.0, 1.0, -1.0]);
             out.c[i] = -self.l[i];
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.extend([("i", cur)]);
+            }
             out.f[3 * i..3 * i + 3].copy_from_slice(&[cur, -cur, v]);
             out.q[i] = -self.l[i] * cur;
         }
@@ -310,6 +374,9 @@ impl DeviceGroup for Vcvs {
             let cur = x[self.k[i]];
             out.g[6 * i..6 * i + 6].copy_from_slice(&[1.0, -1.0, 1.0, -1.0, -a, a]);
             let branch = volt(x, p) - volt(x, n) - a * (volt(x, cp) - volt(x, cn));
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.extend([("i", cur)]);
+            }
             out.f[3 * i..3 * i + 3].copy_from_slice(&[cur, -cur, branch]);
         }
     }
@@ -334,6 +401,18 @@ impl Vccs {
 }
 
 impl DeviceGroup for Vccs {
+    fn ac_current(
+        &self,
+        i: usize,
+        slots: &Slots,
+        emit: &mut dyn FnMut(Node, f64, f64),
+    ) -> Option<(f64, f64)> {
+        let [_, _, cp, cn] = self.nodes[i];
+        let g = slots.g[4 * i];
+        emit(cp, g, 0.);
+        emit(cn, -g, 0.);
+        Some((0., 0.))
+    }
     fn instance_name(&self, index: usize) -> Option<&str> {
         self.names.get(index).map(String::as_str)
     }
@@ -361,6 +440,9 @@ impl DeviceGroup for Vccs {
             let [_, _, cp, cn] = self.nodes[i];
             let gm = self.gm[i];
             let cur = gm * (volt(x, cp) - volt(x, cn));
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.extend([("i", cur)]);
+            }
             out.g[4 * i..4 * i + 4].copy_from_slice(&[gm, -gm, -gm, gm]);
             out.f[2 * i] = cur;
             out.f[2 * i + 1] = -cur;
@@ -416,6 +498,15 @@ fn resolve_controls(
 }
 
 impl DeviceGroup for Cccs {
+    fn ac_current(
+        &self,
+        i: usize,
+        _: &Slots,
+        emit: &mut dyn FnMut(Node, f64, f64),
+    ) -> Option<(f64, f64)> {
+        emit(Some(self.kc[i]), self.gain[i], 0.);
+        Some((0., 0.))
+    }
     fn instance_name(&self, index: usize) -> Option<&str> {
         self.names.get(index).map(String::as_str)
     }
@@ -443,6 +534,9 @@ impl DeviceGroup for Cccs {
         for i in 0..self.len() {
             let a = self.gain[i];
             let cur = a * x[self.kc[i]];
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.push(("i", cur));
+            }
             out.g[2 * i] = a;
             out.g[2 * i + 1] = -a;
             out.f[2 * i] = cur;
@@ -512,6 +606,9 @@ impl DeviceGroup for Ccvs {
             let cur = x[self.k[i]];
             out.g[5 * i..5 * i + 5].copy_from_slice(&[1.0, -1.0, 1.0, -1.0, -r]);
             let branch = volt(x, self.p[i]) - volt(x, self.n[i]) - r * x[self.kc[i]];
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.push(("i", cur));
+            }
             out.f[3 * i..3 * i + 3].copy_from_slice(&[cur, -cur, branch]);
         }
     }

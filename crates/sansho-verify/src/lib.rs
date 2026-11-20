@@ -316,7 +316,8 @@ fn compare_analysis(
             .iter()
             .position(|v| vector_name(ours.kind, &v.name).eq_ignore_ascii_case(name))
         else {
-            if reference.kind == AnalysisKind::Tf
+            if name.starts_with('@')
+                || reference.kind == AnalysisKind::Tf
                 || (reference.kind == AnalysisKind::IntegratedNoise
                     && ["onoise_total", "inoise_total"]
                         .iter()
@@ -602,6 +603,7 @@ mod tests {
 
     fn tran(times: Vec<f64>, vals: Vec<f64>) -> SimResults {
         SimResults {
+            prints: Vec::new(),
             measures: Vec::new(),
             title: String::new(),
             analyses: vec![AnalysisResult {
@@ -638,6 +640,7 @@ mod tests {
     #[test]
     fn matches_complex_root_multisets_per_family() {
         let plot = |roots: &[(&str, f64, f64)]| SimResults {
+            prints: Vec::new(),
             title: String::new(),
             measures: vec![],
             analyses: vec![AnalysisResult {

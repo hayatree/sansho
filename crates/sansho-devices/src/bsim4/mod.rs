@@ -389,6 +389,12 @@ impl Instance {
     }
 }
 impl DeviceGroup for Bsim4s {
+    fn instance_ic(&self, i: usize, ic: &[f64], _: &mut [f64], edges: &mut Vec<(Node, Node, f64)>) {
+        if let [ds, gs, bs] = ic {
+            let [d, g, s, b] = self.instances[i].inner;
+            edges.extend([(d, s, *ds), (g, s, *gs), (b, s, *bs)]);
+        }
+    }
     fn noise(
         &self,
         ctx: &EvalCtx,
@@ -489,6 +495,48 @@ impl DeviceGroup for Bsim4s {
         Ok(())
     }
     fn eval(&self, ctx: &EvalCtx, x: &[f64], state: StateRef<'_>, out: &mut Slots) {
+        for (dev, values) in self.instances.iter().zip(&mut out.outputs) {
+            let m = &dev.model.size;
+            let act = dev.inner.map(|n| volt(x, n));
+            let [d, g, s, b] = act.map(|v| v * m.sign);
+            let reverse = d < s;
+            let (src, drn) = if reverse { (d, s) } else { (s, d) };
+            let (vg, vd, vb) = (D::var(g - src, 1), D::var(drn - src, 0), D::var(b - src, 3));
+            let (ids, sub, bias) = m.channel(vg, vd, vb);
+            let threshold = bias.cv.threshold.v;
+            let sat = bias.sat;
+            let q = m.charges(&bias.cv);
+            crate::observables::mos(values, ids, q, m.mult, threshold, sat, reverse);
+            let [igcd, igcs, igb] = m.tunneling(&bias).map(|i| i.v * m.mult);
+            values.extend([
+                ("igb", igb),
+                ("igcd", igcd),
+                ("igcs", igcs),
+                ("isub", sub.v * m.mult),
+            ]);
+            let (terminal, _, _) = m.terminals(act);
+            let mut source = terminal[2].v;
+            let mut bulk = terminal[3].v;
+            for side in 0..2 {
+                let v = D::var(m.sign * (volt(x, dev.body[side]) - act[2 * side]), 0);
+                let (j, q) = m.junction[side].eval(v, ctx.gmin);
+                let junction = j.v * m.mult * m.sign;
+                values.extend([
+                    (["ibd", "ibs"][side], j.v * m.mult),
+                    (["capbd", "capbs"][side], q.d[0] * m.mult),
+                    (["qbd", "qbs"][side], q.v * m.mult),
+                    (
+                        ["igd", "igs"][side],
+                        m.edge_tunneling(D::cst(g - [d, s][side]), side).v * m.mult,
+                    ),
+                ]);
+                bulk += junction;
+                if side == 1 {
+                    source -= junction;
+                }
+            }
+            values.extend([("ig", terminal[1].v), ("is", source), ("ib", bulk)]);
+        }
         if self.compact.is_some() {
             self.eval_cached(ctx, x, state, out, &mut CoreCache::default(), 0.);
         } else {
@@ -549,7 +597,7 @@ impl Bsim4s {
             .enumerate()
         {
             let m = &dev.model.size;
-            let act = dev.inner.map(|n| volt(x, n));
+            let act = out.mos_voltages(index, dev.inner.map(|n| volt(x, n)));
             let [d, g, s, b] = act;
             let (bias, limited) = m.limit_intrinsic(
                 [g - s, d - s, b - s].map(|v| m.sign * v),

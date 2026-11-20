@@ -1,0 +1,14 @@
+Deterministic ramp divider alongside independent noise and random sources
+* Provenance: original Sansho R7 circuit.
+* sansho-verify: known-difference random source; statistics checked in unit tests
+Vramp in 0 PWL(0 0 8u 1)
+Rupper in out 3k
+Rlower out 0 1k
+Vnoise noisy 0 TRNOISE(0.01 50n 1 0.001 0.02 1u 0.5u)
+Rnoise noisy 0 1k
+Irnd 0 rnd TRRANDOM(2 100n 0 1u 2u)
+Rrnd rnd 0 1k
+.tran 50n 8u
+.save v(out)
+.print tran v(out)
+.end

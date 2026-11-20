@@ -221,6 +221,18 @@ impl Diodes {
 }
 
 impl DeviceGroup for Diodes {
+    fn output_charges(&self, i: usize, p: &str) -> Vec<(usize, f64)> {
+        if matches!(p, "id" | "capcur") {
+            vec![(self.at[i].q, 1.)]
+        } else {
+            Vec::new()
+        }
+    }
+    fn instance_ic(&self, i: usize, ic: &[f64], _: &mut [f64], edges: &mut Vec<(Node, Node, f64)>) {
+        if let [v] = ic {
+            edges.push((self.ai[i], self.k[i], *v));
+        }
+    }
     fn noise(
         &self,
         ctx: &EvalCtx,
@@ -294,7 +306,11 @@ impl DeviceGroup for Diodes {
                     volt(x, self.ai[i]),
                 );
             }
-            let (va, vk) = (volt(x, self.ai[i]), volt(x, self.k[i]));
+            let vk = volt(x, self.k[i]);
+            let va = match out.initial_bias(i) {
+                [v] => vk + v,
+                _ => volt(x, self.ai[i]),
+            };
             let nvt = m.n * vt;
             let is = m.is * area;
             let avalanche =
@@ -352,6 +368,15 @@ impl DeviceGroup for Diodes {
                 v: d.v,
                 d: [d.d[0], -d.d[0]],
             };
+            if let Some(values) = out.outputs.get_mut(i) {
+                values.extend([
+                    ("id", id.v),
+                    ("gd", id.d[0]),
+                    ("cd", q.d[0]),
+                    ("capcur", 0.),
+                    ("charge", q.v),
+                ]);
+            }
             let (id, q) = (lift(id), lift(q));
             out.core(&mut at, &[id, -id], &[q, -q], &[va, vk], &[vk + vd, vk]);
         }

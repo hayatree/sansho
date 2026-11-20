@@ -58,6 +58,9 @@ fn kind_of(plot: &str) -> Option<AnalysisKind> {
 
 fn quantity_of(t: &str) -> Quantity {
     match t.to_ascii_lowercase().as_str() {
+        "power" => Quantity::Power,
+        "capacitance" => Quantity::Capacitance,
+        "charge" => Quantity::Charge,
         "voltage-density" => Quantity::VoltageDensity,
         "current-density" => Quantity::CurrentDensity,
         "resistance" => Quantity::Resistance,
@@ -78,6 +81,7 @@ fn quantity_of(t: &str) -> Quantity {
 pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
     let lines: Vec<&str> = text.lines().collect();
     let mut results = SimResults {
+        prints: Vec::new(),
         measures: Vec::new(),
         title: String::new(),
         analyses: Vec::new(),
@@ -130,7 +134,14 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
                 return Err(err(i + 1, "malformed variable line"));
             }
             vars.push(Variable {
-                name: f[1].to_ascii_lowercase(),
+                name: if f[1].starts_with("i(@") || f[1].starts_with("v(@") {
+                    f[1][2..]
+                        .strip_suffix(')')
+                        .unwrap_or(f[1])
+                        .to_ascii_lowercase()
+                } else {
+                    f[1].to_ascii_lowercase()
+                },
                 quantity: quantity_of(f[2]),
             });
             i += 1;
@@ -229,6 +240,7 @@ mod tests {
     #[test]
     fn round_trip() {
         let r = SimResults {
+            prints: Vec::new(),
             measures: Vec::new(),
             title: "t".into(),
             analyses: vec![

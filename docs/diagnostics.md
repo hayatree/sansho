@@ -37,6 +37,11 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`W-PARSE-IGNORED`](#w-parse-ignored) | warning | Parameter ignored |
 | [`W-PARSE-UNSUPPORTED`](#w-parse-unsupported) | warning | Control card ignored |
 | [`W-OPT-IGNORED`](#w-opt-ignored) | warning | Option ignored |
+| [`E-OUTPUT-VECTOR`](#e-output-vector) | error | Unknown device output |
+| [`E-PRINT`](#e-print) | error | Invalid print card |
+| [`W-PRINT`](#w-print) | warning | Unavailable print column |
+| [`W-PLOT-IGNORED`](#w-plot-ignored) | warning | ASCII plot skipped |
+| [`W-OPT-INTERP`](#w-opt-interp) | warning | Transient output interpolation unavailable |
 | [`E-ELAB-CONTROL`](#e-elab-control) | error | Invalid controlling source |
 | [`E-ELAB-EMPTY`](#e-elab-empty) | error | Empty netlist |
 | [`E-ELAB-INTERNAL`](#e-elab-internal) | error | Internal elaboration error |
@@ -255,6 +260,36 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 - Check the option name; unsupported options have no effect.
 
+## E-OUTPUT-VECTOR
+
+**Unknown device output.** The requested internal vector does not identify a supported instance and parameter.
+
+- Use the flattened instance name and a parameter listed in docs/analyses.md.
+
+## E-PRINT
+
+**Invalid print card.** The batch table needs an analysis name and at least one output selector.
+
+- Specify .print followed by op, dc, ac, tran or noise and the requested signals.
+
+## W-PRINT
+
+**Unavailable print column.** A print request names a missing analysis or signal.
+
+- Check the analysis card and the selected nodes, branches or vectors.
+
+## W-PLOT-IGNORED
+
+**ASCII plot skipped.** Sansho recognizes .plot and produces tabular output through .print.
+
+- Use .print for a table or save the raw plot.
+
+## W-OPT-INTERP
+
+**Transient output interpolation unavailable.** INTERP requests a uniform output grid. The output contains the solver's accepted timepoints.
+
+- Use the time column when processing transient results.
+
 ## E-ELAB-CONTROL
 
 **Invalid controlling source.** A current-controlled source (F, H) references a name that is not a voltage source.
@@ -409,9 +444,9 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## E-DC-SOURCE
 
-**Invalid DC sweep source.** The sweep target must be an independent voltage or current source or TEMP.
+**Invalid DC sweep source.** The sweep target must be a resistor, independent voltage or current source, or TEMP.
 
-- Check both target names on a nested DC card. Each must identify a distinct independent source or TEMP.
+- Check both target names on a nested DC card. Each must identify a distinct resistor, independent source or TEMP.
 
 ## E-SOLVE-SINGULAR
 

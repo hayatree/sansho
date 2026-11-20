@@ -1,0 +1,12 @@
+AC resistance and batch projections
+* Provenance: original Sansho R7 circuit.
+.title Low-pass batch projections
+V1 in 0 dc 2 ac 1
+R1 in out 1k ac=2k
+R2 out 0 2k
+C1 out 0 1n
+.ac dec 3 1k 1meg
+.width out=120
+.print ac vm(out) vp(out) vr(out) vi(out) vdb(out)
+.save v(out) i(V1)
+.end

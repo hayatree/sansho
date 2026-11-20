@@ -26,6 +26,7 @@ enum Term {
 }
 #[derive(Debug, PartialEq)]
 enum Input {
+    Derivative,
     Voltage(Node),
     Branch(String),
 }
@@ -339,7 +340,9 @@ pub struct Behavioral {
     n: Node,
     voltage: bool,
     branch: Node,
+    derivative: Node,
     term: Term,
+    ac_term: Option<Term>,
     probes: Vec<Input>,
     inputs: Vec<Node>,
 }
@@ -379,6 +382,8 @@ impl Behavioral {
             n,
             voltage,
             branch: None,
+            derivative: None,
+            ac_term: None,
             term: Term::Polynomial {
                 variables,
                 coefficients: coefficients.to_vec(),
@@ -386,6 +391,41 @@ impl Behavioral {
             probes,
             inputs: vec![],
         })
+    }
+    /// Apply the temperature/multiplicity factor to the constitutive equation.
+    /// An explicit resistor AC value replaces its incremental conductance.
+    pub fn passive_scale(
+        &mut self,
+        factor: f64,
+        ac_resistance: Option<f64>,
+    ) -> Result<(), Diagnostic> {
+        let resistor = self.name.starts_with('r');
+        if !factor.is_finite() || (resistor && factor == 0.) {
+            return Err(error("invalid temperature-adjusted passive value"));
+        }
+        if let Some(r) = ac_resistance {
+            if r == 0. || !r.is_finite() || !resistor {
+                return Err(error("AC resistance must be finite and nonzero"));
+            }
+            let first = self
+                .probes
+                .len()
+                .checked_sub(2)
+                .ok_or_else(|| error("missing resistor terminals"))?;
+            // The resistor constructor appends its two output pins after the controls.
+            let v = Term::Binary(
+                '-',
+                Box::new(Term::Input(first)),
+                Box::new(Term::Input(first + 1)),
+            );
+            self.ac_term = Some(Term::Binary('/', Box::new(v), Box::new(Term::Number(r))));
+        }
+        if factor != 1. {
+            let term = std::mem::replace(&mut self.term, Term::Number(0.));
+            let scale = if resistor { 1. / factor } else { factor };
+            self.term = Term::Binary('*', Box::new(term), Box::new(Term::Number(scale)));
+        }
+        Ok(())
     }
     pub fn new(
         name: &str,
@@ -401,7 +441,16 @@ impl Behavioral {
             &mut probes,
             &node,
         )?;
-        let term = if table.is_empty() {
+        let term = if name.starts_with('r') {
+            let a = probes.len();
+            probes.extend([Input::Voltage(p), Input::Voltage(n)]);
+            let voltage = Term::Binary('-', Box::new(Term::Input(a)), Box::new(Term::Input(a + 1)));
+            Term::Binary('/', Box::new(voltage), Box::new(term))
+        } else if name.starts_with(['c', 'l']) {
+            let i = probes.len();
+            probes.push(Input::Derivative);
+            Term::Binary('*', Box::new(term), Box::new(Term::Input(i)))
+        } else if table.is_empty() {
             term
         } else {
             let mut args = vec![term];
@@ -417,6 +466,8 @@ impl Behavioral {
             n,
             voltage,
             branch: None,
+            derivative: None,
+            ac_term: None,
             term,
             probes,
             inputs: vec![],
@@ -424,6 +475,20 @@ impl Behavioral {
     }
 }
 impl DeviceGroup for Behavioral {
+    fn ac_current(
+        &self,
+        _: usize,
+        slots: &Slots,
+        emit: &mut dyn FnMut(Node, f64, f64),
+    ) -> Option<(f64, f64)> {
+        if self.voltage {
+            return None;
+        }
+        for (i, &n) in self.inputs.iter().enumerate() {
+            emit(n, slots.g[2 * i], 0.);
+        }
+        Some((0., 0.))
+    }
     fn type_name(&self) -> &'static str {
         if matches!(self.term, Term::Polynomial { .. }) {
             "poly"
@@ -454,6 +519,9 @@ impl DeviceGroup for Behavioral {
             .collect()
     }
     fn alloc_unknowns(&mut self, u: &mut Unknowns) {
+        if self.probes.contains(&Input::Derivative) {
+            self.derivative = Some(u.alloc_operator_state(&self.name, "derivative"));
+        }
         if self.voltage {
             self.branch = Some(u.alloc_branch(&self.name));
         }
@@ -463,6 +531,7 @@ impl DeviceGroup for Behavioral {
             .probes
             .iter()
             .map(|probe| match probe {
+                Input::Derivative => Ok(self.derivative),
                 Input::Voltage(n) => Ok(*n),
                 Input::Branch(name) => b.branch(name).map(Some).ok_or_else(|| {
                     error(format!("{} references unknown branch {name}", self.name))
@@ -490,24 +559,69 @@ impl DeviceGroup for Behavioral {
                 b.g(self.n, input)
             }
         }
+        if let Some(z) = self.derivative {
+            b.f(Some(z));
+            b.g(Some(z), Some(z));
+            b.tracked_q(Some(z));
+            if self.voltage {
+                b.c(Some(z), self.branch);
+            } else {
+                b.c(Some(z), self.p);
+                b.c(Some(z), self.n);
+            }
+        }
         Ok(())
     }
     fn eval(&self, ctx: &EvalCtx, x: &[f64], _: StateRef<'_>, out: &mut Slots) {
-        let ev = |seed| self.term.eval(ctx, x, &self.inputs, seed);
+        let term = if matches!(ctx.mode, crate::Mode::Ac | crate::Mode::Noise) {
+            self.ac_term.as_ref().unwrap_or(&self.term)
+        } else {
+            &self.term
+        };
+        let ev = |seed| term.eval(ctx, x, &self.inputs, seed);
         let v = ev(None).v;
+        if let Some(values) = out.outputs.get_mut(0) {
+            let current = if self.voltage {
+                volt(x, self.branch)
+            } else {
+                v
+            };
+            values.push(("i", current));
+            if self.name.starts_with('r') {
+                let voltage = volt(x, self.p) - volt(x, self.n);
+                let bias = if self.ac_term.is_some() {
+                    self.term.eval(ctx, x, &self.inputs, None).v
+                } else {
+                    current
+                };
+                values.push(("p", bias * voltage));
+            }
+        }
         if self.voltage {
             let i = volt(x, self.branch);
-            out.f
-                .copy_from_slice(&[i, -i, volt(x, self.p) - volt(x, self.n) - v]);
+            out.f[..3].copy_from_slice(&[i, -i, volt(x, self.p) - volt(x, self.n) - v]);
             out.g[..4].copy_from_slice(&[1., -1., 1., -1.]);
-            for (i, g) in out.g[4..].iter_mut().enumerate() {
+            for (i, g) in out.g[4..4 + self.inputs.len()].iter_mut().enumerate() {
                 *g = -ev(Some(i)).d[0];
             }
         } else {
-            out.f.copy_from_slice(&[v, -v]);
+            out.f[..2].copy_from_slice(&[v, -v]);
             for (i, g) in out.g.as_chunks_mut::<2>().0.iter_mut().enumerate() {
                 let d = ev(Some(i)).d[0];
                 g.copy_from_slice(&[d, -d]);
+            }
+        }
+        if let Some(z) = self.derivative {
+            let last = out.f.len() - 1;
+            out.f[last] = x[z];
+            let last = out.g.len() - 1;
+            out.g[last] = 1.;
+            if self.voltage {
+                out.q[0] = -volt(x, self.branch);
+                out.c[0] = -1.;
+            } else {
+                out.q[0] = volt(x, self.n) - volt(x, self.p);
+                out.c.copy_from_slice(&[-1., 1.]);
             }
         }
         if !v.is_finite() || out.g.iter().any(|v| !v.is_finite()) {

@@ -15,6 +15,7 @@ pub mod behavioral;
 pub mod bjt;
 pub mod bsim3;
 pub mod bsim4;
+mod bsim_body;
 pub mod controlled;
 pub mod diode;
 pub mod dual;
@@ -25,6 +26,8 @@ mod linear;
 pub mod model;
 pub mod mos1;
 mod mos23;
+mod observables;
+mod random;
 mod sources;
 pub mod temperature;
 pub mod va;
@@ -322,6 +325,10 @@ pub struct SlotOffsets {
 /// Values written by [`DeviceGroup::eval`], parallel to the [`StampLayout`].
 #[derive(Debug, Clone, Default)]
 pub struct Slots {
+    /// Device quantities requested during a separate, unlimited output evaluation.
+    pub outputs: Vec<Vec<(&'static str, f64)>>,
+    /// Local startup biases, present only while sampling the first UIC charge.
+    pub initial_conditions: Vec<Vec<f64>>,
     /// `G` entry values.
     pub g: Vec<f64>,
     /// `C` entry values.
@@ -340,6 +347,18 @@ pub struct Slots {
 }
 
 impl Slots {
+    pub(crate) fn initial_bias(&self, i: usize) -> &[f64] {
+        self.initial_conditions.get(i).map_or(&[], Vec::as_slice)
+    }
+
+    pub(crate) fn mos_voltages(&self, i: usize, actual: [f64; 4]) -> [f64; 4] {
+        if let [ds, gs, bs] = self.initial_bias(i) {
+            let s = actual[2];
+            [s + ds, s + gs, s, s + bs]
+        } else {
+            actual
+        }
+    }
     /// Write a linear resistor stamp declared with [`StampBuilder::resistor`]; advances `at`.
     pub fn resistor(&mut self, at: &mut SlotOffsets, g: f64, vp: f64, vn: f64) {
         let i = g * (vp - vn);
@@ -417,6 +436,8 @@ impl Slots {
     /// Allocate zeroed slots matching a layout.
     pub fn for_layout(l: &StampLayout) -> Self {
         Self {
+            outputs: Vec::new(),
+            initial_conditions: Vec::new(),
             g: vec![0.0; l.g.len()],
             c: vec![0.0; l.c.len()],
             f: vec![0.0; l.f.len()],
@@ -602,6 +623,20 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
         None
     }
 
+    /// Apply one explicit UIC tuple using intrinsic terminals.
+    fn instance_ic(
+        &self,
+        _index: usize,
+        _ic: &[f64],
+        _x: &mut [f64],
+        _voltages: &mut Vec<(Node, Node, f64)>,
+    ) {
+    }
+    /// Charge slots whose time derivatives contribute to a reported current.
+    fn output_charges(&self, _index: usize, _param: &str) -> Vec<(usize, f64)> {
+        Vec::new()
+    }
+
     /// Supply UIC branch currents and differential voltage constraints.
     fn initial_values(&self, _x: &mut [f64], _voltages: &mut Vec<(Node, Node, f64)>) {}
     /// Source span for diagnostics emitted during setup.
@@ -702,6 +737,17 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
     fn transport_delays(&self, _state: &[f64], _emit: &mut dyn FnMut(f64, Node, Node, f64)) {}
 
     /// Write the AC excitation into the `b` slots.
+    /// Linearized current of an element without an MNA branch unknown. Emit
+    /// coefficients of (G + jwC)x and return its independent AC excitation.
+    fn ac_current(
+        &self,
+        _i: usize,
+        _slots: &Slots,
+        _emit: &mut dyn FnMut(Node, f64, f64),
+    ) -> Option<(f64, f64)> {
+        None
+    }
+
     fn eval_ac(&self, out: &mut AcSlots) {
         out.re.iter_mut().for_each(|v| *v = 0.0);
         out.im.iter_mut().for_each(|v| *v = 0.0);
@@ -711,6 +757,12 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
     fn step_limits(&self, _tran: &TranParams, _out: &mut Vec<(f64, f64)>) {}
 
     /// Append transient breakpoints in `[0, tstop]`.
+    fn has_random_waveform(&self) -> bool {
+        false
+    }
+    fn next_random_breakpoint(&self, _time: f64) -> f64 {
+        f64::INFINITY
+    }
     fn breakpoints(&self, _tran: &TranParams, _out: &mut Vec<f64>) {}
 
     /// Change an instance parameter (e.g. the DC value of a swept source). Returns `true` if the

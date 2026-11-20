@@ -125,6 +125,20 @@ impl Jfet {
 }
 
 impl DeviceGroup for Jfet {
+    fn output_charges(&self, _: usize, p: &str) -> Vec<(usize, f64)> {
+        match p {
+            "id" => vec![(0, 1.)],
+            "ig" => vec![(1, 1.)],
+            "is" => vec![(2, 1.)],
+            _ => Vec::new(),
+        }
+    }
+    fn instance_ic(&self, _: usize, ic: &[f64], _: &mut [f64], edges: &mut Vec<(Node, Node, f64)>) {
+        if let [ds, gs] = ic {
+            let [d, g, s] = self.int;
+            edges.extend([(d, s, *ds), (g, s, *gs)]);
+        }
+    }
     fn type_name(&self) -> &'static str {
         "jfet"
     }
@@ -164,7 +178,11 @@ impl DeviceGroup for Jfet {
                 out.resistor(&mut at, 1. / r, volt(x, self.ext[k]), volt(x, self.int[k]));
             }
         }
-        let actual = self.int.map(|n| volt(x, n));
+        let mut actual = self.int.map(|n| volt(x, n));
+        if let [ds, gs] = out.initial_bias(0) {
+            actual[0] = actual[2] + ds;
+            actual[1] = actual[2] + gs;
+        }
         let [d, g, s] = actual;
         let sign = self.polarity;
         let vt = thermal_voltage(self.kelvin);
@@ -188,6 +206,15 @@ impl DeviceGroup for Jfet {
         let junction = |v| (ideal_current(v, self.is, vt) + v * ctx.gmin) * sign;
         let (igs, igd) = (junction(gs), junction(gd));
         let charge = |v, c| depletion_charge(v, c, self.pb, 0.5, self.fc) * sign;
+        if let Some(values) = out.outputs.get_mut(0) {
+            values.extend([
+                ("id", ids.v - igd.v),
+                ("ig", igs.v + igd.v),
+                ("is", -ids.v - igs.v),
+                ("gm", ids.d[1]),
+                ("gds", ids.d[0]),
+            ]);
+        }
         let (qgs, qgd) = (charge(gs, self.cgs), charge(gd, self.cgd));
         out.core(
             &mut at,

@@ -12,16 +12,16 @@ Language and analysis conventions follow the manual. SFFM argument order, E-tabl
 
 | Feature | Status | Scope |
 |---|---|---|
-| R, C, L | Partial | Explicit values, passive model temperature coefficients, instance temperature, multiplicity and C/L initial conditions. Geometry-derived passives and arbitrary nonlinear charge or flux expressions are outside this syntax. |
+| R, C, L | Partial | Explicit values, model and instance temperature coefficients, multiplicity, resistor AC resistance and C/L initial conditions. Named R, C and L expressions can depend on circuit signals, time and temperature. Geometry-derived values and explicit charge/flux expressions remain gaps. |
 | K | Supported | Mutual flux of two named positive inductors, signed coupling from −1 through +1. |
-| V, I | Partial | DC, AC magnitude/phase, PULSE, SIN, EXP, PWL, SFFM and delayed AM. TRNOISE and TRRANDOM remain unsupported. The source cards have no per-instance seed and Sansho does not execute Nutmeg seed commands. |
+| V, I | Partial | DC, AC magnitude/phase, PULSE, SIN, EXP, PWL, SFFM, delayed AM, TRNOISE and TRRANDOM types 1–4. Stochastic waveforms use the netlist seed. Flicker noise uses a finite bandwidth. |
 | E, F, G, H | Supported | Linear gains and SPICE2 POLY(n). E/G use differential node pairs. F/H use branch currents. A single coefficient for one input denotes linear gain. Otherwise coefficients start with the constant term and advance by total degree, with the first variable varying first in the list of degree-one terms. |
 | B and nonlinear E/G | Partial | Voltage and current expressions, branch probes, time, temperature, conditionals and math functions. E/G VALUE and endpoint-clamped TABLE are supported. |
 | S, W | Partial | SW and CSW resistance states, threshold, hysteresis and initial on/off. Sansho uses the magnitude of the hysteresis width. |
-| T | Partial | Four terminals, Z0 and TD, or F and optional NL (default ¼ wavelength). DC, AC and transient propagation are supported. Line IC tuples and distributed pole-zero extraction are unsupported. |
+| T | Partial | Four terminals, Z0 and TD, or F and optional NL (default ¼ wavelength). DC, AC and transient propagation are supported. UIC initializes port voltages, port currents and incident-wave history. Distributed pole-zero extraction remains unsupported. |
 | O, U, Y and coupled lossy lines | Not supported | LTRA, uniform distributed RC and multiconductor models. |
 | D | Partial | Level-one junction current, series resistance, transit and depletion charge, temperature and noise. BV and IBV set the avalanche operating point, and NBV sets its slope (defaults to N). ISR/NR, IKF, and PJ-scaled JSW/NS and CJP/PHP/MJSW/FCS are supported. Temperature-dependent breakdown coefficients are outside coverage. |
-| J | Partial | Level-one NJF/PJF. VTO, BETA, LAMBDA, B, RD/RS, CGS/CGD, PB, IS, FC, KF/AF, TNOM, BEX and VTOTC. Instance area, M, OFF, TEMP and DTEMP. Gate junctions carry current and depletion charge. Level two and instance voltage IC tuples are unsupported. |
+| J | Partial | Level-one NJF/PJF. VTO, BETA, LAMBDA, B, RD/RS, CGS/CGD, PB, IS, FC, KF/AF, TNOM, BEX and VTOTC. Instance area, M, OFF, TEMP and DTEMP. Gate junctions carry current and depletion charge. UIC accepts drain–source and gate–source voltages. Level two remains unsupported. |
 | Q | Partial | Level-one NPN/PNP Gummel–Poon model with optional substrate, high injection, transit and junction charges, temperature and noise. RB/RBM/IRB current crowding, NKF roll-off, ISS/NS substrate current, explicit SUBS collector/base substrate connection, C2/C4 leakage factors, PTF forward excess phase, XCJC collector depletion partition and TF/XTF/VTF/ITF bias dependence. The default substrate junction connects to the internal collector. Independent base/collector area factors and quasi-saturation remain gaps. |
 | M, level 1 | Partial | NMOS/PMOS square-law channel, threshold body effect, explicit channel-length modulation, RD/RS, Meyer and overlap capacitances, bulk junctions, temperature and noise. |
 | M, level 2 | Partial | Charge-sheet current integrated along the channel, pinch-off, XJ charge sharing with NSUB, UCRIT/UEXP mobility reduction, VMAX and explicit LAMBDA. With NSUB and omitted LAMBDA, the post-saturation depletion region shortens the channel using NEFF and the velocity-limited end field. Explicit zero LAMBDA selects constant length. The automatic branch awaits an independent waveform comparison. |
@@ -58,7 +58,7 @@ Sansho uses the manual's order. The dedicated SFFM deck records this known diffe
 | Feature | Status | Scope |
 |---|---|---|
 | .op, .ac | Supported | DC operating point and complex AC on linear, decade or octave frequency grids. |
-| .dc | Partial | One or two distinct axes, each an independent voltage source, current source or TEMP. The first axis varies fastest. A source may omit its DC value. Resistor and general parameter sweeps remain outside the netlist syntax. |
+| .dc | Partial | One or two distinct axes, each an independent voltage source, independent current source, numeric resistor or TEMP. The first axis varies fastest. A source may omit its DC value. Arbitrary parameter sweeps remain outside the netlist syntax. |
 | .tran | Partial | Adaptive trapezoidal or Gear/BDF2 integration, TSTART, TMAX and UIC. Waveforms contain accepted timepoints. |
 | .noise | Partial | One-sided small-signal source projection, amplitude spectra and integrated RMS noise. Device and selector coverage is listed in the [analysis notes](analyses.md). |
 | .tf | Supported | Incremental DC transfer and port resistances for a named independent input. |
@@ -66,20 +66,23 @@ Sansho uses the manual's order. The dedicated SFFM deck records this known diffe
 | .pz | Partial | Finite poles and zeros for lumped voltage/current port networks up to 256 circuit unknowns. |
 | .four | Partial | DC and nine harmonics of the final period of the first transient, sampled at 200 points. |
 | .disto, .sp, .pss and periodic/HB analyses | Not supported | No corresponding engine analysis. |
-| .meas / .measure | Partial | TRAN, single-curve DC and AC. TRIG/TARG, WHEN, FIND, DERIV, AT, RISE/FALL/CROSS including LAST, TD, signal-to-signal comparisons, windowed MIN/MAX/MIN_AT/MAX_AT/PP/AVG/RMS/INTEG, and PARAM expressions using preceding successful measurements. Noise, SP and measurements across nested DC curves are unsupported. |
+| .meas / .measure | Partial | TRAN, single-curve DC, AC and noise spectra. TRIG/TARG, WHEN, FIND, DERIV, AT, RISE/FALL/CROSS including LAST, TD, signal-to-signal comparisons, windowed MIN/MAX/MIN_AT/MAX_AT/PP/AVG/RMS/INTEG, and PARAM expressions using preceding successful measurements. A repeated DC scale produces an ambiguous-curve diagnostic. SP remains unsupported. |
 | .include / .inc, .lib, .subckt / .ends, .global | Supported | File-relative includes, selected library sections and scoped hierarchy. Relative paths resolve through the file loader. |
 | .param, .func, .if / .elseif / .else / .endif | Partial | Scoped numeric expressions, functions, comparisons and conditional expansion. The expression dialect and statistical bindings have specific [preprocessing rules](architecture.md#10-compatibility). |
 | .model | Partial | Built-in types above, selected MOS geometry bins and models bound to a loaded VA module. |
-| .end, .title | Partial | .end terminates input. The first netlist line supplies the title. The parser ignores a later .title card. |
+| .end, .title | Supported | .end terminates input. A .title card overrides the title from the first netlist line. |
 | .step, .alter | Not supported | Parameter sweeps and changes are available through the session API. |
-| .ic, .nodeset, .temp | Partial | Node-voltage initial conditions and guesses. The first .temp value sets operating temperature. Use .dc temp for a sweep. |
-| .save, raw output | Partial | Select node voltages and branch currents, or save all. The CLI writes ASCII or native-double binary raw plots. Arbitrary internal device vectors, .print and .plot output formatting are unsupported. |
-| .options | Partial | RELTOL, ABSTOL, VNTOL, CHGTOL, TRTOL, GMIN, ITL1, ITL4, RSHUNT, GMINSTEPS, SRCSTEPS, TEMP, TNOM, SCALE, DEFL/DEFW/DEFAD/DEFAS, TRAP/GEAR and BYPASS. Some listing flags have no effect. Unknown options warn. |
+| .ic, .nodeset, .temp | Partial | Node-voltage initial conditions and guesses. Element ICs under UIC cover C, L, D, Q, M, J and T. The first .temp value sets operating temperature. Use .dc temp for a sweep. |
+| .save, raw output | Partial | Select node voltages, branch currents and named device quantities in OP, DC, TRAN and AC. SAVECURRENTS adds device current vectors. ASCII and binary raw, session results, CLI JSON and MCP waveforms share a vector catalog. See the [device output table](analyses.md#device-output-vectors). |
+| .print, .plot, .width | Partial | OP, DC, TRAN, AC and noise print tables support voltage, current, named device outputs and AC projections. .plot warns and .width is accepted. Tables use the CLI layout. |
+| .options | Partial | RELTOL, ABSTOL, VNTOL, CHGTOL, TRTOL, GMIN, ITL1, ITL2, ITL4, RSHUNT, GMINSTEPS, SRCSTEPS, TEMP, TNOM, SCALE, DEFL/DEFW/DEFAD/DEFAS, METHOD=TRAP/TRAPEZOIDAL/GEAR, MAXORD=1/2, SAVECURRENTS, SEED and BYPASS. ITL5 and listing flags are accepted. INTERP, unknown options and invalid option values warn. |
 | .control / .endc and Nutmeg | Not supported | The preprocessor skips control blocks with W-PARSE-CONTROL. No interactive commands, loops, plot algebra or scripting interpreter. |
 | XSPICE and CIDER | Not supported | No A-device code-model runtime, digital event engine or numerical semiconductor solver. |
 | OSDI / pre_osdi | Not supported | Native simulation loads VA source through .hdl. OSDI appears in the external verification workflow. |
 
 ## Numerical differences
+
+- Sansho applies the documented diode instance `ic=` junction voltage under UIC and initializes the junction charge at that voltage. For `ic=0.2`, CJO=10 pF and a 2 kΩ shunt, the node starts at 0.2 V and discharges. ngspice 44.2 gives zero at every saved time in the original R7 raw. The maintainer reproduced this with a single diode and with explicit area. [Diode UIC deck](../verify/decks/r7_diode_uic.cir)
 
 - The Berkeley diode in ngspice 44.2 matches the avalanche knee to the bottom saturation current. Bottom and sidewall diffusion share the resulting exponential. At AREA=2 the R4 card draws 1.0500 mA at −BV. The six probe families also resolve the low-IBV clamp and the NBV slope. [Measured diode currents and matching law](../verify/probes/README.md#spice3-diode-breakdown)
 - The BSIM3 unified flicker and thermal spectra agree within 0.018% across ten probe families. At the two weakest gate biases, integrated input RMS differs by 13.85% and 5.09%. Sansho integrates input-referred power using the gain at each endpoint. The 44.2 integrals use the upper endpoint's gain across the interval. [Spectra and integration measurements](../verify/probes/README.md#bsim3-noimod-2)

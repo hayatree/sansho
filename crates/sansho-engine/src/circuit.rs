@@ -738,6 +738,9 @@ pub(crate) fn compile_cached(
                     }
                 }
             }
+            ElementKind::Behavioral { .. } if e.name.starts_with('r') => {
+                dc.union(p, n);
+            }
             ElementKind::Switch { .. }
             | ElementKind::Resistor { .. }
             | ElementKind::Diode { .. } => {
@@ -1421,6 +1424,7 @@ fn native_groups<'a>(
                 n,
                 voltage,
                 expr,
+                params,
                 table,
             } => {
                 let source = sansho_devices::behavioral::Behavioral::new(
@@ -1440,6 +1444,31 @@ fn native_groups<'a>(
                         }
                     },
                 );
+                let source = source.and_then(|mut g| {
+                    if !params.is_empty() {
+                        let inst = ModelParams::new(params);
+                        let mult = inst.get("m", 1.);
+                        let scale = if e.name.starts_with('c') {
+                            mult
+                        } else {
+                            1. / mult
+                        };
+                        let factor = passive_value(scale, params, None, opts)?;
+                        g.passive_scale(factor, inst.opt(&["ac"]).map(|r| r / mult))?;
+                        for (key, _) in params {
+                            if matches!(key.as_str(), "noisy" | "ic") {
+                                diags.push(
+                                    Diagnostic::warning(
+                                        "W-PARSE-IGNORED",
+                                        format!("{key} is unsupported on a behavioral passive"),
+                                    )
+                                    .with_span(e.span),
+                                );
+                            }
+                        }
+                    }
+                    Ok(g)
+                });
                 match source {
                     Ok(mut g) => {
                         g.span = Some(e.span);
@@ -1535,6 +1564,7 @@ fn native_groups<'a>(
                 value,
                 model,
                 params,
+                ..
             }
             | ElementKind::Capacitor {
                 p,
@@ -1551,6 +1581,7 @@ fn native_groups<'a>(
                 params,
             } => {
                 let model = model.as_ref().and_then(|name| model_cache.card(name));
+                let nominal = *value;
                 let value = match passive_value(*value, params, model, opts) {
                     Ok(value) => value,
                     Err(d) => {
@@ -1569,18 +1600,19 @@ fn native_groups<'a>(
                         Diagnostic::error("E-ELAB-PARAM", "zero temperature-adjusted resistance")
                             .with_span(e.span),
                     ),
-                    ElementKind::Resistor { .. } => {
+                    ElementKind::Resistor { mult, .. } => {
                         let get = |key: &str| {
                             params.iter().rev().find(|(k, _)| k == key).map(|(_, v)| *v)
                         };
                         let kelvin =
                             get("temp").unwrap_or(opts.temp + get("dtemp").unwrap_or(0.)) + 273.15;
-                        res.cur().push_at(
+                        res.cur().push_ac(
                             &e.name,
                             p,
                             n,
-                            value,
+                            [nominal * mult, value],
                             if get("noisy") == Some(0.) { 0. } else { kelvin },
+                            get("ac"),
                         );
                     }
                     ElementKind::Capacitor { .. } => {
@@ -1590,10 +1622,12 @@ fn native_groups<'a>(
                 }
             }
             ElementKind::VoltageSource { p, n, source } => {
-                vsrc.cur().push(&e.name, node(p), node(n), source.clone());
+                vsrc.cur()
+                    .push_seeded(&e.name, node(p), node(n), source.clone(), opts.seed);
             }
             ElementKind::CurrentSource { p, n, source } => {
-                isrc.cur().push(&e.name, node(p), node(n), source.clone());
+                isrc.cur()
+                    .push_seeded(&e.name, node(p), node(n), source.clone(), opts.seed);
             }
             ElementKind::Vcvs { p, n, cp, cn, gain } => {
                 e_src

@@ -292,3 +292,20 @@ fn r3_decks_validate_and_simulate_through_stdio() {
         assert!(!err && report["job"]["status"] == "ok", "{report}");
     }
 }
+
+#[test]
+fn hierarchical_transconductance_waveform() {
+    let mut client = Client::start();
+    let (result, err) = client.tool(
+        "simulate",
+        json!({"netlist":include_str!("../../../verify/decks/r7_mos_observables.cir")}),
+    );
+    assert!(!err, "{result}");
+    let (wave, err) = client.tool(
+        "get_waveform",
+        json!({"job_id":result["job"]["job_id"],"signal":"@m.x1.m1[gm]"}),
+    );
+    assert!(!err, "{wave}");
+    assert_eq!(wave["unit"], "S");
+    assert!(wave["y"][0].as_f64().unwrap() > 0.);
+}

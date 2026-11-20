@@ -158,3 +158,9 @@ The B4-1 release microbenchmark measured 431.3 ns per intrinsic current, charge 
 ## Noise defaults
 
 The unified flicker model defaults NOIC to 8.75e9. The cached explicit-8.75e9 and omitted-NOIC spectra agree at all 31 frequencies. On the omitted-NOIC deck, the 44.2 input spectrum is 4.82368 µV/√Hz at 10 Hz. In Sansho the printed Appendix A value of 8.75 gives 4.51146 µV/√Hz and an explicit 8.75e9 gives 4.82238 µV/√Hz. The omitted-value deck now passes with a worst score of 0.225. An explicit NOIC on a model card takes precedence, including zero. [Noise decks](../verify/README.md#r2-noise-audit)
+
+## Default-card threshold and drain current
+
+The reported NMOS Vth is the channel threshold at the oriented intrinsic drain and body biases. It includes the body, pocket, short-channel, narrow-width, temperature and DIBL terms. Vgsteff is calculated downstream from the gate voltage and this threshold. The R7 sweep holds VDS at 1.2 V and VBS at zero, so the reported threshold stays constant as VGS changes.
+
+The model coefficients for doping-derived GAMMA1, GAMMA2 and VBX change the default K1 from 0.382038 to 0.381535 V½. With the same channel and reporting equations, Vth moves from 0.211842 to 0.211349 V against 0.211334 V in 44.2. At VGS = 0.8 V the drain current moves from 0.822157 to 0.823511 mA against 0.823471 mA. At 1.4 V it reaches 2.414651 mA against 2.414073 mA. The shared threshold correction accounts for most of the original current difference. [Doping equations](bsim3.md#derived-body-coefficients-on-the-r7-default-cards)

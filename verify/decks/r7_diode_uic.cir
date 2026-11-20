@@ -1,0 +1,11 @@
+Diode junction voltage under UIC
+* Provenance: original Sansho R7 circuit.
+* sansho-verify: known-difference ngspice 44.2 ignores diode ic= under uic
+* sansho-verify: pending-reference
+D1 a 0 dd ic=0.2
+.model dd d(is=1e-14 cjo=10p)
+R1 a 0 2k
+.options method=gear maxord=1
+.tran 100p 20n uic
+.save v(a)
+.end

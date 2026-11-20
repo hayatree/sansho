@@ -22,7 +22,7 @@ const INSTRUCTIONS: &str = "Sansho is a SPICE circuit simulator. Typical loop: v
 (fast parse + lint) → simulate (returns a compact summary: operating point, signal statistics, \
 .meas results, diagnostics with culprits and suggestions) → get_waveform / measure for details \
 → alter_and_rerun or sweep to explore the design. Use monte_carlo with a path or netlist, count n and seed to sample a statistical deck. Netlists use ngspice syntax (R, C, L, V, I, \
-E, F, G, H, D, Q, M level 1; .op .dc .ac .tran .meas .model .options). Values are SI; note \
+E, F, G, H, B, D, J, Q, classical MOS and BSIM3/4). Record device quantities with .save @m1[gm] @m1[gds] @m1[vth]. Values are SI. Note \
 that `M` means milli, `MEG` means mega. Results are deterministic: the same input gives the \
 same result_hash.";
 

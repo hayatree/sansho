@@ -388,3 +388,14 @@ the ngspice manual, §7.2.2 (area/perimeter scaling, Algorithm 7.1 and equations
 ### R6 compact-model compatibility
 
 The NOIC default, KU0 mobility response, BSIM3 gate–bulk overlap default, accumulation-centroid doping and area-only junction current derive from black-box comparisons with ngspice 44.2 and independently authored Sansho control decks. The device notes give the measured quantities and scope. The original noise and breakdown probes establish the BSIM3 channel-density endpoints, weak/strong flicker blend, EM switch and capMod 3 weak-inversion smoothing, and the SPICE3 diode bottom-current knee match, sidewall prefactor and low-IBV clamp. [BSIM3](bsim3.md#verification-status) · [BSIM4](bsim4.md#mobility-stress) · [Probe measurements](../verify/probes/README.md)
+
+## R7 netlist and output support
+
+The syntax and device quantities target the ngspice user manual sections on element cards, independent sources, DC and transient analysis, output variables, batch commands and simulator options. The R7 implementation reuses Sansho's existing clean-room compact-model equations and analytic derivatives. The R7b body-effect defaults use the BSIM3v3.3 and BSIM4.8.2 manual doping relations for GAMMA1/2 and VBX. The default-card sweeps and the UIC grid replay use the maintainer’s ngspice 44.2 raw files. No model source was imported.
+
+| Component | Files | Basis |
+|---|---|---|
+| Device output sampling and UIC | `sansho-engine/src/probes.rs`, `analysis.rs`, `sansho-devices/src/observables.rs` and the respective device groups | Device-local charge histories, MNA current balance, existing BSIM3v3.3 and BSIM4.8.2 terminal charge equations. |
+| Behavioral passives | Netlist preprocessing and parsing, `sansho-devices/src/behavioral.rs` | Differential definitions of capacitance and inductance, Kirchhoff’s current law and forward differentiation. |
+| Transient randomness | `sansho-devices/src/random.rs`, source and waveform modules | Original indexed integer mixer, Box and Muller (1958), exponential waiting times, octave-band synthesis, and Hörmann (1993), “The transformed rejection method for generating Poisson random variables.” |
+| Output cards, options and tests | Netlist, output, CLI and engine crates, `sansho-engine/tests/outputs.rs`, MCP stdio tests and `verify/decks/r7_*.cir` | Original circuits and implementation. Tests use circuit laws, finite differences, deterministic replay and distribution properties. |

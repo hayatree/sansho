@@ -82,6 +82,15 @@ pub(crate) fn results(r: &SimResults) -> String {
             }
         }
     }
+    for table in &r.prints {
+        h.bytes(table.analysis.plot_name().as_bytes());
+        for (name, column) in table.headings.iter().zip(&table.columns) {
+            h.bytes(name.as_bytes());
+            for &v in column {
+                h.f64(v);
+            }
+        }
+    }
     for m in &r.measures {
         h.bytes(m.name.as_bytes()).f64(m.value.unwrap_or(f64::NAN));
     }

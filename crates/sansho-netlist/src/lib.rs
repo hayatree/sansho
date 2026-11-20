@@ -70,6 +70,8 @@ pub struct Netlist {
     pub models: Vec<ModelCard>,
     /// Requested output vector names across all `.save` cards (empty means all).
     pub saves: Vec<String>,
+    /// Batch output selections.
+    pub prints: Vec<PrintCard>,
     /// `.meas` cards in source order.
     pub measures: Vec<MeasureCard>,
     /// `.ic` node voltages.
@@ -108,6 +110,9 @@ pub struct NodeValue {
 /// A circuit element instance.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Element {
+    /// Ordered instance initial conditions, used with transient UIC.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ic: Vec<f64>,
     /// Lower-cased instance name, e.g. `r1`.
     pub name: String,
     /// Location of the instance name.
@@ -179,11 +184,16 @@ pub enum ElementKind {
         n: String,
         voltage: bool,
         expr: String,
+        /// Numeric modifiers on signal-dependent passives.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        params: Vec<(String, f64)>,
         /// Optional endpoint-clamped E/G lookup.
         table: Vec<(f64, f64)>,
     },
     /// `Rxxx n+ n- value`
     Resistor {
+        /// Parallel instances represented by the effective value.
+        mult: f64,
         /// Positive node.
         p: String,
         /// Negative node.
@@ -439,6 +449,10 @@ pub struct SourceSpec {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "fn", content = "params", rename_all = "snake_case")]
 pub enum TranFn {
+    /// NA, NT, NALPHA, NAMP, RTSAM, RTSCAPT, RTSEMT.
+    TrNoise([f64; 7]),
+    /// TYPE, TS, TD, PARAM1, PARAM2.
+    TrRandom([f64; 5]),
     /// `PULSE(v1 v2 [td [tr [tf [pw [per [np]]]]]])`
     Pulse(Vec<f64>),
     /// `SIN(vo va [freq [td [theta [phase]]]])`
@@ -609,6 +623,8 @@ pub struct OptionCard {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MeasAnalysis {
+    /// Noise spectrum.
+    Noise,
     /// `.meas dc`
     Dc,
     /// `.meas ac`
@@ -638,6 +654,8 @@ pub enum SignalFn {
 /// A measured signal such as `v(out)`, `v(a,b)`, `vdb(out)` or `i(v1)`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Signal {
+    /// A bare vector selector without a voltage or current function.
+    pub bare: bool,
     /// Reduction function.
     pub func: SignalFn,
     /// `true` for branch currents `i(..)`.
@@ -789,4 +807,24 @@ pub struct MeasureCard {
     pub kind: MeasKind,
     /// Card location.
     pub span: Span,
+}
+
+/// Batch table requested by one .print card.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct PrintCard {
+    pub analysis: String,
+    pub signals: Vec<Signal>,
+    pub span: sansho_diag::Span,
+}
+
+impl Signal {
+    /// Formatted netlist representation.
+    pub fn expression(&self) -> String {
+        writer::signal(self)
+    }
+
+    /// Bare vector selector, including a device operating-point quantity.
+    pub fn is_vector(&self) -> bool {
+        self.bare
+    }
 }

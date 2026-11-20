@@ -2,7 +2,7 @@
 //! Provenance: Berkeley BSIM4 4.8.2 technical manual, chapters 1–3, 5, 13–15 and Appendix A.
 
 use super::{EPS_SI, EPS0, Junction};
-use crate::{CHARGE, ModelParams, mos1::Mos1Geometry, thermal_voltage};
+use crate::{CHARGE, ModelParams, bsim_body, mos1::Mos1Geometry, thermal_voltage};
 
 /// Inverse effective dimensions in the units used by the bin coefficients.
 pub(super) struct Bin<'a> {
@@ -206,9 +206,9 @@ impl Size {
         let ni = 1.45e10
             * (tnom / 300.15).powf(1.5)
             * (bandgap(300.15) / (2. * thermal_voltage(300.15)) - bandgap(tnom) / (2. * vtn)).exp();
-        let ndep_default = p.opt(&["gamma1"]).map_or(1.7e17, |g| {
-            (g * coxe).powi(2) / (2. * CHARGE * EPS_SI * 1e6)
-        });
+        let ndep_default = p
+            .opt(&["gamma1"])
+            .map_or(1.7e17, |g| bsim_body::doping(g, coxe));
         let ndep = bin.get("ndep", ndep_default);
         let nsd = bin.get("nsd", 1e20);
         let phi = 0.4 + vtn * (ndep / ni).ln() + bin.get("phin", 0.);
@@ -221,14 +221,10 @@ impl Size {
         let (k1, k2) = if p.opt(&["k1", "k2"]).is_some() {
             (bin.get("k1", 0.5), bin.get("k2", 0.))
         } else {
-            let gamma = |n: f64| (2. * CHARGE * EPS_SI * n * 1e6).sqrt() / coxe;
-            let g1 = bin.get("gamma1", gamma(ndep));
-            let g2 = bin.get("gamma2", gamma(bin.get("nsub", 6e16)));
+            let g1 = bin.get("gamma1", bsim_body::gamma(ndep, coxe));
+            let g2 = bin.get("gamma2", bsim_body::gamma(bin.get("nsub", 6e16), coxe));
             let vbx = -bin
-                .get(
-                    "vbx",
-                    phi - CHARGE * ndep * 1e6 * bin.get("xt", 1.55e-7).powi(2) / (2. * EPS_SI),
-                )
+                .get("vbx", bsim_body::vbx(phi, ndep, bin.get("xt", 1.55e-7)))
                 .abs();
             let k2 = (g1 - g2) * ((phi - vbx).sqrt() - phi.sqrt())
                 / (2. * phi.sqrt() * ((phi - vbm).sqrt() - phi.sqrt()) + vbm);

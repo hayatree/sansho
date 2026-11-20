@@ -269,6 +269,36 @@ pub const CODES: &[CodeInfo] = &[
         "An `.options` entry is unknown or not supported.",
         &["Check the option name; unsupported options have no effect."],
     ),
+    e(
+        "E-OUTPUT-VECTOR",
+        "Unknown device output",
+        "The requested internal vector does not identify a supported instance and parameter.",
+        &["Use the flattened instance name and a parameter listed in docs/analyses.md."],
+    ),
+    e(
+        "E-PRINT",
+        "Invalid print card",
+        "The batch table needs an analysis name and at least one output selector.",
+        &["Specify .print followed by op, dc, ac, tran or noise and the requested signals."],
+    ),
+    w(
+        "W-PRINT",
+        "Unavailable print column",
+        "A print request names a missing analysis or signal.",
+        &["Check the analysis card and the selected nodes, branches or vectors."],
+    ),
+    w(
+        "W-PLOT-IGNORED",
+        "ASCII plot skipped",
+        "Sansho recognizes .plot and produces tabular output through .print.",
+        &["Use .print for a table or save the raw plot."],
+    ),
+    w(
+        "W-OPT-INTERP",
+        "Transient output interpolation unavailable",
+        "INTERP requests a uniform output grid. The output contains the solver's accepted timepoints.",
+        &["Use the time column when processing transient results."],
+    ),
     // --- Elaboration ---
     e(
         "E-ELAB-CONTROL",
@@ -443,9 +473,9 @@ pub const CODES: &[CodeInfo] = &[
     e(
         "E-DC-SOURCE",
         "Invalid DC sweep source",
-        "The sweep target must be an independent voltage or current source or TEMP.",
+        "The sweep target must be a resistor, independent voltage or current source, or TEMP.",
         &[
-            "Check both target names on a nested DC card. Each must identify a distinct independent source or TEMP.",
+            "Check both target names on a nested DC card. Each must identify a distinct resistor, independent source or TEMP.",
         ],
     ),
     e(

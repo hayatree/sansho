@@ -2,7 +2,9 @@
 //! Provenance: UC Berkeley BSIM3v3.3 manual, Appendices A, B.1.9–11, B.2.1 and D.
 
 use super::{EPS_OX, EPS_SI, Junction, Noise};
-use crate::{CHARGE, ModelParams, MosBinding, REFTEMP, temperature::gap, thermal_voltage};
+use crate::{
+    CHARGE, ModelParams, MosBinding, REFTEMP, bsim_body, temperature::gap, thermal_voltage,
+};
 
 pub(super) struct Bins<'a> {
     pub card: &'a ModelParams,
@@ -162,25 +164,17 @@ impl Model {
             * (nominal / REFTEMP).powf(1.5)
             * (21.5565981 - gap(nominal) / (2. * vt0)).exp();
         let cox = EPS_OX / tox;
-        let gamma1 = bin.optional("gamma1", (2. * CHARGE * EPS_SI * 1.7e23).sqrt() / cox);
-        let nch = bin.get(
-            "nch",
-            gamma1.map_or(1.7e17, |x| {
-                (x * cox).powi(2) / (2. * CHARGE * EPS_SI) * 1e-6
-            }),
-        );
+        let gamma1 = bin.optional("gamma1", bsim_body::gamma(1.7e17, cox));
+        let nch = bin.get("nch", gamma1.map_or(1.7e17, |g| bsim_body::doping(g, cox)));
         let nsub = bin.get("nsub", 6e16);
         let phi = 2. * vt0 * (nch / ni).ln();
-        let gamma = |n: f64| (2. * CHARGE * EPS_SI * n * 1e6).sqrt() / cox;
-        let gamma2 = bin.get("gamma2", gamma(nsub));
+        let gamma2 = bin.get("gamma2", bsim_body::gamma(nsub, cox));
         let vbm = -bin.get("vbm", -3.).abs();
         let xt = bin.get("xt", 1.55e-7);
-        let vbx = -bin
-            .get("vbx", phi - CHARGE * nch * 1e6 * xt * xt / (2. * EPS_SI))
-            .abs();
+        let vbx = -bin.get("vbx", bsim_body::vbx(phi, nch, xt)).abs();
         let (k1, k2) = match (bin.optional("k1", 0.5), bin.optional("k2", 0.)) {
             (None, None) => {
-                let k2 = (gamma1.unwrap_or_else(|| gamma(nch)) - gamma2)
+                let k2 = (gamma1.unwrap_or_else(|| bsim_body::gamma(nch, cox)) - gamma2)
                     * ((phi - vbx).sqrt() - phi.sqrt())
                     / (2. * ((phi * (phi - vbm)).sqrt() - phi) + vbm);
                 (gamma2 - 2. * k2 * (phi - vbm).sqrt(), k2)

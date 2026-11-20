@@ -78,6 +78,18 @@ impl<'a> Cursor<'a> {
     fn signal(&mut self) -> Result<Signal, Diagnostic> {
         let f = self.next("a signal")?;
         let name = f.lower();
+        if name.starts_with('@')
+            || name.starts_with("onoise.")
+            || matches!(name.as_str(), "onoise_spectrum" | "inoise_spectrum")
+        {
+            return Ok(Signal {
+                bare: true,
+                func: SignalFn::Plain,
+                current: false,
+                pos: name,
+                neg: None,
+            });
+        }
         let (current, func) = match name.as_str() {
             "v" => (false, SignalFn::Plain),
             "vm" => (false, SignalFn::Mag),
@@ -125,6 +137,7 @@ impl<'a> Cursor<'a> {
             _ => None,
         };
         Ok(Signal {
+            bare: false,
             func,
             current,
             pos,
@@ -241,6 +254,7 @@ pub(crate) fn parse_meas(line: &Line) -> Result<MeasureCard, Diagnostic> {
         );
     }
     let analysis = match t[1].lower().as_str() {
+        "noise" => MeasAnalysis::Noise,
         "tran" => MeasAnalysis::Tran,
         "ac" => MeasAnalysis::Ac,
         "dc" => MeasAnalysis::Dc,
@@ -248,7 +262,7 @@ pub(crate) fn parse_meas(line: &Line) -> Result<MeasureCard, Diagnostic> {
             return Err(error(
                 t[1].span,
                 format!(
-                    "unsupported .meas analysis `{}` (use tran, ac or dc)",
+                    "unsupported .meas analysis `{}` (use tran, ac, dc or noise)",
                     t[1].text
                 ),
             ));
@@ -354,6 +368,32 @@ pub(crate) fn parse_meas(line: &Line) -> Result<MeasureCard, Diagnostic> {
         name,
         analysis,
         kind,
+        span,
+    })
+}
+
+/// Parse a batch print request using the measurement signal grammar.
+pub(crate) fn parse_print(line: &Line) -> Result<crate::PrintCard, Diagnostic> {
+    let span = line.span();
+    let t = &line.tokens;
+    let analysis = t.get(1).map(Token::lower).unwrap_or_default();
+    if !matches!(analysis.as_str(), "tran" | "ac" | "dc" | "op" | "noise") || t.len() < 3 {
+        return Err(
+            Diagnostic::error("E-PRINT", "expected .print analysis signal ...").with_span(span),
+        );
+    }
+    let mut c = Cursor {
+        t,
+        i: 2,
+        card: span,
+    };
+    let mut signals = Vec::new();
+    while c.i < t.len() {
+        signals.push(c.signal()?);
+    }
+    Ok(crate::PrintCard {
+        analysis,
+        signals,
         span,
     })
 }

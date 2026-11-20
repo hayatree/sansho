@@ -142,6 +142,12 @@ impl Model {
 }
 
 impl DeviceGroup for Bsim3s {
+    fn instance_ic(&self, i: usize, ic: &[f64], _: &mut [f64], edges: &mut Vec<(Node, Node, f64)>) {
+        if let [ds, gs, bs] = ic {
+            let [d, g, s, b] = self.instances[i].inner;
+            edges.extend([(d, s, *ds), (g, s, *gs), (b, s, *bs)]);
+        }
+    }
     fn type_name(&self) -> &'static str {
         "bsim3"
     }
@@ -179,13 +185,35 @@ impl DeviceGroup for Bsim3s {
         Ok(())
     }
     fn eval(&self, ctx: &EvalCtx, x: &[f64], state: StateRef<'_>, out: &mut Slots) {
-        for (d, prev) in self
+        for (index, (d, prev)) in self
             .instances
             .iter()
             .zip(state.current.as_chunks_mut::<3>().0)
+            .enumerate()
         {
             let m = &d.model;
-            let act = d.inner.map(|n| volt(x, n));
+            let act = out.mos_voltages(index, d.inner.map(|n| volt(x, n)));
+            if let Some(values) = out.outputs.get_mut(index) {
+                let [d, g, s, b] = act.map(|v| v * m.sign);
+                let reverse = d < s;
+                let (src, drn) = if reverse { (d, s) } else { (s, d) };
+                let (vg, vd, vb) = (D::var(g - src, 1), D::var(drn - src, 0), D::var(b - src, 3));
+                let bias = m.channel(vg, vd, vb);
+                let ids = bias.ids;
+                let threshold = bias.threshold.v;
+                let sat = bias.sat.v;
+                let q = m.charges(&bias);
+                crate::observables::mos(values, ids, q, m.mult, threshold, sat, reverse);
+                values.push(("isub", bias.substrate.v * m.mult));
+                for (side, v) in [b - d, b - s].into_iter().enumerate() {
+                    let (j, q) = m.junction[side].evaluate(D::var(v, 0), ctx.gmin);
+                    values.extend([
+                        (["ibd", "ibs"][side], j.v * m.mult),
+                        (["capbd", "capbs"][side], q.d[0] * m.mult),
+                        (["qbd", "qbs"][side], q.v * m.mult),
+                    ]);
+                }
+            }
             let [drain, gate, s, body] = act;
             let mut lin = act;
             let mut bias = [gate - s, drain - s, body - s].map(|v| m.sign * v);
@@ -214,6 +242,9 @@ impl DeviceGroup for Bsim3s {
                 ];
             }
             let (i, q) = m.terminals(lin, ctx.gmin);
+            if let Some(values) = out.outputs.get_mut(index) {
+                values.extend([("ig", i[1].v), ("is", i[2].v), ("ib", i[3].v)]);
+            }
             let mut at = d.slots;
             out.core(&mut at, &i, &q, &act, &lin);
             for (side, n) in [0, 2].into_iter().enumerate() {

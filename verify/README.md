@@ -69,7 +69,7 @@ cargo run --release -p sansho-verify -- verify/va-decks
 A directory, `--dir verify/va-decks`, an individual deck, and a shell-expanded
 `verify/va-decks/*.cir` are accepted. Passing `verify/decks` runs the original
 suite. Use `-v` to display all waveform and measurement scores. The VA decks use
-`.save` to select the ngspice reference signals. Sansho records all circuit unknowns.
+`.save` to select the ngspice reference signals. Sansho applies the requested output selection after evaluating print cards and measurements.
 
 Sansho reads the original deck. For the reference run, the harness invokes
 `openvaf-r` from `sansho-ngspice:latest` and writes an OSDI file in `verify/out/`
@@ -345,3 +345,32 @@ The R6 replay of all thirteen cached ngspice 44.2 decks gives **13 PASS**. The c
 | `b3_noise2` | 0.074 | The unified flicker law fits all ten one-variable probe families. The loaded deck passes both spectra and RMS integrals. [One-variable noise probes](probes/README.md#bsim3-noimod-2) |
 
 Replay the BSIM3 corpus with `cargo run --release -p sansho-verify --features jit -- --cached verify/bsim3-decks`.
+
+## R7 netlist and analysis decks
+
+| Deck in `verify/decks` | Comparison |
+|---|---|
+| `r7_resistor_sweep.cir` | Divider output and supply current as nominal resistance and ambient temperature vary. |
+| `r7_mos_observables.cir` | Hierarchical `@m.x1.m1[gm]` and `[gds]` across a gate sweep. |
+| `r7_behavioral_passives.cir` | Ramp response of a voltage-dependent resistor, capacitor and controlled inductance. |
+| `r7_junction_observables.cir` | Diode current and conductance, BJT collector current, transconductance and input conductance. |
+| `r7_bsim_observables.cir` | Built-in BSIM3 and BSIM4 current, transconductance, output conductance and threshold, plus two BSIM4 intrinsic charge derivatives. |
+| `r7_device_uic.cir` | Q and J junction relaxation and a matched lossless line starting from explicit port conditions. |
+| `r7_mos_uic.cir` | Gate and drain voltage during MOS overlap relaxation under first-order Gear, with a 0.05 ps maximum step. |
+| `r7_diode_uic.cir` | Standalone diode discharge from a 0.2 V junction IC. Known difference with 44.2. |
+| `r7_batch_ac.cir` | Small-signal divider with a separate AC resistance, a title override and projected AC print columns. The raw comparison checks the complex response. |
+| `r7_random_sources.cir` | Only the independent deterministic divider output enters the raw comparison. The source distribution tests cover white RMS, random moments, flicker slope, RTS dwell times and seeded replay. |
+
+The maintainer generates the ngspice 44 references. The stochastic deck carries a known-difference annotation for the independent random draws. Its saved divider voltage should still agree. Unit tests check structured print tables and noise measurements separately from raw waveform comparisons.
+
+### R7b UIC time grids
+
+In the original combined deck the MOS stays below threshold. Its gate–drain and gate–source overlaps are each 1.6 fF, and each node has a 10 kΩ shunt. In drain/gate order the capacitance matrix is `C = 1.6 fF × [[1, −1], [−1, 2]]`. The two time constants are `16 ps × (3 ± √5)/2`, or 6.11 and 41.89 ps.
+
+Both simulators take a 1 ps first step from (0.1, 0.2) V to (0.0786885, 0.183607) V. The next ngspice samples are at 2, 4, 8 and 16 ps. The Sansho samples are at 1.0625, 1.1875, 1.4375 and 1.9375 ps. The initial line-port voltage jump engages Sansho's UIC step reduction, then adaptive growth and charge-error control select subsequent steps. At 144.8 ps the reference lands between Sansho's 121.39 and 183.30 ps samples. Replaying `(C + hG) v[n] = C v[n−1]` from the specified IC on each raw's own grid reproduces both voltages within 0.4 nV over the entire run. Different accepted intervals and interpolation account for the 1.0 mV drain residual.
+
+The standalone MOS deck keeps the same physical circuit and first-order method. It runs the first 250 ps with a 0.05 ps maximum step. Against the continuous two-mode solution, maximum drain/gate errors fell from 1.139/0.757 mV at a 0.25 ps cap to 0.237/0.157 mV at 0.05 ps. The remaining Q/J/T deck compares its six saved voltages against the original combined cache (worst score 0.622). The standalone diode and MOS decks await fresh references. The following command regenerates all three UIC references.
+
+```sh
+cargo run --release -p sansho-verify -- verify/decks/r7_{device,diode,mos}_uic.cir
+```
