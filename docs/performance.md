@@ -1,9 +1,62 @@
 # Simulator performance
 
-The benchmark runs the IHP SG13G2 decks with the release Cranelift JIT. The
+The IHP SG13G2 measurements use the release Cranelift JIT. The
 comparison is against ngspice 44.2 with the corresponding OSDI models. The
 campaign goal is at most 0.80× reference time for each of three measurements
 on every deck.
+
+## Clean-room solver replacement
+
+The comparison uses revision `81209fe` and the replacement solver, built
+offline with the release profile and JIT feature on the same Ryzen AI Max+
+395 host. The five decks came from `python3 benches/large/gen.py`. Each
+timed CLI process used one worker, phase profiling and projected raw output.
+The baseline and candidate ran in alternating order, one deck at a time.
+The multiplier checks sample all 32 product bits for each input vector.
+
+The fill column counts scalar entries in L and U at the first successful
+Newton factorization, counting the diagonal once. For BTF this is the sum
+over diagonal blocks. Off-block couplings are applied separately during
+the solve. For the baseline’s general LU, a separate instrumentation run
+counted structural reach with its actual numeric row permutation and symbolic
+column permutation. The counts exclude workspace and dense-panel padding.
+Use `SANSHO_PROFILE_MATRIX=shape target/release/sansho run -j1 DECK` to
+obtain the candidate counts.
+
+Wall times are medians of nine paired runs for the ring and chain and three
+pairs for the grid and multipliers. Fill is a snapshot. It can change during
+Newton pivoting, and the first successful factorization can follow different
+attempts on the two builds. Both multipliers store 7,553 off-block coupling
+entries in each build.
+
+| Large deck | LU before | LU after | Wall before (s) | Wall after (s) | Wall change |
+|---|---:|---:|---:|---:|---:|
+| `ring1001_mos1` | 8,006 | 8,006 | 0.094 | 0.095 | +1.3% |
+| `inv_chain1000_bsim4` | 6,012 | 6,012 | 0.147 | 0.148 | +0.8% |
+| `rc_grid_300` | 8,812,579 | 4,361,437 | 3.434 | 3.186 | -7.2% |
+| `mult16_mos1` | 253,001 | 58,614 | 11.870 | 11.339 | -4.5% |
+| `mult16_bsim4` | 206,239 | 180,124 | 45.181 | 45.783 | +1.3% |
+
+On the grid the quotient-degree ordering delays narrow level separators.
+Packing eight columns with the same lower row pattern lets each refactor
+apply preceding dense updates to all eight columns together. All five
+decks produced identical full-precision waveforms with `-j1` and `-j4`.
+
+The verification table sums the first Newton LU count for each deck in
+the suite. Its wall time is the median of three alternating cached verifier
+runs, including reading references and computing scores.
+
+| Verification suite | Decks | LU before | LU after | Wall before (s) | Wall after (s) |
+|---|---:|---:|---:|---:|---:|
+| `decks` | 56 | 1,224 | 1,229 | 0.109 | 0.107 |
+| `bsim3-decks` | 13 | 397 | 417 | 0.065 | 0.066 |
+| `bsim4-decks` | 22 | 699 | 699 | 0.106 | 0.091 |
+| `sky130-decks` | 8 | 933 | 769 | 1.580 | 1.524 |
+| `va-decks` | 15 | 7,596 | 3,939 | 2.891 | 2.469 |
+
+Both builds recorded 110 passes and four known differences. The largest
+absolute change in a variable or measurement score was 2.78e-07,
+for `onoise_total` in both `noise_bsim4_noic_default.cir` and `noise_bsim4_cs.cir`.
 
 ## Method
 
@@ -434,7 +487,7 @@ preserves duplicate diagnostics with expected linear total lookup time.
 Elaboration now checks repeated terminals of the current device in constant
 time even on a high-fanout rail. The final grid makes 63 solves with 20
 factorizations. Exactly repeating Jacobians account for the other 43.
-An intermediate build that retained general faer's pool-dependent frontal
+An intermediate build that retained the previous solver’s pool-dependent frontal
 kernels produced different grid waveforms across worker settings. Explicitly
 sequential kernels and reusable scratch give identical full-precision results.
 
@@ -856,7 +909,7 @@ The 3% guard uses the single-worker wall medians.
 
 All seven decks met the single-worker guard in this comparison. The RC grid
 used one worker in both modes, and its two series moved in opposite
-directions. The grid retains the general sparse backend. The earlier M5-3
+directions. The grid used the general sparse backend in M5-4. The earlier M5-3
 reference measured 41.87 s at one worker and 14.79 s at twelve on the BSIM4
 multiplier. The same-session baseline above is the denominator for speedups.
 

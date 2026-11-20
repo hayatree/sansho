@@ -35,11 +35,12 @@ excluded from source inspection.
   packages used the complete Apache license with LLVM exceptions from
   `cranelift-codegen` at the identical upstream Git revision. Each omission is
   listed in the inventory. [Binary notices](../THIRD-PARTY-LICENSES.md)
-- **License review item.** The existing `faer 0.24.4` dependency declares MIT in
-  Cargo and distributes separate Eigen MPL-2.0, LAPACK BSD and SuiteSparse BSD
-  notices. The inventory retains all four. Cargo-deny accepted the declared
-  licenses. Which component-specific terms apply to the linked binaries remains
-  unverified.
+- **License review item.** At release, `faer 0.24.4` declared MIT in
+  Cargo and distributed separate Eigen MPL-2.0, LAPACK BSD and SuiteSparse BSD
+  notices. The release inventory retained all four. Cargo-deny accepted the declared
+  licenses. Which component-specific terms applied to those binaries was
+  unverified at the time of the audit. The subsequent solver change removed
+  that dependency and regenerated the binary notices.
 - Scans for credential formats, key blocks, credential assignments, email
   addresses, home paths, private network addresses and workstation names found
   no apparent secrets or personal contact details in project-authored files.

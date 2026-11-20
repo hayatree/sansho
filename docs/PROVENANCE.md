@@ -26,7 +26,7 @@ the references for numerical methods and model equations.
 | `sansho-diag` | Original structured diagnostic types, codes, suggestions and registry tests. |
 | `sansho-netlist` | Original SPICE frontend, expression and measurement parsers, preprocessing, statistical bindings and writer. |
 | `sansho-devices` | Original model equations, automatic differentiation and terminal stamps from the device references below. The Verilog-A adapter uses the local compiler. |
-| `sansho-sparse` | Original matrix layout, ordering, refactorization, scheduling and solver adapters. The faer backend calls the public library API. |
+| `sansho-sparse` | Original matrix layout, ordering, refactorization, scheduling and solver adapters. |
 | `sansho-engine` | Original circuit elaboration, analyses, nonlinear solve, parallel assembly, lint, measurements and statistical runs. |
 | `sansho-output` | Original results, waveform serialization and raw reader/writer from the public SPICE raw layout. |
 | `sansho-va` | Original analog compiler, interpreter, JIT lowering, private cache, fingerprint and tests. Standard headers are locally authored declarations from the LRM and published constants. |
@@ -56,10 +56,12 @@ tooling. Upstream legal texts in the notice inventory retain their attribution.
 | Backward Euler / trapezoidal integration, breakpoint handling | `sansho-engine/src/analysis.rs` | Nagel (1975); standard numerical ODE texts. Device-local charge error estimates and the internal RC startup bound are original applications of divided differences and linearized KCL. |
 | Topology checks (DC path, voltage-source loops) | `sansho-engine/src/circuit.rs` | Ho, Ruehli & Brennan (1975); union-find (textbook) |
 | ASCII raw file layout | `sansho-output` | Publicly documented SPICE3/ngspice rawfile format |
-| Large circuit BTF and real LU | `sansho-sparse/src/btf.rs` | Original alternating-path maximum transversal from Duff (1981), iterative strongly connected components from Tarjan (1972), and left-looking sparse elimination from Gilbert & Peierls (1988). Block triangular solves and threshold pivot reuse follow the algorithm descriptions in Davis & Palamadai Natarajan, *Algorithm 907*, ACM TOMS (2010). Ordering uses the existing faer dependency through its public API. |
+| Large circuit BTF and real LU | `sansho-sparse/src/btf.rs` | Original alternating-path maximum transversal from Duff (1981), iterative strongly connected components from Tarjan (1972), and left-looking sparse elimination from Gilbert & Peierls (1988). Block triangular solves and threshold pivot reuse follow the algorithm descriptions in Davis & Palamadai Natarajan, *Algorithm 907*, ACM TOMS (2010). |
 | Large circuit decks | `benches/large/gen.py` | Original row-wise unsigned multiplication, CMOS gates and RC lattice. The ring scales the repository's `big_ring` test circuit. The BSIM4 cards come from `verify/bsim4-decks/b4_inverter_tran.cir`. |
 | BSIM4 intrinsic bypass | `sansho-devices/src/bsim4/mod.rs` | Original reuse of current and charge linearizations, following device bypass in Nagel's SPICE2 thesis (1975). |
-| Sparse LU | `sansho-sparse/src/faer_backend.rs` | `faer` crate (MIT), used as a library dependency |
+| Quotient-graph ordering | `sansho-sparse/src/ordering.rs` | Original symmetric approximate degree implementation from Amestoy, Davis & Duff, “An Approximate Minimum Degree Ordering Algorithm” (1996), and George & Liu, “The Evolution of the Minimum Degree Ordering Algorithm” (1989). Breadth-first level separators follow George & Liu, *Computer Solution of Large Sparse Positive Definite Systems* (1981). |
+| Real and complex sparse LU | `sansho-sparse/src/{btf,serial,complex}.rs` | Original Gilbert & Peierls (1988) elimination, fixed-pivot panel updates and triangular solves with elementary Cartesian complex arithmetic. |
+| Dense generalized eigenvalues | `sansho-sparse/src/qz.rs` | Original Hessenberg–triangular reduction and double-shift real QZ from Golub & Van Loan, *Matrix Computations*, and Moler & Stewart, “An Algorithm for Generalized Matrix Eigenvalue Problems” (1973). |
 | Forward-mode automatic differentiation | `sansho-devices/src/dual.rs` | Griewank & Walther, *Evaluating Derivatives* (SIAM, 2008) |
 | pn-junction current, depletion charge with `fc` linearization, junction limiting, `vcrit` | `sansho-devices/src/junction.rs` | Nagel (1975); Antognetti & Massobrio (1993), ch. 1 |
 | Diode (level 1) | `sansho-devices/src/diode.rs` | Massobrio & Antognetti (1993), ch. 1, and ngspice user manual §7.2.2 (reverse bias, adjusted avalanche knee and forward high injection) |
@@ -205,8 +207,7 @@ The timing probes use Rust and Python monotonic clocks. This round adds no depen
 The Newton numeric refactorization, scatter schedule, pivot tests and triangular solves
 are original repository code. The algorithmic sources are J. R. Gilbert and T. Peierls,
 *Sparse Partial Pivoting in Time Proportional to Arithmetic Operations* (1988), and
-T. A. Davis, *Direct Methods for Sparse Linear Systems* (2006). Symbolic ordering and
-fresh partial pivoting use the existing faer dependency through its public Rust API.
+T. A. Davis, *Direct Methods for Sparse Linear Systems* (2006).
 
 The two-instance evaluator uses standard SSA value numbering, postdominators and
 masked SIMD execution through Cranelift's public IR and host-ISA APIs. Scalar math
@@ -287,7 +288,7 @@ The netlist sampler, lexical binding plan and CPU batch runner are original Rust
 
 The integer finalizer follows Steele, Lea and Flood, *Fast Splittable Pseudorandom Number Generators* (OOPSLA 2014). Stable string identities use FNV-1a arithmetic. Indexing the random function by independent run and call-site counters follows the design principle in Salmon et al., *Parallel Random Numbers: As Easy as 1, 2, 3* (SC 2011). The normal transform follows Box and Muller, *A Note on the Generation of Random Normal Deviates* (1958). Sample variance uses Welford's online recurrence. The independent sample-variance ratio uses the standard F distribution and the incomplete beta continued fraction.
 
-All three validation circuits and their reference drivers were authored for this repository. The SKY130 deck references the locally installed Volare model files. The implementation uses existing Rust dependencies and the existing faer symbolic and sequential numeric factorization interfaces.
+All three validation circuits and their reference drivers were authored for this repository. The SKY130 deck references the locally installed Volare model files. The numeric solvers share an immutable symbolic ordering across runs.
 
 ### R1 ngspice-dialect devices and temperature
 
@@ -314,8 +315,7 @@ Efficient Electronic-Circuit Noise Calculations” (1971). The DC sensitivity
 contraction follows Director and Rohrer (1969). The MNA transfer and bordered
 pole-zero pencils follow the network equations in Vlach and Singhal, *Computer
 Methods for Circuit Analysis and Design*. The Fourier implementation uses the
-real-signal discrete Fourier transform. The dense QZ kernel uses the workspace's
-existing MIT-licensed faer dependency through its public API.
+real-signal discrete Fourier transform. The original dense QZ kernel and its references appear in the algorithm table above.
 
 The built-in noise sources use the Johnson–Nyquist, shot and empirical flicker
 laws, the Berkeley BSIM4 4.8.2 Technical Manual chapter 10 and Appendix A.10,

@@ -186,8 +186,11 @@ for the natural-mode calculation. A voltage drive adds a zero-volt constraint at
 the input. For transmission zeros the extra column injects an unknown input
 current and the extra row constrains the output voltage to zero. The dense real
 generalized Schur (QZ) calculation solves the resulting pencil `-G x = s C x`.
-It handles singular C matrices without inverting C. Row and column equilibration
-and a characteristic frequency scale precede factorization.
+A characteristic frequency scale and row and column equilibration precede
+column-pivoted triangularization of C. Null rows isolate algebraic modes
+before Hessenberg reduction. Real double-shift QZ iterations deflate
+one- and two-dimensional blocks. The trailing quadratic supplies conjugate
+pairs, and zero generalized denominators identify algebraic modes at infinity.
 
 `pole(1)`, `zero(1)` and subsequent vectors each hold a complex root. Results
 are sorted by real and then imaginary part. Algebraic modes at infinity are

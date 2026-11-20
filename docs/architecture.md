@@ -39,7 +39,7 @@
 | D2 | **Fix the matrix pattern at elaboration** and precompute each device's stamp targets as indices into the value array | No runtime hashing or insertion. Symbolic factorization (ordering) is reusable. Suits GPU offload. |
 | D3 | Store devices as **SoA batches per model type** | Batch evaluation via SIMD, threads, or GPU. Dynamic dispatch happens per group, not per instance. |
 | D4 | **Deterministic reduction**: devices write contributions to slot arrays, which are summed into the matrix in a fixed order | Bit-identical results regardless of thread count (agent reproducibility, stable regression tests). |
-| D5 | Linear solver behind a trait. Initial backend: faer. Target: our own KLU-style solver (BTF + AMD + Gilbert–Peierls + pivot-reuse refactor) | Avoids linking KLU (LGPL). Circuit-specific refactorization is key to speed. |
+| D5 | Linear solver behind a trait. Original BTF, approximate minimum degree ordering and Gilbert–Peierls LU with pivot reuse | Avoids linking KLU (LGPL). Circuit-specific refactorization is key to speed. |
 | D6 | **The library is the product**; CLI / MCP / Python are thin shells | Agent-native requirements (sessions, structured results) are met at the library API level. |
 | D7 | f64 everywhere; Complex<f64> for AC. Options may loosen tolerances but never internal precision | Accuracy is the top priority. |
 | D8 | The library never panics; everything returns `Result<_, Diagnostic>` | Agents can handle failures structurally. |
@@ -83,7 +83,7 @@
 | `sansho-netlist` | Lexing / parsing. Lossless AST with line/column spans. `.include/.lib/.param/.func/.subckt/.model`, expression evaluation | none (hand-written parser) |
 | `sansho-elab` | Subcircuit flattening, parameter resolution, model binning, node numbering, topology checks (floating nodes, V loops, I cutsets) | — |
 | `sansho-ir` | Post-elaboration circuit IR. JSON schema via serde (also accepted as agent input) | serde, schemars |
-| `sansho-sparse` | CSC pattern, AMD/COLAMD, BTF, LU (real & complex), refactor, triangular solves, `LinearSolver` trait | faer (initial backend) |
+| `sansho-sparse` | CSC pattern, ordering, BTF, real and complex LU, refactor, transpose solves and dense QZ | rayon |
 | `sansho-devices` | `DeviceGroup` trait. Built-ins (R/L/C/K/V/I/E/F/G/H/switches/T/JFET/diode/BJT (GP)/MOS1–3/BSIM4) | — |
 | `sansho-va` | Clean-room Verilog-A analog subset, binding specialization, register interpretation and optional native evaluation | Cranelift (optional) |
 | `sansho-osdi` | OSDI 0.3/0.4 loader (independently implemented from the spec); exposes `.osdi` models as `DeviceGroup` | libloading |
@@ -201,8 +201,7 @@ AC, noise, transfer, sensitivity and pole-zero analyses share the operating-poin
 linearization. A device supplies a one-sided noise spectrum and signed local MNA
 coefficients. Each frequency requires one complex transpose solve. Contributions
 accumulate in stable instance order. DC parameter derivatives reuse one real
-adjoint. Small pole-zero pencils use sequential dense QZ through the existing
-faer backend. Fourier analysis consumes the completed transient before public
+adjoint. Small pole-zero pencils use an original real double-shift QZ iteration. Fourier analysis consumes the completed transient before public
 signal projection. [Analysis algorithms and limits](analyses.md)
 
 ### 5.1 Nonlinear solve (Newton)
@@ -317,25 +316,20 @@ Shooting-method PSS and HB. Thanks to the DAE form (D1), devices need no additio
 pub trait LinearSolver<T> {
     fn analyze(&mut self, pattern: &CscPattern) -> Result<()>;        // ordering, BTF, symbolic
     fn factor(&mut self, values: &[T]) -> Result<()>;                 // first time: partial pivoting
-    fn refactor(&mut self, values: &[T]) -> Result<RefactorOutcome>;  // reuse pivots; fall back to factor if unstable
     fn solve(&self, rhs: &mut [T]) -> Result<()>;
 }
 ```
 
 | Stage | Implementation | Notes |
 |---|---|---|
-| S0 | faer sparse LU | Get running quickly; also the accuracy reference |
 | S1 | Own KLU-style solver: BTF → per-block AMD → Gilbert–Peierls left-looking LU → pivot-reuse refactor | Implemented from papers (Davis & Palamadai 2010; Gilbert & Peierls 1988). SuiteSparse source is not consulted |
 | S2 | Parallelism across BTF blocks; level-scheduled parallel refactor | Techniques from NICSLU/CKTSO and Basker papers |
 | S3 | Iterative methods for large power grids (preconditioned GMRES/CG); GPU (cuDSS as an optional plugin) | Optional |
 
-Real Newton solves reuse the symbolic ordering and simplicial pivot sequence. After a pivoted
-factorization, the solver records scatter offsets and ordered updates reachable from the active
-CSC entries. Activating a previously omitted entry triggers fresh pivoting and expands the
-support used for subsequent plans. Both solves traverse the same flat factor storage.
-Each subsequent factorization checks the pivot against the remaining column entries and monitors
-upper-factor growth. Ties, tiny pivots or excessive growth trigger fresh pivoting. The general
-backend handles dense and supernodal patterns and complex solves.
+Real Newton, AC, noise and sensitivity use the same Gilbert–Peierls kernel.
+A symbolic plan stores original CSC offsets and the column permutation. Each
+job owns its numeric factors, pivot history and solve workspace. Adjoint solves
+apply the ordinary transpose, including for complex matrices.
 
 For real systems with at least 2,048 unknowns and at most 16 structural
 entries per column on average, automatic selection first tests a block
@@ -347,29 +341,34 @@ the complete pattern. BTF is used for multiple blocks when the largest holds
 at most half the unknowns or at least 2% of structural entries lie in columns
 outside that block.
 
-Each diagonal block uses an original left-looking real LU. Blocks with at
-least 256 columns first try minimum degree on the union of the matched
-pattern and its transpose. Eliminating a vertex completes its neighbor clique.
-Degree ties use the lower original column. A budget of 256 times the block
-input count bounds the sum of squared elimination degrees. Exhausting the
-budget falls back to faer's public column ordering, which also handles blocks
-of four to 255 columns. Smaller blocks use natural order. A priority queue visits
-reachable earlier pivots in order. Fresh pivoting prefers the matched diagonal
-when it is at least 0.1 times the column maximum. Subsequent assemblies replay
-the same lower-column updates and check the same relative threshold. On a
-failed check the accepted prefix remains valid and pivot search resumes at
-the rejected column. Triangular solves propagate off-block contributions in
+Each diagonal block orders the union of its matched pattern and its transpose.
+This represents the near-symmetric circuit stamps directly. A quotient graph
+represents a fill clique by one element. Eliminating a variable absorbs its
+incident elements and any other element wholly contained in its boundary.
+The degree estimate counts the boundary once and sums the sizes of external
+neighbor sets. Variables with no external neighbors can be eliminated together.
+Degree ties in the queue use the smaller block-local index. Vertices with initial
+degree above max(16, 10√n) follow the sparse vertices in index order.
+For blocks of at least 16,384 vertices, breadth-first level sets identify
+narrow separators. A separator must leave at least a quarter of the region on
+each side. Its vertices are ordered after the two interiors. The same quotient
+degree rule orders each level.
+
+Fresh LU visits reachable earlier pivots in elimination order, preferring the
+matched diagonal when it is at least 0.1 times the column maximum. Later
+assemblies replay the updates and check that threshold. A failed check retains
+the accepted prefix. Large blocks with more than 16 strict L entries per
+column on average can pack eight consecutive columns with a common lower
+row pattern. Refactorization traverses earlier L columns once per panel,
+and solves reuse the packed rows. A rejected panel resumes scalar pivot
+search at its first column. BTF solves propagate off-block contributions in
 fixed CSC order.
 
-After declining BTF, automatic selection keeps the existing simplicial
-refactorization where applicable below 16,384 unknowns. The general real
-fallback uses faer's sequential numeric and solve kernels and reusable
-scratch at every size. A large linear job reuses valid factors when all assembled Jacobian
-bits match the previous successful factorization. Set `SANSHO_REAL_SOLVER` to
-`auto`, `newton` (previous selection), `faer` (general backend), or `btf`
-(attempt BTF regardless of size and partition quality). All real backend
-selections use sequential kernels for general LU so worker-count changes
-preserve the single-worker arithmetic.
+`SANSHO_REAL_SOLVER=auto` uses the BTF selection above. `newton` uses
+unblocked LU. `btf` requests BTF regardless of size and partition quality.
+An unavailable transversal or an activated entry above the block diagonal
+selects unblocked LU. Large linear jobs reuse numeric factors when every
+assembled Jacobian entry matches the previous factorization bit for bit.
 
 ---
 
@@ -509,7 +508,7 @@ result). The M3 exit criterion is tested end to end in `crates/sansho-mcp/tests/
 
 `ParameterPlan` expands the include tree and hierarchy once. It retains a flat nominal netlist, expressions for sampled fields, and model bindings for live primitives. A binding holds the destination model and primitive indices, numeric field offsets and, for varying geometry, possible bins and their bounds. `ParameterPlan::sample(Sample { seed, index })` materializes one run's numeric inputs. Top-level process draws and local mismatch draws have separate lexical identities.
 
-`MonteCarlo` owns this plan and the compiled nominal circuit. Each run's circuit references the same `Arc<CircuitTopology>` for external node numbers, internal unknown ranges, layouts, CSC pattern and gather maps. `BatchBindings` identifies native chunks whose parameters vary or whose sources a DC analysis mutates. `Circuit::bind_run` shares the other native device groups, prepares run-local model coefficients for those chunks and verifies their internal unknowns and layouts against the compiled stamp slots. VA modules and terminal maps are shared. VA instances have private buffers and run-scoped JIT specializations. The real and complex numeric solvers reuse a shared faer symbolic ordering. Each factorization can pivot on that sample's assembled values.
+`MonteCarlo` owns this plan and the compiled nominal circuit. Each run's circuit references the same `Arc<CircuitTopology>` for external node numbers, internal unknown ranges, layouts, CSC pattern and gather maps. `BatchBindings` identifies native chunks whose parameters vary or whose sources a DC analysis mutates. `Circuit::bind_run` shares the other native device groups, prepares run-local model coefficients for those chunks and verifies their internal unknowns and layouts against the compiled stamp slots. VA modules and terminal maps are shared. VA instances have private buffers and run-scoped JIT specializations. The real and complex numeric solvers reuse the same immutable block pattern and column ordering. Each factorization can pivot on that sample's assembled values.
 
 This is the CPU boundary for G1. The stable indices identify a model field or device lane independently of the run. A future device evaluator can transpose a window of sampled numeric fields into arrays indexed by field, instance and run, evaluate a group for that window and return the existing ordered stamp slots for each run. Newton histories, numeric pivots and timestep acceptance belong to each run. The current backend evaluates CPU groups. It holds at most one window of active workspaces, limited to two concurrent runs for a parallel circuit or one with at least 256 unknowns. Retained results contain measurements and diagnostics unless waveforms were requested.
 
@@ -663,7 +662,7 @@ implementation. [Compatibility and numerical differences](compatibility.md)
 | M | Scope | Exit criteria |
 |---|---|---|
 | M0 | Repository foundation: workspace, licenses, CI, cargo-deny, PROVENANCE | CI green |
-| M1 | Linear circuits: basic parser, elaboration, MNA, OP/DC/AC/TRAN (trapezoidal), faer LU, raw output | RC/RLC match analytic solutions and ngspice |
+| M1 | Linear circuits: basic parser, elaboration, MNA, OP/DC/AC/TRAN (trapezoidal), sparse LU, raw output | RC/RLC match analytic solutions and ngspice |
 | M2 | Nonlinear: diode, BJT (GP), MOS1, Newton + limiting, gmin/source stepping, BDF2, LTE step control, `.meas`, L0 parallelism, JSON output | Small-circuit benchmarks within RMS error ≤ 1 vs ngspice (done: `verify/decks`) |
 | M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP (done: `sansho-mcp/tests/stdio.rs`) |
 | M4 | OSDI loader and PDKs: IHP SG13G2 (PSP103, ...), SKY130 (built-in level 54), broader ngspice dialect | PDK testbenches match ngspice (dialect part done: `verify/decks/{subckt_ring,lib_include,nodeset_latch,uic_rlc}`) |

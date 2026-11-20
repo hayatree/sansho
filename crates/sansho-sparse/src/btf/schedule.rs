@@ -2,21 +2,22 @@
 //! Provenance: original implementation using the elimination forest of Liu (1990)
 //! and the level scheduling principle of Anderson and Saad (1989).
 
-use super::{FactorColumn, Value};
+use super::FactorColumn;
+use crate::Scalar;
 use rayon::prelude::*;
 
 /// A prefix of the factorization has disjoint connected components in the
 /// column DAG. Batch whole components into lanes, followed by a serial suffix.
 #[derive(Debug, Default)]
-pub(super) struct Schedule {
-    lanes: Vec<Lane>,
+pub(super) struct Schedule<T> {
+    lanes: Vec<Lane<T>>,
     owner: Vec<usize>,
 }
 
 #[derive(Debug)]
-struct Lane {
+struct Lane<T> {
     columns: Vec<usize>,
-    work: Vec<f64>,
+    work: Vec<T>,
 }
 
 fn root(parent: &mut [usize], mut j: usize) -> usize {
@@ -27,14 +28,19 @@ fn root(parent: &mut [usize], mut j: usize) -> usize {
     j
 }
 
-impl Schedule {
+impl<T: Scalar> Schedule<T> {
     pub(super) fn len(&self) -> usize {
         self.owner.len()
     }
 
     /// Check just the portion reconstructed by fresh pivot search. Numeric
     /// coefficients may change freely, but every edge must still be local.
-    pub(super) fn valid(&self, start: usize, cols: &[FactorColumn], u: &[(usize, Value)]) -> bool {
+    pub(super) fn valid(
+        &self,
+        start: usize,
+        cols: &[FactorColumn<T::Cell>],
+        u: &[(usize, T::Cell)],
+    ) -> bool {
         (start..self.len()).all(|j| {
             u[cols[j].upper.clone()]
                 .iter()
@@ -42,7 +48,12 @@ impl Schedule {
         })
     }
 
-    pub(super) fn build(&mut self, cols: &[FactorColumn], u: &[(usize, Value)], workers: usize) {
+    pub(super) fn build(
+        &mut self,
+        cols: &[FactorColumn<T::Cell>],
+        u: &[(usize, T::Cell)],
+        workers: usize,
+    ) {
         let n = cols.len();
         let mut parent: Vec<_> = (0..n).collect();
         let mut sizes = vec![1; n];
@@ -92,7 +103,7 @@ impl Schedule {
         }
         self.lanes.resize_with(count, || Lane {
             columns: Vec::new(),
-            work: vec![0.; n],
+            work: vec![T::zero(); n],
         });
         for lane in &mut self.lanes {
             lane.columns.clear();
@@ -112,12 +123,12 @@ impl Schedule {
         }
     }
 
-    pub(super) fn run(&mut self, factor: impl Fn(usize, &mut [f64]) -> bool + Sync) -> usize {
+    pub(super) fn run(&mut self, factor: impl Fn(usize, &mut [T]) -> bool + Sync) -> usize {
         let end = self.len();
         self.lanes
             .par_iter_mut()
             .map(|lane| {
-                lane.work.fill(0.);
+                lane.work.fill(T::zero());
                 lane.columns
                     .iter()
                     .copied()

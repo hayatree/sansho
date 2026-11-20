@@ -9,7 +9,8 @@ at your option.
 Third-party material
 --------------------
 Sansho contains no vendored third-party source code. The release binaries
-link Rust crates from Cargo.lock. Their license declarations, component
+include Sansho’s original sparse LU, ordering and dense QZ implementations and
+link the Rust crates from Cargo.lock. Their license declarations, component
 notices and full license texts are in THIRD-PARTY-LICENSES.md.
 
 Any code ported from third-party projects (for example BSD-licensed parts of

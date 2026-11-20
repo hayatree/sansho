@@ -629,7 +629,15 @@ fn continuous_newton(
             && std::env::var("SANSHO_PROFILE_MATRIX").as_deref() == Ok("entries");
         if dump {
             use std::io::Write;
-            let _ = writeln!(std::io::stderr().lock(), "sansho-first-rhs {:?}", ws.rhs);
+            let mut stderr = std::io::stderr().lock();
+            let _ = writeln!(stderr, "sansho-first-rhs {:?}", ws.rhs);
+            let _ = writeln!(
+                stderr,
+                "sansho-csc {:?} {:?} {:?}",
+                ckt.pattern.col_ptr(),
+                ckt.pattern.row_idx(),
+                ws.jac
+            );
         }
         let lu_start = ws.timed.then(std::time::Instant::now);
         let lu = ws

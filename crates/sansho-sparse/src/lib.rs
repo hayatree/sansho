@@ -4,23 +4,43 @@
 //! only rewrites the value array. Solvers implement [`LinearSolver`], which separates symbolic
 //! analysis (done once per pattern) from numeric factorization (done every Newton iteration).
 //!
-//! Provenance: original work. The initial backend wraps the `faer` crate (MIT).
+//! Provenance: original work based on Gilbert & Peierls (1988).
 //! See `docs/PROVENANCE.md`.
 
 #![forbid(unsafe_code)]
 
 mod btf;
-mod faer_backend;
+mod complex;
+mod ordering;
 mod pattern;
+mod qz;
 mod refactor;
+mod serial;
 pub use refactor::NewtonLu;
 
-pub use faer::c64;
-pub use faer_backend::{BatchOrdering, FaerLu, SerialLu, pencil_roots};
+pub use complex::Complex64 as c64;
+pub use ordering::BatchOrdering;
 pub use pattern::{CscPattern, PatternBuilder};
+pub use qz::pencil_roots;
+pub use serial::SerialLu;
 
 /// Scalar types supported by the solvers.
-pub trait Scalar: Copy + Default + Send + Sync + std::fmt::Debug + 'static {
+pub trait Scalar:
+    PartialEq
+    + std::ops::SubAssign
+    + std::ops::Mul<Output = Self>
+    + std::ops::Div<Output = Self>
+    + Copy
+    + Default
+    + Send
+    + Sync
+    + std::fmt::Debug
+    + 'static
+{
+    #[doc(hidden)]
+    type Cell: btf::FactorValue<Self>;
+    /// Magnitude used in the relative pivot test.
+    fn magnitude(self) -> f64;
     /// Additive identity.
     fn zero() -> Self;
     /// Whether the value is finite.
@@ -28,6 +48,10 @@ pub trait Scalar: Copy + Default + Send + Sync + std::fmt::Debug + 'static {
 }
 
 impl Scalar for f64 {
+    type Cell = btf::Value;
+    fn magnitude(self) -> f64 {
+        self.abs()
+    }
     fn zero() -> Self {
         0.0
     }
@@ -37,6 +61,10 @@ impl Scalar for f64 {
 }
 
 impl Scalar for c64 {
+    type Cell = [btf::Value; 2];
+    fn magnitude(self) -> f64 {
+        self.norm()
+    }
     fn zero() -> Self {
         c64::new(0.0, 0.0)
     }
@@ -94,6 +122,7 @@ pub trait LinearSolver<T: Scalar> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -105,9 +134,8 @@ mod tests {
         for (s, &(_, _, v)) in slots.iter().zip(entries) {
             values[map[*s]] += v;
         }
-        let mut lu = FaerLu::<f64>::new();
-        lu.analyze(&pattern).ok();
-        lu.factor(&values).ok();
+        let mut lu = SerialLu::<f64>::new(&pattern).unwrap();
+        lu.factor(&values).unwrap();
         let mut x = rhs.to_vec();
         assert!(lu.solve(&mut x).is_ok());
         x
@@ -146,12 +174,12 @@ mod tests {
         pb.add(0, 0);
         pb.add(1, 1);
         let (pattern, _) = pb.build();
-        let mut lu = FaerLu::<f64>::new();
+        let mut lu = SerialLu::<f64>::new(&pattern).unwrap();
         assert!(lu.analyze(&pattern).is_ok());
         // Numerical singularity may be detected at factorization or at solve time.
         let detected = match lu.factor(&[1.0, 0.0]) {
             Err(SolverError::Singular { .. }) => true,
-            Ok(()) => {
+            Ok(_) => {
                 let mut x = vec![1.0, 1.0];
                 matches!(lu.solve(&mut x), Err(SolverError::Singular { .. }))
             }
@@ -161,11 +189,47 @@ mod tests {
     }
 
     #[test]
+    fn complex_transpose_after_permutations_and_factor_failure() {
+        let mut builder = PatternBuilder::new(5);
+        for j in 0..5 {
+            builder.add((j + 2) % 5, j);
+            builder.add((j + 3) % 5, j);
+        }
+        let (p, _) = builder.build();
+        let mut lu = SerialLu::new(&p).unwrap();
+        let want: Vec<_> = (0..5)
+            .map(|i| c64::new(i as f64 - 2., i as f64 / 3.))
+            .collect();
+        let mut a = vec![c64::default(); p.nnz()];
+        for exchange in [2, 3, 3, 2] {
+            let mut rhs = vec![c64::default(); 5];
+            for (j, v) in rhs.iter_mut().enumerate() {
+                let entries = p.col_ptr()[j]..p.col_ptr()[j + 1];
+                for (&r, entry) in p.row_idx()[entries.clone()].iter().zip(&mut a[entries]) {
+                    *entry = if r == (j + exchange) % 5 {
+                        c64::new(-4., 3.)
+                    } else {
+                        c64::new(0.02, r as f64 * 0.01)
+                    };
+                    *v += *entry * want[r];
+                }
+            }
+            lu.factor(&a).unwrap();
+            lu.solve_transpose(&mut rhs).unwrap();
+            for (v, x) in rhs.iter().zip(&want) {
+                assert!((*v - *x).norm() < 2e-14);
+            }
+        }
+        assert!(lu.factor(&[]).is_err());
+        assert_eq!(lu.solve_transpose(&mut a), Err(SolverError::NotReady));
+    }
+
+    #[test]
     fn complex_solve() {
         let mut pb = PatternBuilder::new(1);
         pb.add(0, 0);
         let (pattern, _) = pb.build();
-        let mut lu = FaerLu::<c64>::new();
+        let mut lu = SerialLu::<c64>::new(&pattern).unwrap();
         assert!(lu.analyze(&pattern).is_ok());
         assert!(lu.factor(&[c64::new(0.0, 2.0)]).is_ok());
         let mut x = vec![c64::new(2.0, 0.0)];
