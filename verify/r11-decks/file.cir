@@ -1,0 +1,11 @@
+Two-column waveform driving a differential gain
+* Provenance: original Sansho circuit and waveform.
+Adata [ref signal] stim
+Aread %vd(signal ref) out amp
+Rload out 0 2k
+.model stim filesource(file="stimulus.dat" amplscale=[1 2] amploffset=[0 0.125])
+.model amp gain(gain=0.5)
+.tran 50u 1m
+.save v(ref) v(signal) v(out)
+.print tran v(ref) v(signal) v(out)
+.end

@@ -636,13 +636,15 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
   The coverage and SKY130 dialect rules are in [the BSIM4 model notes](bsim4.md).
   Production Verilog-A models are compiled by sansho-va.
 
+Analog A devices use the same DAE and deterministic stamp assembly as native circuit elements. Signal current inputs introduce a sensing branch. Dynamic transfer functions allocate state unknowns. [Analog code models](xspice.md)
+
 The [batch control interpreter](control.md) parses scoped command blocks in the netlist layer and runs them against isolated circuit and plot state in the session layer.
 
 ### Not yet supported
 
 Distributed lossy lines, line IC tuples, pole-zero extraction for distributed
 delays, JFET level two, full MOS2/MOS3 short-channel corrections, interactive Nutmeg,
-XSPICE, CIDER and an OSDI loader remain outside the current
+event-driven XSPICE, CIDER and an OSDI loader remain outside the current
 implementation. [Compatibility and numerical differences](compatibility.md)
 
 ---

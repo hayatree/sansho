@@ -1,0 +1,14 @@
+Ramped input driving an integrator and a current-sensing gain stage
+* Provenance: original Sansho circuit.
+* sansho-verify: pending-reference
+Vin in 0 PWL(0 0 1m 1 2m 1)
+Aarea in area ii
+.model ii int(gain=1000 out_ic=0.2 out_lower_limit=-10 out_upper_limit=10)
+Rs area sense 1k
+Asense %i(sense) %id(0 load) mirror
+.model mirror gain(gain=2)
+Rl load 0 500
+.tran 10u 2m
+.save v(area) v(load)
+.print tran v(area) v(load)
+.end

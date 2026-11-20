@@ -30,6 +30,9 @@ struct Inputs {
 }
 
 impl SourceLoader for Inputs {
+    fn waveform(&self, path: &Path, from: Option<&str>) -> Result<String, String> {
+        self.fs.waveform(path, from)
+    }
     fn load(&self, path: &str, from: Option<&str>) -> Result<(String, String), String> {
         self.fs.load(path, from).inspect_err(|_| {
             let path = self.fs.resolve(path, from);

@@ -1,0 +1,19 @@
+Three voltage controlled oscillators and an output slew limiter
+* Provenance: original Sansho circuit.
+Vfreq f 0 0.5
+Asin f sn sinus
+Atri f tr tri
+Asq f sq pulse
+Aslew sq sl ramp
+Rsn sn 0 1k
+Rtr tr 0 1k
+Rsl sl 0 1k
+.model sinus sine(cntl_array=[0 1] freq_array=[500 1500] out_low=-1 out_high=1)
+.model tri triangle(cntl_array=[0 1] freq_array=[500 1500] out_low=0 out_high=1)
+.model pulse square(cntl_array=[0 1] freq_array=[500 1500] out_low=0 out_high=1
++ rise_time=10u fall_time=20u duty_cycle=0.4)
+.model ramp slew(rise_slope=5000 fall_slope=4000)
+.tran 10u 2m
+.save v(sn) v(tr) v(sq) v(sl)
+.print tran v(sn) v(tr) v(sq) v(sl)
+.end

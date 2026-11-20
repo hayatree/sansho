@@ -431,3 +431,17 @@ The harness runs Sansho first. The reference invocation is `ngspice -b deck.cir`
 | `r10_alterparam` | Three globally parameterized divider ratios after reset. |
 
 The API tests exercise all seven decks independently of the oracle cache, compare numerical outputs with circuit laws, and compare transcripts, plots and output bytes with one and two workers.
+
+## R11 analog code models
+
+The engine test suite runs each original deck in `verify/r11-decks` on one and two workers and compares numerical measurements with circuit laws. Each deck includes a batch print card. Run a single deck with `sansho run verify/r11-decks/operators.cir`. Run the oracle comparisons with `cargo run --release -p sansho-verify --features jit -- --cached -v verify/r11-decks` or as part of `tools/ci.sh --cached`. The corrected operators and ramp decks are marked pending until their ngspice reference files are regenerated.
+
+| Deck | Check |
+|---|---|
+| arithmetic.cir | DC differential gain, weighted sum, product and division by a reference voltage. |
+| curves.cir | Limiter knees, interior PWL smoothing and transfer endpoints. |
+| aswitch.cir | Resistive-divider voltage through a logarithmic switch sweep and controlled upper and lower rails. |
+| operators.cir | Real and imaginary parts of a denormalized low-pass transfer, its derivative and the recovered signal after integration. |
+| ramp.cir | Integral of a ramp and plateau, nonzero initial output, short-circuit current sensing and differential current drive. |
+| oscillators.cir | Phase and amplitude of 1 kHz sine and triangle waves, finite square-wave edges and asymmetric slew rates. |
+| file.cir | Interpolation breakpoints and scaled differential output from the two-channel stimulus.dat file. |

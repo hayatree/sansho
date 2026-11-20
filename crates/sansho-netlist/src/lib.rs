@@ -19,7 +19,9 @@ pub use parameters::ParameterPlan;
 mod preproc;
 mod statistics;
 mod writer;
+mod xspice;
 pub use statistics::Sample;
+pub use xspice::{CodePort, SourceTable, analog_model};
 
 pub use expr::{Expr, eval as eval_expr, eval_const, parse_behavior, parse_expr};
 pub use lexer::{Lexed, Line, Token, lex, lex_source};
@@ -143,6 +145,8 @@ pub enum SwitchControl {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ElementKind {
+    /// XSPICE analog code model.
+    CodeModel { ports: Vec<CodePort>, model: String },
     /// Compiled Verilog-A instance: Nname nodes... model [key=value ...].
     Va {
         /// Ordered terminal connections.
@@ -395,7 +399,8 @@ impl ElementKind {
             Self::Resistor { model, .. }
             | Self::Capacitor { model, .. }
             | Self::Inductor { model, .. } => model.as_deref(),
-            Self::Switch { model, .. }
+            Self::CodeModel { model, .. }
+            | Self::Switch { model, .. }
             | Self::Va { model, .. }
             | Self::Urc { model, .. }
             | Self::Ltra { model, .. }
@@ -413,6 +418,11 @@ impl ElementKind {
 /// A `.model name type (params)` card.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ModelCard {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table: Option<SourceTable>,
+    /// Ordered numeric arrays on code-model cards.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub arrays: Vec<(String, Vec<f64>)>,
     /// Multi-component version labels that cannot be represented by an f64.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -430,6 +440,10 @@ impl ElementKind {
     /// Terminal nodes of the element (output and controlling nodes).
     pub fn nodes(&self) -> Vec<&str> {
         match self {
+            Self::CodeModel { ports, .. } => ports
+                .iter()
+                .flat_map(|p| p.nodes.iter().map(String::as_str))
+                .collect(),
             Self::Coupling { .. } => vec![],
             Self::Urc { ports, .. } => ports.iter().map(String::as_str).collect(),
             Self::Line { ports, .. } | Self::Ltra { ports, .. } => {

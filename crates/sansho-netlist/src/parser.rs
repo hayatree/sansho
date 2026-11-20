@@ -23,7 +23,7 @@ pub fn parse(text: &str) -> Result<Netlist, Vec<Diagnostic>> {
 
 /// Parse netlist text, loading `.include` / `.lib` files through `loader`.
 pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<Diagnostic>> {
-    parse_expanded(preprocess(text, loader), false).map(|p| p.nominal)
+    parse_expanded(preprocess(text, loader), false, loader).map(|p| p.nominal)
 }
 
 /// Re-elaborate a self-contained deck with global parameter overrides, without filesystem access.
@@ -34,6 +34,7 @@ pub fn parse_parameters(
     parse_expanded(
         crate::preproc::preprocess_params(text, &NoFiles, false, overrides),
         false,
+        &NoFiles,
     )
     .map(|p| p.nominal)
 }
@@ -43,17 +44,28 @@ pub fn prepare_parameters(
     text: &str,
     loader: &dyn SourceLoader,
 ) -> Result<crate::ParameterPlan, Vec<Diagnostic>> {
-    parse_expanded(crate::preproc::preprocess_with(text, loader, true), true)
+    parse_expanded(
+        crate::preproc::preprocess_with(text, loader, true),
+        true,
+        loader,
+    )
 }
 
 fn parse_expanded(
     mut pre: crate::preproc::Expanded,
     statistical: bool,
+    loader: &dyn SourceLoader,
 ) -> Result<crate::ParameterPlan, Vec<Diagnostic>> {
     let mut elements = Vec::new();
     let mut directives = Vec::new();
     let _phase = sansho_diag::Phase::start("netlist_parse");
     let mut p = Parser {
+        code_models: pre
+            .lines
+            .iter()
+            .filter(|l| l.tokens[0].lower().starts_with('a'))
+            .filter_map(|l| l.tokens.last().map(Token::lower))
+            .collect(),
         vdmos_models: pre
             .lines
             .iter()
@@ -130,6 +142,25 @@ fn parse_expanded(
                 });
             }
             p.element(&head, line);
+        }
+    }
+    for m in &mut p.models {
+        // An HDL module may share its name with an analog code-model family.
+        if (!p.has_hdl || p.code_models.contains(&m.name))
+            && let Err(d) = m.check_code_model_params()
+        {
+            p.diags.push(d);
+        }
+        if let Some(data) = &mut m.table {
+            let from = pre
+                .sources
+                .get(m.span.file as usize)
+                .filter(|v| !v.is_empty())
+                .map(String::as_str);
+            if let Err(msg) = data.read(loader, from) {
+                p.diags
+                    .push(Diagnostic::error("E-XSPICE-FILE", msg).with_span(m.span));
+            }
         }
     }
     p.resolve_bjt_substrates();
@@ -250,6 +281,7 @@ pub(crate) type DynamicCards<'a> =
 
 #[derive(Default)]
 struct Parser {
+    code_models: std::collections::HashSet<String>,
     vdmos_models: std::collections::HashSet<String>,
     title: Option<String>,
     prints: Vec<crate::PrintCard>,
@@ -414,6 +446,19 @@ impl Parser {
             line
         };
         let kind = match head.as_bytes().first() {
+            Some(b'a') => {
+                let t = self.need(line, 3, "Aname ports... model");
+                t.and_then(|t| match crate::xspice::ports(&t[1..t.len() - 1]) {
+                    Ok(ports) => Some(ElementKind::CodeModel {
+                        ports,
+                        model: t[t.len() - 1].lower(),
+                    }),
+                    Err(msg) => {
+                        self.err("E-XSPICE-PORT", msg, span);
+                        None
+                    }
+                })
+            }
             Some(b'o') => {
                 let Some(t) = self.need(line, 6, "Oname p1 n1 p2 n2 model") else {
                     return;
@@ -1691,7 +1736,7 @@ impl Parser {
                 ElementKind::Vdmos { .. } => &["vdmos"],
                 ElementKind::Diode { .. } => &["d"],
                 ElementKind::Bjt { .. } => &["npn", "pnp"],
-                ElementKind::Va { .. } => &[],
+                ElementKind::Va { .. } | ElementKind::CodeModel { .. } => &[],
                 _ => &["nmos", "pmos"],
             };
             let code = if matches!(e.kind, ElementKind::Switch { .. }) {
@@ -1707,6 +1752,18 @@ impl Parser {
                     )
                     .with_span(e.span),
                 ),
+                Some(m)
+                    if matches!(e.kind, ElementKind::CodeModel { .. })
+                        && !crate::analog_model(&m.kind) =>
+                {
+                    errs.push(
+                        Diagnostic::error(
+                            "E-XSPICE-MODEL",
+                            format!("{}: unsupported code model {}", e.name, m.kind),
+                        )
+                        .with_span(e.span),
+                    )
+                }
                 Some(m) if !expected.is_empty() && !expected.contains(&m.kind.as_str()) => errs
                     .push(
                         Diagnostic::error(
@@ -1738,6 +1795,14 @@ impl Parser {
         };
         let name = t[1].lower();
         let kind = t[2].lower();
+        if self.code_models.contains(&name) && !crate::analog_model(&kind) {
+            self.err(
+                "E-XSPICE-MODEL",
+                format!("unsupported code model {kind} ({name})"),
+                t[2].span,
+            );
+            return;
+        }
         if self.model_names.contains_key(&name) {
             self.err(
                 "E-PARSE-DUPLICATE",
@@ -1747,9 +1812,13 @@ impl Parser {
             return;
         }
         if let Some(index) = cached {
+            let table = self.models[index].table.clone();
+            let arrays = self.models[index].arrays.clone();
             let params = self.models[index].params.clone();
             let version = self.models[index].version.clone();
             self.models.push(ModelCard {
+                table,
+                arrays,
                 name,
                 kind,
                 version,
@@ -1759,6 +1828,8 @@ impl Parser {
             return;
         }
         let t = &parameters.tokens;
+        let mut table = None;
+        let mut arrays = Vec::new();
         let mut params = Vec::new();
         let mut version = None;
         let mut i = 3;
@@ -1785,6 +1856,42 @@ impl Parser {
                 );
                 return;
             };
+            if kind == "filesource" && k == "file" {
+                table = Some(crate::SourceTable {
+                    filename: vt.text.trim_matches('"').into(),
+                    rows: vec![],
+                });
+                i += 3;
+                continue;
+            }
+            if crate::analog_model(&kind) && vt.text == "[" {
+                let mut values = Vec::new();
+                i += 3;
+                while let Some(t) = t.get(i) {
+                    if t.text == "]" {
+                        break;
+                    }
+                    let Some(value) = self.number(t, &k) else {
+                        return;
+                    };
+                    values.push(value);
+                    i += 1;
+                }
+                if i == t.len() || values.is_empty() {
+                    self.err("E-PARSE-VALUE", format!("invalid vector for {k}"), vt.span);
+                    return;
+                }
+                arrays.push((k, values));
+                i += 1;
+                continue;
+            }
+            if crate::analog_model(&kind)
+                && matches!(vt.lower().as_str(), "true" | "false" | "yes" | "no")
+            {
+                params.push((k, f64::from(matches!(vt.lower().as_str(), "true" | "yes"))));
+                i += 3;
+                continue;
+            }
             if k == "version"
                 && matches!(kind.as_str(), "nmos" | "pmos")
                 && dotted_version(&vt.text)
@@ -1804,6 +1911,8 @@ impl Parser {
             i += 3;
         }
         self.models.push(ModelCard {
+            table,
+            arrays,
             name,
             kind,
             version,

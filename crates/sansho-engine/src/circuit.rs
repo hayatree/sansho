@@ -731,6 +731,19 @@ pub(crate) fn compile_cached(
             )
         };
         match &e.kind {
+            ElementKind::CodeModel { ports, .. } => {
+                for (i, port) in ports.iter().enumerate() {
+                    let current = port.modifier.starts_with('i');
+                    if (i + 1 == ports.len()) == current {
+                        continue;
+                    }
+                    for pair in port.nodes.chunks(if port.differential() { 2 } else { 1 }) {
+                        let a = g_id(node(&pair[0]));
+                        let b = pair.get(1).map_or(nn, |n| g_id(node(n)));
+                        dc.union(a, b);
+                    }
+                }
+            }
             ElementKind::Va { nodes, .. } => {
                 if let Some(first) = nodes.first() {
                     for n in &nodes[1..] {
@@ -1374,6 +1387,46 @@ fn native_groups<'a>(
     }
     for e in elements {
         match &e.kind {
+            ElementKind::CodeModel { ports, model } => {
+                let Some(card) = model_cache.card(model) else {
+                    errors.push(
+                        Diagnostic::error("E-ELAB-MODEL", format!("undefined code model {model}"))
+                            .with_span(e.span),
+                    );
+                    continue;
+                };
+                if card.kind == "filesource" {
+                    match sansho_devices::xspice::file_sources(ports, card) {
+                        Ok(sources) => {
+                            let port = &ports[0];
+                            for (i, (pair, src)) in port
+                                .nodes
+                                .chunks(if port.differential() { 2 } else { 1 })
+                                .zip(sources)
+                                .enumerate()
+                            {
+                                let name = format!("{}:{i}", e.name);
+                                let a = node(&pair[0]);
+                                let b = pair.get(1).and_then(|n| node(n));
+                                if port.modifier.starts_with('i') {
+                                    isrc.cur().push(&name, a, b, src);
+                                } else {
+                                    vsrc.cur().push(&name, a, b, src);
+                                }
+                            }
+                        }
+                        Err(d) => errors.push(d.with_span(e.span)),
+                    }
+                    continue;
+                }
+                match sansho_devices::xspice::Analog::new(&e.name, ports, card, &node) {
+                    Ok(d) => {
+                        nonlinear_count += usize::from(!d.is_linear());
+                        controlled.push(Box::new(d));
+                    }
+                    Err(d) => errors.push(d.with_span(e.span)),
+                }
+            }
             ElementKind::Va { .. } => {}
             ElementKind::Urc {
                 ports,

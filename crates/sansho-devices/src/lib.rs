@@ -36,6 +36,7 @@ pub mod urc;
 pub mod va;
 pub mod vdmos;
 pub mod waveform;
+pub mod xspice;
 
 pub use bjt::Bjts;
 pub use diode::Diodes;

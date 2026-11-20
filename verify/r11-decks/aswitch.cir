@@ -1,0 +1,17 @@
+Controlled resistance and voltage limiting against adjustable rails
+* Provenance: original Sansho circuit.
+Vdrive ctl 0 0
+Vdd supply 0 1.5
+Rfeed supply load 1k
+Aswitch ctl %gd(load 0) sw
+Vupper hi 0 0.8
+Vlower lo 0 0.2
+Aclip load hi lo clipped rail
+Rload clipped 0 10k
+.model sw aswitch(cntl_off=0 cntl_on=1 r_off=10k r_on=100 log=true)
+.model rail climit(in_offset=0 gain=1 out_lower_delta=0 out_upper_delta=0
++ limit_range=0.01 fraction=false)
+.dc Vdrive 0 1 0.05
+.save v(load) v(clipped)
+.print dc v(load) v(clipped)
+.end

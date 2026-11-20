@@ -25,6 +25,10 @@ use crate::lexer::{Line, Token, lex_source};
 
 /// Supplies the text of `.include` / `.lib` files.
 pub trait SourceLoader {
+    /// Read a waveform table within the main deck directory. Text-only loaders deny access.
+    fn waveform(&self, _path: &Path, _from: Option<&str>) -> Result<String, String> {
+        Err("filesource file access is disabled for this input".into())
+    }
     /// Identify an immutable include during this parse, for lexed-library reuse.
     fn cache_path(&self, _path: &str, _from: Option<&str>) -> Option<PathBuf> {
         None
@@ -74,6 +78,91 @@ impl FsLoader {
 }
 
 impl SourceLoader for FsLoader {
+    fn waveform(&self, path: &Path, from: Option<&str>) -> Result<String, String> {
+        use std::io::Read;
+        if path.as_os_str().is_empty()
+            || path.components().any(|c| {
+                !matches!(
+                    c,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            })
+        {
+            return Err("filesource needs a relative path without ..".into());
+        }
+        let err = |e: std::io::Error| format!("filesource {}: {e}", path.display());
+        let base = if self.base.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            &self.base
+        };
+        let root = base.canonicalize().map_err(err)?;
+        let location = from
+            .and_then(|f| Path::new(f).parent())
+            .unwrap_or(base)
+            .join(path);
+        let resolved = location.canonicalize().map_err(err)?;
+        if !resolved.starts_with(&root)
+            || !resolved.is_file()
+            || location.symlink_metadata().map_err(err)?.is_symlink()
+        {
+            return Err("filesource requires a regular file inside the deck directory".into());
+        }
+        #[cfg(not(target_os = "linux"))]
+        if resolved.parent() != Some(&root) {
+            return Err(
+                "filesource requires a file directly under the deck directory on this platform"
+                    .into(),
+            );
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(0o4000); // O_NONBLOCK protects against a racing FIFO substitution.
+        }
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "dragonfly"
+        ))]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // O_NOFOLLOW | O_NONBLOCK: check the leaf in the open operation.
+            options.custom_flags(0x100 | 0x4);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+        }
+        let mut handle = options.open(&resolved).map_err(err)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if handle.metadata().map_err(err)?.file_attributes() & 0x400 != 0 {
+                return Err("filesource cannot read a reparse point".into());
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            let pinned = PathBuf::from(format!("/proc/self/fd/{}", handle.as_raw_fd()));
+            if !pinned.canonicalize().map_err(err)?.starts_with(&root) {
+                return Err("filesource opened file escapes the deck directory".into());
+            }
+        }
+        if !handle.metadata().map_err(err)?.is_file() {
+            return Err("filesource expects a regular file".into());
+        }
+        let mut data = String::new();
+        handle.read_to_string(&mut data).map_err(err)?;
+        Ok(data)
+    }
     fn cache_path(&self, path: &str, from: Option<&str>) -> Option<PathBuf> {
         Some(self.resolve(path, from))
     }
@@ -858,10 +947,16 @@ impl Flat<'_> {
                         } else {
                             line
                         };
-                        let deferred = line.tokens.get(3..).is_some_and(|tail| {
-                            tail.chunks(3)
-                                .any(|kv| kv.get(2).is_some_and(|v| !is_number_literal(&v.text)))
-                        });
+                        let analog = line
+                            .tokens
+                            .get(2)
+                            .is_some_and(|t| crate::analog_model(&t.lower()));
+                        let deferred = !analog
+                            && line.tokens.get(3..).is_some_and(|tail| {
+                                tail.chunks(3).any(|kv| {
+                                    kv.get(2).is_some_and(|v| !is_number_literal(&v.text))
+                                })
+                            });
                         if deferred {
                             let captured = model_scope.get_or_insert_with(|| {
                                 Rc::new(ModelScope {
@@ -877,7 +972,9 @@ impl Flat<'_> {
                             self.model_scopes
                                 .insert(self.out.len(), Rc::clone(captured));
                         }
-                        let mut toks = if substituted || deferred {
+                        let mut toks = if analog {
+                            self.substitute(&crate::xspice::brackets(&line.tokens), scope)
+                        } else if substituted || deferred {
                             line.tokens.clone()
                         } else {
                             self.substitute(&line.tokens, scope)
@@ -993,6 +1090,24 @@ impl Flat<'_> {
             } else {
                 0
             };
+            if letter == 'a' && n >= 2 {
+                let mut fields = crate::xspice::brackets(&toks[1..n - 1]);
+                for t in &mut fields {
+                    if !t.text.starts_with('%')
+                        && !matches!(t.lower().as_str(), "[" | "]" | "~" | "null")
+                    {
+                        t.text = ctx.node(&self.defs, &t.text);
+                    }
+                }
+                let mut model = toks[n - 1].clone();
+                model.text = ctx.model(&model.text);
+                toks.truncate(1);
+                toks[0].text = ctx.element(&h);
+                toks.extend(fields);
+                toks.push(model);
+                self.push(toks, line);
+                continue;
+            }
             let node_slots: Vec<usize> = match letter {
                 'e' | 'g' if poly => (1..3.min(n))
                     .chain(5..5usize.saturating_add(dimensions.saturating_mul(2)).min(n))

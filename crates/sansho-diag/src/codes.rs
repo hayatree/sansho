@@ -326,6 +326,24 @@ pub const CODES: &[CodeInfo] = &[
         &["Point the controlling name at an independent voltage source (`V...`)."],
     ),
     e(
+        "E-XSPICE-FILE",
+        "Invalid waveform table",
+        "The waveform file could not be opened inside the deck directory or contains invalid data.",
+        &["Use a relative path to a regular file with time and signal columns."],
+    ),
+    e(
+        "E-XSPICE-PORT",
+        "Invalid code-model port",
+        "A port has an invalid type, terminal count or vector shape.",
+        &["Check the port order and types in docs/xspice.md."],
+    ),
+    e(
+        "E-XSPICE-MODEL",
+        "Unsupported code model",
+        "The A element references an unsupported code-model family.",
+        &["See docs/xspice.md for the supported analog families."],
+    ),
+    e(
         "E-ELAB-EMPTY",
         "Empty netlist",
         "The netlist has no elements.",

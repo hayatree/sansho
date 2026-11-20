@@ -1,0 +1,12 @@
+Smoothed limiter and piecewise linear transfer swept through both knees
+* Provenance: original Sansho circuit.
+Vsig in 0 0
+Aclamp in clip hard
+Acurve clip shape curve
+Rload shape 0 10k
+.model hard limit(gain=1 out_lower_limit=-1 out_upper_limit=1 limit_range=0.1 fraction=false)
+.model curve pwl(x_array=[-1 0 1] y_array=[0 0.2 1.2] input_domain=0.1 fraction=false)
+.dc Vsig -1.5 1.5 0.05
+.save v(clip) v(shape)
+.print dc v(clip) v(shape)
+.end

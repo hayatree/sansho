@@ -1,0 +1,17 @@
+Differential signal chain with weighted inputs and a ratio
+* Provenance: original Sansho circuit.
+Vsig in 0 dc 0.5 ac 1
+Vref ref 0 0.25
+Abuf %vd(in ref) vbuf amp
+Asum [vbuf ref] vsum add2
+Aproduct [vbuf vsum] prod mul2
+Adivide prod ref ratio quot
+Rload ratio 0 10k
+.model amp gain(in_offset=0.125 gain=2 out_offset=-0.25)
+.model add2 summer(in_gain=[1 -2] in_offset=[0 0.125] out_gain=2)
+.model mul2 mult(in_gain=[1 0.5])
+.model quot divide(den_lower_limit=0.01 den_domain=0.001)
+.dc Vsig 0 1 0.1
+.save v(vbuf) v(vsum) v(prod) v(ratio)
+.print dc v(vbuf) v(vsum) v(prod) v(ratio)
+.end

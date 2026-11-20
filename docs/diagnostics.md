@@ -46,6 +46,9 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`W-PLOT-IGNORED`](#w-plot-ignored) | warning | ASCII plot skipped |
 | [`W-OPT-INTERP`](#w-opt-interp) | warning | Transient output interpolation unavailable |
 | [`E-ELAB-CONTROL`](#e-elab-control) | error | Invalid controlling source |
+| [`E-XSPICE-FILE`](#e-xspice-file) | error | Invalid waveform table |
+| [`E-XSPICE-PORT`](#e-xspice-port) | error | Invalid code-model port |
+| [`E-XSPICE-MODEL`](#e-xspice-model) | error | Unsupported code model |
 | [`E-ELAB-EMPTY`](#e-elab-empty) | error | Empty netlist |
 | [`E-ELAB-INTERNAL`](#e-elab-internal) | error | Internal elaboration error |
 | [`E-ELAB-MODEL`](#e-elab-model) | error | Unsupported model |
@@ -317,6 +320,24 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Invalid controlling source.** A current-controlled source (F, H) references a name that is not a voltage source.
 
 - Point the controlling name at an independent voltage source (`V...`).
+
+## E-XSPICE-FILE
+
+**Invalid waveform table.** The waveform file could not be opened inside the deck directory or contains invalid data.
+
+- Use a relative path to a regular file with time and signal columns.
+
+## E-XSPICE-PORT
+
+**Invalid code-model port.** A port has an invalid type, terminal count or vector shape.
+
+- Check the port order and types in docs/xspice.md.
+
+## E-XSPICE-MODEL
+
+**Unsupported code model.** The A element references an unsupported code-model family.
+
+- See docs/xspice.md for the supported analog families.
 
 ## E-ELAB-EMPTY
 

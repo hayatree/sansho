@@ -353,6 +353,14 @@ pub fn write(nl: &Netlist) -> String {
         let name = &e.name;
         let mut l = String::new();
         match &e.kind {
+            ElementKind::CodeModel { ports, model } => {
+                let ports = ports
+                    .iter()
+                    .map(crate::CodePort::text)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let _ = write!(l, "{name} {ports} {model}");
+            }
             ElementKind::Va {
                 nodes,
                 model,
@@ -621,7 +629,13 @@ pub fn write(nl: &Netlist) -> String {
         if let Some(v) = &m.version {
             let _ = write!(l, "version={v} ");
         }
+        if let Some(t) = &m.table {
+            let _ = write!(l, "file=\"{}\" ", t.filename);
+        }
         l += &ps.join(" ");
+        for (k, values) in &m.arrays {
+            let _ = write!(l, " {k}=[{}]", list(values));
+        }
         l += ")";
         let _ = writeln!(out, "{l}");
     }

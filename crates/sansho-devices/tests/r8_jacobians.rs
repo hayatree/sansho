@@ -322,3 +322,54 @@ fn thermal_vdmos_coupled_jacobian_with_drift_resistance() {
         &[1.2, 1.4, 61., 45., 0.9, 0.05, 0.4],
     );
 }
+
+#[test]
+fn analog_port_residuals_and_dynamic_charges() {
+    let build = |card: &str, ports: &str| {
+        let nl = sansho_netlist::parse(&format!(
+            "finite differences\nAtest {ports} m\n.model m {card}\n"
+        ))
+        .unwrap();
+        let sansho_netlist::ElementKind::CodeModel { ports, .. } = &nl.elements[0].kind else {
+            unreachable!()
+        };
+        sansho_devices::xspice::Analog::new("atest", ports, &nl.models[0], |n| {
+            ["a", "b", "out"].iter().position(|&k| k == n)
+        })
+        .unwrap()
+    };
+    for (card, ports, bias) in [
+        (
+            "mult(in_gain=[2 3])",
+            "%vd[a b b 0] out",
+            vec![0.45, 0.2, 0.1, 0.002],
+        ),
+        (
+            "limit(out_lower_limit=-1 out_upper_limit=1 limit_range=0.1)",
+            "%vd(a b) out",
+            vec![1.22, 0.2, 0.1, 0.002],
+        ),
+        (
+            "pwl(x_array=[-1 0 2] y_array=[-2 0 1] input_domain=0.2 fraction=false)",
+            "%vd(a b) out",
+            vec![0.25, 0.2, 0.1, 0.002],
+        ),
+        (
+            "aswitch(cntl_off=-1 cntl_on=1 r_off=1k r_on=10 log=true)",
+            "a %hd(out b)",
+            vec![0.4, 0.2, 0.1, 0.002],
+        ),
+        (
+            "d_dt(gain=0.5 out_lower_limit=-1 out_upper_limit=1)",
+            "%id(a b) %i(out)",
+            vec![0.4, 0.2, 0.1, 0.003, 0.002, 0.7],
+        ),
+        (
+            "s_xfer(den_coeff=[2 3 4] num_coeff=[3 1] denormalized_freq=1000)",
+            "%vd(a b) out",
+            vec![0.4, 0.2, 0.1, 0.002, 0.3, 0.5],
+        ),
+    ] {
+        check(build(card, ports), &["a", "b", "out"], &bias);
+    }
+}

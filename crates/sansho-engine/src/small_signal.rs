@@ -478,49 +478,62 @@ fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
                 continue;
             }
 
-            if matches!(
-                key.as_str(),
-                "is" | "n"
-                    | "bf"
-                    | "br"
-                    | "nf"
-                    | "nr"
-                    | "vaf"
-                    | "ikf"
-                    | "ise"
-                    | "vto"
-                    | "vt0"
-                    | "gamma"
-                    | "kp"
-                    | "lambda"
-                    | "phi"
-                    | "u0"
-                    | "uo"
-                    | "vth0"
-                    | "k1"
-                    | "k2"
-                    | "vsat"
-                    | "tox"
-                    | "toxe"
-                    | "tnom"
-                    | "tc1"
-                    | "tc2"
-            ) || (matches!(m.kind.as_str(), "nmos" | "pmos")
-                && matches!(level, 2. | 3.)
-                && *v > 0.
+            if (sansho_netlist::analog_model(&m.kind)
                 && matches!(
                     key.as_str(),
-                    "theta"
-                        | "eta"
-                        | "vmax"
-                        | "delta"
-                        | "nsub"
-                        | "nfs"
-                        | "ucrit"
-                        | "uexp"
-                        | "kappa"
-                        | "xj"
+                    "gain"
+                        | "out_gain"
+                        | "in_offset"
+                        | "out_offset"
+                        | "num_gain"
+                        | "den_gain"
+                        | "num_offset"
+                        | "den_offset"
                 ))
+                || matches!(
+                    key.as_str(),
+                    "is" | "n"
+                        | "bf"
+                        | "br"
+                        | "nf"
+                        | "nr"
+                        | "vaf"
+                        | "ikf"
+                        | "ise"
+                        | "vto"
+                        | "vt0"
+                        | "gamma"
+                        | "kp"
+                        | "lambda"
+                        | "phi"
+                        | "u0"
+                        | "uo"
+                        | "vth0"
+                        | "k1"
+                        | "k2"
+                        | "vsat"
+                        | "tox"
+                        | "toxe"
+                        | "tnom"
+                        | "tc1"
+                        | "tc2"
+                )
+                || (matches!(m.kind.as_str(), "nmos" | "pmos")
+                    && matches!(level, 2. | 3.)
+                    && *v > 0.
+                    && matches!(
+                        key.as_str(),
+                        "theta"
+                            | "eta"
+                            | "vmax"
+                            | "delta"
+                            | "nsub"
+                            | "nfs"
+                            | "ucrit"
+                            | "uexp"
+                            | "kappa"
+                            | "xj"
+                    ))
                 || (matches!(m.kind.as_str(), "njf" | "pjf" | "nmf" | "pmf")
                     && matches!(key.as_str(), "beta" | "alpha" | "b" | "pb" | "cgs" | "cgd")
                     && *v != 0.)
