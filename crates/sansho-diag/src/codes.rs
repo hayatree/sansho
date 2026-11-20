@@ -246,11 +246,29 @@ pub const CODES: &[CodeInfo] = &[
         "A value is out of range, e.g. a zero resistance or a non-finite number.",
         &["Use a finite value in the valid range for the parameter."],
     ),
+    e(
+        "E-CONTROL",
+        "Invalid control program",
+        "A batch command, expression, or block could not be evaluated.",
+        &["Check the command and source location against docs/control.md."],
+    ),
+    e(
+        "E-CONTROL-LIMIT",
+        "Control iteration limit exceeded",
+        "The script exhausted its shared iteration budget.",
+        &["Check loop conditions and increments."],
+    ),
+    e(
+        "E-CONTROL-OUTPUT",
+        "Control output denied or failed",
+        "The output policy or filesystem prevented a control command from writing its file.",
+        &["Use a permitted output directory and a relative filename."],
+    ),
     w(
-        "W-PARSE-CONTROL",
-        "`.control` block skipped",
-        "ngspice `.control` scripts are not executed by Sansho.",
-        &["Use analysis cards and `.meas` instead of control scripts."],
+        "W-CONTROL-GRAPHICS",
+        "Graphics command skipped",
+        "Batch execution has no plotting window.",
+        &["Use print, write or wrdata to inspect values."],
     ),
     w(
         "W-PARSE-IGNORED",

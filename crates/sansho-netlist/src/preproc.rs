@@ -92,6 +92,9 @@ impl SourceLoader for FsLoader {
 /// Result of preprocessing.
 #[derive(Debug)]
 pub(crate) struct Expanded {
+    pub controls: Vec<Vec<crate::control::Statement>>,
+    pub csparams: std::collections::BTreeMap<String, f64>,
+    pub parameter_source: Option<String>,
     pub fields: HashMap<usize, Vec<(usize, Expr)>>,
     pub title: String,
     pub lines: Vec<Line>,
@@ -390,6 +393,7 @@ fn num_text(v: f64) -> String {
 }
 
 struct Pre<'l> {
+    controls: HashMap<(u32, u32), Vec<crate::control::Statement>>,
     libraries: HashMap<PathBuf, Rc<Vec<Line>>>,
     volatile_reads: usize,
     loader: &'l dyn SourceLoader,
@@ -437,7 +441,7 @@ impl Pre<'_> {
         }
     }
 
-    /// Expand `.include` / `.lib`, drop `.control` blocks, stop at `.end`.
+    /// Expand `.include` / `.lib`, retain `.control` programs, stop at `.end`.
     fn expand(&mut self, lines: Vec<Line>, depth: usize, out: &mut Vec<Line>) {
         let mut it = lines.into_iter();
         while let Some(line) = it.next() {
@@ -483,16 +487,25 @@ impl Pre<'_> {
                 }
                 ".end" => break,
                 ".control" => {
-                    self.diags.push(
-                        Diagnostic::warning(
-                            "W-PARSE-CONTROL",
-                            ".control blocks are not supported and were skipped",
-                        )
-                        .with_span(line.span()),
-                    );
+                    let mut body = Vec::new();
+                    let mut closed = false;
                     for l in it.by_ref() {
                         if head(&l) == ".endc" {
+                            closed = true;
                             break;
+                        }
+                        body.push(l);
+                    }
+                    if !closed {
+                        self.error("E-CONTROL", "missing .endc", line.span());
+                    } else {
+                        match crate::control::parse(&body) {
+                            Ok(program) => {
+                                let span = line.span();
+                                self.controls.insert((span.file, span.line), program);
+                                out.push(line);
+                            }
+                            Err(d) => self.diags.push(d),
                         }
                     }
                 }
@@ -638,6 +651,7 @@ fn token_site(path: u64, token: &Token) -> u64 {
 }
 
 struct Flat<'l> {
+    controls: Vec<Vec<crate::control::Statement>>,
     statistical: bool,
     fields: HashMap<usize, Vec<(usize, Expr)>>,
     global_model_scope: Rc<Scope<'static>>,
@@ -718,6 +732,16 @@ impl Flat<'_> {
         for (offset, line) in lines.iter().enumerate() {
             let h = head(line);
             let span = line.span();
+            if h == ".control"
+                && let Some(program) = self.pre.controls.get(&(span.file, span.line))
+            {
+                if ctx.prefix.is_empty() {
+                    self.controls.push(program.clone())
+                } else {
+                    self.error("E-CONTROL", "control block inside a subcircuit", span)
+                }
+                continue;
+            }
             let emitted = !h.starts_with('.')
                 || ctx.prefix.is_empty()
                 || matches!(h.as_str(), ".ic" | ".nodeset" | ".save");
@@ -1661,9 +1685,19 @@ pub(crate) fn preprocess_with(
     loader: &dyn SourceLoader,
     statistical: bool,
 ) -> Expanded {
+    preprocess_params(text, loader, statistical, &Default::default())
+}
+
+pub(crate) fn preprocess_params(
+    text: &str,
+    loader: &dyn SourceLoader,
+    statistical: bool,
+    parameters: &std::collections::BTreeMap<String, f64>,
+) -> Expanded {
     let _phase = sansho_diag::Phase::start("netlist_pre");
     let lexed = lex_source(text, 0, true);
     let mut flat = Flat {
+        controls: vec![],
         statistical,
         fields: Default::default(),
         global_model_scope: Rc::new(Scope::new(None)),
@@ -1672,6 +1706,7 @@ pub(crate) fn preprocess_with(
         next_version: 0,
         defs: Defs::default(),
         pre: Pre {
+            controls: Default::default(),
             loader,
             libraries: Default::default(),
             volatile_reads: 0,
@@ -1684,7 +1719,33 @@ pub(crate) fn preprocess_with(
     };
     let mut global = Scope::new(None);
     global.fixed.insert("temper".into(), 27.);
+    global.fixed.extend(parameters.clone());
     let lines = flat.prepare(lexed.lines, &mut global, 0);
+    let mut csparams = std::collections::BTreeMap::new();
+    let mut lines = lines;
+    lines.retain(|line| {
+        if head(line) != ".csparam" {
+            return true;
+        }
+        let result = split_assignments(raw_rest(line)).and_then(|pairs| {
+            for (name, expression) in pairs {
+                csparams.insert(name, global.eval_text(&expression, &flat.defs.funcs)?);
+            }
+            Ok(())
+        });
+        if let Err(e) = result {
+            flat.error("E-CONTROL", e, line.span());
+        }
+        false
+    });
+    for name in parameters.keys() {
+        if !global.defs.contains_key(name) {
+            flat.diags.push(Diagnostic::error(
+                "E-CONTROL",
+                format!("unknown global parameter {name}"),
+            ));
+        }
+    }
     let top = collect(lines, &mut flat.defs, &mut HashSet::new(), &mut flat.diags);
     flat.global_model_scope = Rc::new(global.snapshot());
     let empty = HashSet::new();
@@ -1700,6 +1761,10 @@ pub(crate) fn preprocess_with(
     flat.run(&top, &ctx, &global, 0, false, None);
     flat.diags.extend(flat.pre.diags);
     Expanded {
+        parameter_source: (!flat.controls.is_empty() && !global.defs.is_empty())
+            .then(|| text.to_owned()),
+        controls: flat.controls,
+        csparams,
         fields: flat.fields,
         hdl: flat.pre.hdl,
         title: lexed.title,

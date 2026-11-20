@@ -148,7 +148,7 @@ impl Probes {
         if savecurrents {
             requests.extend(currents(nl));
         }
-        if requests.is_empty() {
+        if requests.is_empty() && nl.control_probes.is_empty() {
             return Ok(Self::default());
         }
         let mut devices = BTreeMap::new();
@@ -157,6 +157,20 @@ impl Probes {
                 if let Some(name) = g.instance_name(i) {
                     devices.insert(name, (k, i));
                 }
+            }
+        }
+        // A control expression may refer to either a static model/instance parameter or
+        // an observable. Only the latter needs sampling. Explicit save requests above
+        // still diagnose unknown names.
+        for name in &nl.control_probes {
+            if let Some((dev, param)) = name
+                .strip_prefix('@')
+                .and_then(|s| s.strip_suffix(']'))
+                .and_then(|s| s.split_once('['))
+                && let Some(&(k, _)) = devices.get(dev)
+                && quantity(ckt.groups[k].type_name(), dev, param).is_some()
+            {
+                requests.insert(name.clone());
             }
         }
         let mut grouped = BTreeMap::<usize, Vec<Field>>::new();

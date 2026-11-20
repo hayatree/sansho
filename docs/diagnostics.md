@@ -33,7 +33,10 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-PARSE-SUBCKT`](#e-parse-subckt) | error | Invalid subcircuit |
 | [`E-PARSE-UNEXPECTED`](#e-parse-unexpected) | error | Unexpected token |
 | [`E-PARSE-VALUE`](#e-parse-value) | error | Invalid value |
-| [`W-PARSE-CONTROL`](#w-parse-control) | warning | `.control` block skipped |
+| [`E-CONTROL`](#e-control) | error | Invalid control program |
+| [`E-CONTROL-LIMIT`](#e-control-limit) | error | Control iteration limit exceeded |
+| [`E-CONTROL-OUTPUT`](#e-control-output) | error | Control output denied or failed |
+| [`W-CONTROL-GRAPHICS`](#w-control-graphics) | warning | Graphics command skipped |
 | [`W-PARSE-IGNORED`](#w-parse-ignored) | warning | Parameter ignored |
 | [`W-PARSE-UNSUPPORTED`](#w-parse-unsupported) | warning | Control card ignored |
 | [`W-OPT-IGNORED`](#w-opt-ignored) | warning | Option ignored |
@@ -237,11 +240,29 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 - Use a finite value in the valid range for the parameter.
 
-## W-PARSE-CONTROL
+## E-CONTROL
 
-**`.control` block skipped.** ngspice `.control` scripts are not executed by Sansho.
+**Invalid control program.** A batch command, expression, or block could not be evaluated.
 
-- Use analysis cards and `.meas` instead of control scripts.
+- Check the command and source location against docs/control.md.
+
+## E-CONTROL-LIMIT
+
+**Control iteration limit exceeded.** The script exhausted its shared iteration budget.
+
+- Check loop conditions and increments.
+
+## E-CONTROL-OUTPUT
+
+**Control output denied or failed.** The output policy or filesystem prevented a control command from writing its file.
+
+- Use a permitted output directory and a relative filename.
+
+## W-CONTROL-GRAPHICS
+
+**Graphics command skipped.** Batch execution has no plotting window.
+
+- Use print, write or wrdata to inspect values.
 
 ## W-PARSE-IGNORED
 

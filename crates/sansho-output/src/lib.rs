@@ -108,6 +108,8 @@ pub struct Variable {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AnalysisKind {
+    /// User-created vector plot.
+    Vectors,
     Sp,
     Harmonic2,
     Harmonic3,
@@ -141,6 +143,7 @@ impl AnalysisKind {
     /// ngspice plot name.
     pub fn plot_name(self) -> &'static str {
         match self {
+            Self::Vectors => "unknown",
             Self::Sp => "SP Analysis",
             Self::Harmonic2 => "DISTORTION - 2nd harmonic",
             Self::Harmonic3 => "DISTORTION - 3rd harmonic",

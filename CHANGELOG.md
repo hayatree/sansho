@@ -4,6 +4,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Execute batch control blocks from the CLI, session API and MCP. Scripts can run analyses, sweep circuit values, compute vectors, measure named plots and write raw or tabular results. The verifier compares script-generated files and repeated measurements. [Batch control language](docs/control.md)
+
 - Add N-port S, Y and Z analysis and two-port noise parameters through netlists, the session API and MCP. A four-temperature matched-pad sweep confirms circuit-temperature noise normalization.
 - Add single-tone and two-tone small-signal distortion with analytic current and charge derivatives for diodes, Gummel–Poon BJTs and level-one MOSFETs.
 - Add the level-six power-law MOS channel and extend VDMOS with subthreshold shape, drain drift resistance, threshold temperature translation and a coupled thermal network using RTHJC, RTHCA and CTHJ. THERMAL requires five nodes and reports E-PARSE-ARITY for missing pins. Correct hot drain resistance and open-case startup against ngspice 44.2. The gate-pulse comparison and all twelve thermal follow-up sweeps pass. CTHJC gives an ignored-parameter warning.

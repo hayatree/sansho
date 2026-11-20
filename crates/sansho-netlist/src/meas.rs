@@ -28,6 +28,7 @@ const KEYWORDS: &[&str] = &[
 
 struct Cursor<'a> {
     t: &'a [Token],
+    vectors: &'a [String],
     i: usize,
     card: Span,
 }
@@ -78,7 +79,8 @@ impl<'a> Cursor<'a> {
     fn signal(&mut self) -> Result<Signal, Diagnostic> {
         let f = self.next("a signal")?;
         let name = f.lower();
-        if name.starts_with('@')
+        if self.vectors.contains(&name)
+            || name.starts_with('@')
             || name.starts_with("onoise.")
             || matches!(name.as_str(), "onoise_spectrum" | "inoise_spectrum")
         {
@@ -245,6 +247,11 @@ impl<'a> Cursor<'a> {
 
 /// Parse one `.meas` line.
 pub(crate) fn parse_meas(line: &Line) -> Result<MeasureCard, Diagnostic> {
+    parse_control_meas(line, &[])
+}
+
+/// Parse a measurement against the named vectors available in a control plot.
+pub fn parse_control_meas(line: &Line, vectors: &[String]) -> Result<MeasureCard, Diagnostic> {
     let span = line.span();
     let t = &line.tokens;
     if t.len() < 4 {
@@ -271,6 +278,7 @@ pub(crate) fn parse_meas(line: &Line) -> Result<MeasureCard, Diagnostic> {
     let name = t[2].lower();
     let mut c = Cursor {
         t,
+        vectors,
         i: 3,
         card: span,
     };
@@ -384,6 +392,7 @@ pub(crate) fn parse_print(line: &Line) -> Result<crate::PrintCard, Diagnostic> {
     }
     let mut c = Cursor {
         t,
+        vectors: &[],
         i: 2,
         card: span,
     };

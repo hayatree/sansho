@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod control;
 mod expr;
 mod lexer;
 mod meas;
@@ -22,8 +23,9 @@ pub use statistics::Sample;
 
 pub use expr::{Expr, eval as eval_expr, eval_const, parse_behavior, parse_expr};
 pub use lexer::{Lexed, Line, Token, lex, lex_source};
+pub use meas::parse_control_meas;
 pub use number::parse_number;
-pub use parser::{parse, parse_with, prepare_parameters};
+pub use parser::{parse, parse_parameters, parse_with, prepare_parameters};
 pub use preproc::{FsLoader, NoFiles, SourceLoader};
 pub use sansho_diag::{Diagnostic, Severity, Span};
 pub use writer::{write, write_analysis, write_measure};
@@ -58,6 +60,12 @@ pub const GROUND: &str = "0";
 pub struct Netlist {
     /// Title line.
     pub title: String,
+    /// Batch control blocks, in encounter order.
+    pub controls: Vec<Vec<control::Statement>>,
+    pub csparams: std::collections::BTreeMap<String, f64>,
+    /// Original input for re-elaboration of global parameters by alterparam/reset.
+    #[serde(skip)]
+    pub parameter_source: Option<String>,
     /// Circuit elements in source order.
     pub elements: Vec<Element>,
     /// Loaded Verilog-A translation units.
@@ -68,6 +76,9 @@ pub struct Netlist {
     pub options: Vec<OptionCard>,
     /// `.model` cards in source order.
     pub models: Vec<ModelCard>,
+    /// Optional device observables referenced by a running control script.
+    #[serde(skip)]
+    pub control_probes: Vec<String>,
     /// Requested output vector names across all `.save` cards (empty means all).
     pub saves: Vec<String>,
     /// Batch output selections.

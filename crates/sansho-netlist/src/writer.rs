@@ -673,6 +673,14 @@ pub fn write(nl: &Netlist) -> String {
     for m in &nl.measures {
         let _ = writeln!(out, "{}", write_measure(m));
     }
+    for (name, value) in &nl.csparams {
+        out += &format!(".csparam {name}={value}\n");
+    }
+    for block in &nl.controls {
+        out += ".control\n";
+        crate::control::write(block, &mut out);
+        out += ".endc\n";
+    }
     out += ".end\n";
     out
 }

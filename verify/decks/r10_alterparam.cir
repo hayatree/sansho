@@ -1,0 +1,19 @@
+R10 re-elaborate a global resistance parameter
+* Provenance: original Sansho R10 circuit.
+.param top=1000
+V1 in 0 1
+R1 in out {top}
+R2 out 0 1k
+.control
+let resistance = 1000
+repeat 3
+  alterparam top = $&resistance
+  reset
+  dc v1 0 1 .25
+  meas dc output find v(out) at=1
+  setplot const
+  let resistance = resistance * 2
+end
+quit
+.endc
+.end

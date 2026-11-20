@@ -90,7 +90,7 @@ cargo run --release -p sansho-verify -- --cached verify/va-decks
 
 Cached mode uses the local circuit inputs, `*.ref.raw` waveforms and, for measured
 decks, `*.ref.meas` logs. It runs Sansho locally and requires no Docker process or
-OSDI artifact. A missing reference for a locally runnable deck is a failure.
+OSDI artifact. A missing reference for a locally runnable analysis-card deck is a failure. Control decks use the cache layout described below.
 
 ## Monte Carlo distributions
 
@@ -408,3 +408,26 @@ The R8 diode temperature sweep now uses TCV and awaits a regenerated 44.2 refere
 All seven decks pass their cached 44.2 references. The filter compares 20 complex traces at nine frequencies and the BJT compares 33, including the short-circuit noise correlations. The hot VDMOS transfer compares 122 currents with a maximum error of 0.264 µA. The CTHJ pulse scores 0.001 on junction voltage (0.348 mK maximum error), 0.729 on drain voltage and 0.327 on supply current. All 49 R9 probe sweeps pass, including the 12 follow-up sweeps on the thermal boundary, hot channel and body diode. [Measurements and probe decks](probes/README.md#r9d-thermal-probe-results)
 
 Each R9 deck produces byte-identical binary raw output with one and two workers. The unit tests also check analytic attenuation and noise, asymmetric port matrices, harmonic and intermodulation amplitudes and phases, the loaded-diode third-order feedback term, MOS6 channel derivatives and the coupled electrical/thermal Jacobian.
+
+## R10 control decks
+
+Generate script references in the maintainer's ngspice 44 Docker environment, then replay them offline.
+
+```sh
+cargo run --release -p sansho-verify -- verify/decks/r10_*.cir
+cargo run --release -p sansho-verify -- --cached verify/decks/r10_*.cir
+```
+
+The harness runs Sansho first. The reference invocation is `ngspice -b deck.cir` with a fresh working directory and the deck's own output commands. Only reviewed decks should be passed to the external oracle. Generated files live under `<stem>.ref.control/` and `<stem>.sansho.control/` in the verifier output directory. The reference stdout is `<stem>.ref.control.log`. Native-endian binary and ASCII raw files are compared by plot, scale and signal. Text tables compare row and column counts, header fields and numeric values. Repeated measurements compare in execution order. For the seven original R10 decks, a wholly absent cache selects an independent closed-form comparison and reports `ANALYTIC`. These results have a separate count and never populate the ngspice cache. The formulas cover every written file and ordered measurement. An incomplete cache, an unknown deck without a cache, or a failed simulation is an error.
+
+| Deck | Quantity |
+|---|---|
+| `r10_alter_meas` | Three divider endpoints as the load is altered in a repeat loop. |
+| `r10_foreach_temp` | Temperature coefficient of a series resistor at 0, 27 and 80 °C. |
+| `r10_ac_vectors` | RC gain in dB, phase in radians and gain slope in a wrdata table. |
+| `r10_linearize` | Uniform-grid transient ramp in a binary raw file. |
+| `r10_setplot` | Difference between two DC curves in a selected plot, written as ASCII raw. |
+| `r10_mos_model` | Drain supply current after two MOS1 threshold changes. |
+| `r10_alterparam` | Three globally parameterized divider ratios after reset. |
+
+The API tests exercise all seven decks independently of the oracle cache, compare numerical outputs with circuit laws, and compare transcripts, plots and output bytes with one and two workers.

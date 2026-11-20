@@ -32,6 +32,7 @@ fn err(line: usize, message: impl Into<String>) -> RawError {
 fn kind_of(plot: &str) -> Option<AnalysisKind> {
     let p = plot.to_ascii_lowercase();
     for kind in [
+        AnalysisKind::Vectors,
         AnalysisKind::Sp,
         AnalysisKind::Harmonic2,
         AnalysisKind::Harmonic3,
@@ -135,6 +136,14 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
             return Err(err(plot_line, "missing variable or point count"));
         };
         i += 1;
+        let fields = nv
+            .checked_add(1)
+            .and_then(|n| np.checked_mul(n))
+            .filter(|&n| n <= text.len())
+            .ok_or_else(|| err(plot_line, "raw dimensions exceed input length"))?;
+        if nv > lines.len().saturating_sub(i) {
+            return Err(err(plot_line, "incomplete variable table"));
+        }
         let mut vars = Vec::with_capacity(nv);
         for _ in 0..nv {
             let f: Vec<&str> = lines
@@ -167,8 +176,8 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
         }
         i += 1;
         // Values: each point is an index followed by nv values, whitespace separated.
-        let mut toks: Vec<&str> = Vec::with_capacity(np * (nv + 1));
-        while toks.len() < np * (nv + 1) && i < lines.len() {
+        let mut toks: Vec<&str> = Vec::with_capacity(fields);
+        while toks.len() < fields && i < lines.len() {
             let l = lines[i].trim_start();
             if l.starts_with(|c: char| c.is_ascii_alphabetic()) && l.contains(':') {
                 break;
@@ -176,7 +185,7 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
             toks.extend(lines[i].split_whitespace());
             i += 1;
         }
-        if toks.len() < np * (nv + 1) {
+        if toks.len() < fields {
             return Err(err(i, "fewer values than declared"));
         }
         let mut re: Vec<Vec<f64>> = vec![Vec::with_capacity(np); nv];

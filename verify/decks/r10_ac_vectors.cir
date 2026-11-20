@@ -1,0 +1,15 @@
+R10 one-pole AC voltage and slope
+* Provenance: original Sansho R10 circuit.
+V1 in 0 ac 1
+R1 in out 1k
+C1 out 0 10n
+.control
+ac lin 11 1000 1001
+let gain = db(v(out))
+let phase = ph(v(out))
+let slope = deriv(gain)
+set wr_singlescale
+wrdata response.dat gain phase slope
+quit
+.endc
+.end

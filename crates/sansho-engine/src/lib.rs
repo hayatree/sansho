@@ -167,7 +167,7 @@ pub fn check(nl: &Netlist) -> Result<Checked, Vec<Diagnostic>> {
     probes::Probes::bind(&circuit, nl, options.savecurrents).map_err(|d| vec![d])?;
     warnings.extend(w);
     warnings.extend(lint::lint(nl, &circuit, &options));
-    if nl.analyses.is_empty() {
+    if nl.analyses.is_empty() && nl.controls.is_empty() {
         warnings.push(Diagnostic::warning(
             "W-RUN-NOANALYSIS",
             "the netlist contains no analysis card (.op, .dc, .ac, .tran)",

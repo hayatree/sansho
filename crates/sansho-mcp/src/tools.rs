@@ -78,7 +78,7 @@ const TOOLS: &[Tool] = &[
                       analysis cards including sp, disto, noise, tf, sens, four and pz, e.g. [\"tran 1n 1u\", \"ac dec 20 1 1g\"]. Returns a \
                       compact summary: job_id, status, operating-point values, per-signal \
                       min/max/first/last, .meas results with units, diagnostics, input and \
-                      result hashes. Include .save @m1[gm] @m1[gds] @m1[vth] to record MOS bias quantities for get_waveform.",
+                      result hashes. Control blocks return ordered prints, measurements and plot names. Script file output is disabled. Include .save @m1[gm] @m1[gds] @m1[vth] to record MOS bias quantities for get_waveform.",
         read_only: false,
         schema: || {
             json!({"type":"object","properties":{

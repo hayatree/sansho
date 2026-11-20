@@ -1,0 +1,13 @@
+R10 uniform samples of a ramp divider
+* Provenance: original Sansho R10 circuit.
+V1 in 0 pwl(0 0 1u 1)
+R1 in out 3k
+R2 out 0 1k
+.control
+tran 25n 1u
+linearize v(out)
+set filetype=binary
+write uniform.raw v(out)
+quit
+.endc
+.end

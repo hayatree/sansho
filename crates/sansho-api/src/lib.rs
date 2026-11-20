@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 mod alter;
+pub mod control;
 mod hash;
 mod summary;
 mod waveform;
@@ -173,6 +174,7 @@ pub struct Explanation {
 
 #[derive(Debug)]
 struct Loaded {
+    altered: bool,
     netlist: Netlist,
 }
 
@@ -337,7 +339,13 @@ impl Session {
         let id = self.next_circuit;
         self.next_circuit += 1;
         let input_hash = hash::netlist(&nl);
-        self.circuits.insert(id, Loaded { netlist: nl });
+        self.circuits.insert(
+            id,
+            Loaded {
+                netlist: nl,
+                altered: false,
+            },
+        );
         Ok(LoadReport {
             circuit_id: format!("c{id}"),
             input_hash,
@@ -349,7 +357,14 @@ impl Session {
     /// Canonical SPICE deck of a loaded circuit (with all alterations applied), accepted by
     /// both Sansho and ngspice.
     pub fn export(&self, circuit_id: &str) -> Result<String, ApiError> {
-        Ok(sansho_netlist::write(&self.circuit(circuit_id)?.netlist))
+        let loaded = self.circuit(circuit_id)?;
+        if !loaded.altered
+            && loaded.netlist.sources.len() == 1
+            && let Some(source) = &loaded.netlist.parameter_source
+        {
+            return Ok(source.clone());
+        }
+        Ok(sansho_netlist::write(&loaded.netlist))
     }
 
     /// Rough cost estimate of simulating a loaded circuit.
@@ -367,7 +382,45 @@ impl Session {
         circuit_id: &str,
         analyses: Option<&[String]>,
     ) -> Result<JobSummary, ApiError> {
+        self.simulate_with_control(circuit_id, analyses, &control::ControlOptions::default())
+    }
+
+    /// Execute control blocks with an explicit output capability. An explicit analysis
+    /// override bypasses the script. MCP always uses the file-disabled default.
+    pub fn simulate_with_control(
+        &mut self,
+        circuit_id: &str,
+        analyses: Option<&[String]>,
+        options: &control::ControlOptions,
+    ) -> Result<JobSummary, ApiError> {
         let mut nl = self.circuit(circuit_id)?.netlist.clone();
+        if analyses.is_none() && !nl.controls.is_empty() {
+            let start = Instant::now();
+            let output = self.install(|| control::execute(&nl, options));
+            let out = if output.diagnostics.iter().any(Diagnostic::is_error) {
+                Err(sansho_engine::RunError {
+                    diagnostics: output.diagnostics,
+                    partial: Some(output.results),
+                    measurement_context: None,
+                })
+            } else {
+                Ok(sansho_engine::RunOutput {
+                    results: output.results,
+                    warnings: output.diagnostics,
+                    measurement_context: None,
+                    noise_summary_intervals: vec![],
+                    tran_stats: vec![],
+                    dc_stats: vec![],
+                })
+            };
+            return Ok(self.store(
+                circuit_id,
+                &nl,
+                out,
+                start.elapsed().as_secs_f64() * 1000.,
+                Some(output.transcript),
+            ));
+        }
         if let Some(lines) = analyses {
             let cards = parse_cards(lines, ".")?;
             if cards.analyses.is_empty() {
@@ -379,7 +432,7 @@ impl Session {
             let t0 = Instant::now();
             (sansho_engine::run_in_current_pool(&nl), t0.elapsed())
         });
-        Ok(self.store(circuit_id, &nl, out, elapsed.as_secs_f64() * 1e3))
+        Ok(self.store(circuit_id, &nl, out, elapsed.as_secs_f64() * 1e3, None))
     }
 
     fn store(
@@ -388,6 +441,7 @@ impl Session {
         nl: &Netlist,
         out: Result<sansho_engine::RunOutput, sansho_engine::RunError>,
         elapsed_ms: f64,
+        control: Option<control::Transcript>,
     ) -> JobSummary {
         let id = self.next_job;
         self.next_job += 1;
@@ -408,7 +462,7 @@ impl Session {
                 Status::Error,
             ),
         };
-        let summary = summary::job(
+        let mut summary = summary::job(
             summary::JobMeta {
                 job_id: job_id.clone(),
                 circuit_id: circuit_id.to_string(),
@@ -422,6 +476,10 @@ impl Session {
             diagnostics,
             self.opts.max_signals,
         );
+        if let Some(t) = control {
+            summary.result_hash = hash::control(&summary.result_hash, &t);
+            summary.control = Some(t);
+        }
         self.jobs.insert(
             id,
             Job {
@@ -523,6 +581,7 @@ impl Session {
             && let Some(l) = self.circuits.get_mut(&k)
         {
             l.netlist = nl;
+            l.altered |= !changes.is_empty();
         }
         Ok(AlterReport {
             circuit_id: circuit_id.trim().to_string(),
@@ -573,7 +632,7 @@ impl Session {
         });
         let mut rows = Vec::with_capacity(values.len());
         for ((nl, (out, el)), &v) in decks.iter().zip(outs).zip(values) {
-            let s = self.store(circuit_id, nl, out, el.as_secs_f64() * 1e3);
+            let s = self.store(circuit_id, nl, out, el.as_secs_f64() * 1e3, None);
             rows.push(SweepRow {
                 value: v,
                 job_id: s.job_id,

@@ -26,6 +26,18 @@ pub fn parse_with(text: &str, loader: &dyn SourceLoader) -> Result<Netlist, Vec<
     parse_expanded(preprocess(text, loader), false).map(|p| p.nominal)
 }
 
+/// Re-elaborate a self-contained deck with global parameter overrides, without filesystem access.
+pub fn parse_parameters(
+    text: &str,
+    overrides: &std::collections::BTreeMap<String, f64>,
+) -> Result<Netlist, Vec<Diagnostic>> {
+    parse_expanded(
+        crate::preproc::preprocess_params(text, &NoFiles, false, overrides),
+        false,
+    )
+    .map(|p| p.nominal)
+}
+
 /// Compile the lexical parameter environments for a statistical batch.
 pub fn prepare_parameters(
     text: &str,
@@ -157,6 +169,10 @@ fn parse_expanded(
         directives,
         models: model_bindings,
         nominal: Netlist {
+            controls: pre.controls,
+            control_probes: vec![],
+            csparams: pre.csparams,
+            parameter_source: pre.parameter_source,
             hdl: pre.hdl,
             title: p.title.unwrap_or(pre.title),
             sources: pre.sources,

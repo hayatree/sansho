@@ -323,3 +323,21 @@ fn rf_port_analysis_override_and_waveform() {
     assert_eq!(wave["unit"], "Ω");
     assert!((wave["y"][1].as_f64().unwrap() - 100.).abs() < 1e-12);
 }
+
+#[test]
+fn control_transcript_and_disabled_files() {
+    let mut client = Client::start();
+    let (reply,_)=client.tool("simulate",json!({"netlist":"control\nV1 in 0 2\nR1 in 0 1k\n.control\nop\nprint v(in)\nwrite denied.raw\n.endc"}));
+    let job = &reply["job"];
+    assert_eq!(job["status"], "error");
+    assert_eq!(job["control"]["plots"], json!(["op1"]));
+    assert_eq!(job["control"]["prints"][0]["columns"], json!([[[2., 0.]]]));
+    assert_eq!(job["control"]["written_files"], json!([]));
+    assert!(
+        job["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["code"] == "E-CONTROL-OUTPUT")
+    );
+}

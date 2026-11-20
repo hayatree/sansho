@@ -100,6 +100,8 @@ pub struct SweepAxis {
 /// Summary of a job with reproducibility metadata.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct JobSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control: Option<crate::control::Transcript>,
     /// Job identifier.
     pub job_id: String,
     /// Circuit identifier.
@@ -443,6 +445,7 @@ pub(crate) fn job(
         None => (Vec::new(), Vec::new(), String::new()),
     };
     JobSummary {
+        control: None,
         job_id: meta.job_id,
         circuit_id: meta.circuit_id,
         status: meta.status,

@@ -42,11 +42,15 @@ pub(crate) fn text(s: &str) -> String {
 /// Canonical deck plus retained HDL source text; no-HDL decks keep their existing hash.
 pub(crate) fn netlist(nl: &sansho_netlist::Netlist) -> String {
     let deck = sansho_netlist::write(nl);
-    if nl.hdl.is_empty() {
+    if nl.hdl.is_empty() && nl.parameter_source.is_none() {
         return text(&deck);
     }
     let mut hash = Fnv::new();
     hash.bytes(deck.as_bytes());
+    if let Some(source) = &nl.parameter_source {
+        hash.bytes(&(source.len() as u64).to_le_bytes())
+            .bytes(source.as_bytes());
+    }
     for h in &nl.hdl {
         hash.bytes(&(h.text.len() as u64).to_le_bytes())
             .bytes(h.text.as_bytes());
@@ -93,6 +97,32 @@ pub(crate) fn results(r: &SimResults) -> String {
     }
     for m in &r.measures {
         h.bytes(m.name.as_bytes()).f64(m.value.unwrap_or(f64::NAN));
+    }
+    h.hex()
+}
+
+/// Include control-only jobs (e.g. a seed and print in the const plot) in the result identity.
+pub(crate) fn control(result: &str, t: &crate::control::Transcript) -> String {
+    let mut h = Fnv::new();
+    h.bytes(result.as_bytes());
+    for line in t
+        .lines
+        .iter()
+        .chain(&t.plots)
+        .chain(&t.written_files)
+        .chain(std::iter::once(&t.current_plot))
+    {
+        h.bytes(&(line.len() as u64).to_le_bytes())
+            .bytes(line.as_bytes());
+    }
+    for table in &t.prints {
+        for (name, column) in table.expressions.iter().zip(&table.columns) {
+            h.bytes(name.as_bytes())
+                .bytes(&(column.len() as u64).to_le_bytes());
+            for &(re, im) in column {
+                h.f64(re).f64(im);
+            }
+        }
     }
     h.hex()
 }

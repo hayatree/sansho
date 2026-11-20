@@ -580,6 +580,7 @@ dependencies = [
  "sansho-engine",
  "sansho-netlist",
  "sansho-output",
+ "sansho-sparse",
  "serde",
 ]
 
@@ -588,6 +589,7 @@ name = "sansho-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "sansho-api",
  "sansho-diag",
  "sansho-engine",
  "sansho-netlist",
@@ -679,6 +681,7 @@ name = "sansho-verify"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "sansho-api",
  "sansho-engine",
  "sansho-netlist",
  "sansho-output",

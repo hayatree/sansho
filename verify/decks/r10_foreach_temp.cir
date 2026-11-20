@@ -1,0 +1,14 @@
+R10 divider at three temperatures
+* Provenance: original Sansho R10 circuit.
+V1 in 0 1
+R1 in out 1k tc1=0.004
+R2 out 0 1k
+.control
+foreach deg 0 27 80
+  option temp=$deg
+  dc v1 0 1 .25
+  meas dc divider find v(out) at=1
+end
+quit
+.endc
+.end

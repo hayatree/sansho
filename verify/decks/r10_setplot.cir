@@ -1,0 +1,18 @@
+R10 compare two operating conditions across named plots
+* Provenance: original Sansho R10 circuit.
+V1 in 0 1
+R1 in out 1k
+R2 out 0 1k
+.dc v1 0 1 .25
+.control
+run
+alter r2 = 3k
+run
+setplot dc1
+let delta = dc2.v(out) - v(out)
+set filetype=ascii
+write delta.raw delta
+destroy dc2
+quit
+.endc
+.end

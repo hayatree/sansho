@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use sansho_api::control::{ControlOptions, ControlOutput};
 use sansho_diag::Diagnostic;
 use sansho_output::{AnalysisKind, Data, SimResults};
 use serde::Serialize;
@@ -39,6 +40,15 @@ enum RawFormat {
 enum Command {
     /// Parse and simulate a netlist.
     Run {
+        /// Directory for write, wrdata and redirected print (defaults to the deck directory).
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+        /// Allow a trusted control script to write absolute paths or paths outside its output directory.
+        #[arg(long)]
+        allow_external_paths: bool,
+        /// Total control loop iterations permitted across all blocks.
+        #[arg(long, default_value_t = 10_000)]
+        iteration_limit: usize,
         /// Master seed for single-run Monte Carlo replay.
         #[arg(long, requires = "mc_run")]
         mc_seed: Option<u64>,
@@ -251,12 +261,42 @@ fn batch(netlists: &[PathBuf], jobs: Option<usize>) -> Result<ExitCode, ExitCode
     }
     let good: Vec<sansho_netlist::Netlist> = parsed
         .iter()
-        .filter_map(|r| r.as_ref().ok().cloned())
+        .filter_map(|r| r.as_ref().ok().filter(|nl| nl.controls.is_empty()).cloned())
         .collect();
     let mut outputs = sansho_engine::run_batch(&good, &config(jobs)).into_iter();
     let mut ok = true;
     let mut stdout = std::io::stdout().lock();
     for (path, r) in netlists.iter().zip(&parsed) {
+        if let Ok(nl) = r
+            && !nl.controls.is_empty()
+        {
+            let options = ControlOptions {
+                output_dir: path.parent().map(Into::into),
+                ..Default::default()
+            };
+            let output = sansho_api::control::execute_with(nl, &options, config(jobs).threads);
+            let report = control_json(&output);
+            ok &= report.status == "ok";
+            #[derive(Serialize)]
+            struct ControlLine<'a> {
+                netlist: &'a std::path::Path,
+                #[serde(flatten)]
+                report: ControlJson<'a>,
+            }
+            if serde_json::to_writer(
+                &mut stdout,
+                &ControlLine {
+                    netlist: path,
+                    report,
+                },
+            )
+            .is_err()
+                || writeln!(stdout).is_err()
+            {
+                return Err(ExitCode::from(2));
+            }
+            continue;
+        }
         let run = match r {
             Ok(_) => outputs.next(),
             Err(_) => None,
@@ -370,7 +410,28 @@ fn input_error(d: &[Diagnostic], json: bool) -> ExitCode {
     }
 }
 
+#[derive(Serialize)]
+struct ControlJson<'a> {
+    status: &'static str,
+    diagnostics: &'a [Diagnostic],
+    control: &'a sansho_api::control::Transcript,
+    results: &'a SimResults,
+}
+fn control_json(output: &ControlOutput) -> ControlJson<'_> {
+    ControlJson {
+        status: if output.diagnostics.iter().any(Diagnostic::is_error) {
+            "error"
+        } else {
+            "ok"
+        },
+        diagnostics: &output.diagnostics,
+        control: &output.transcript,
+        results: &output.results,
+    }
+}
+
 fn run(
+    control: &ControlOptions,
     netlist: &PathBuf,
     raw: Option<&PathBuf>,
     raw_format: RawFormat,
@@ -387,6 +448,27 @@ fn run(
         }
     } else {
         match sansho_netlist::parse_with(&text, &loader(netlist)) {
+            Ok(nl) if !nl.controls.is_empty() => {
+                let output = sansho_api::control::execute_with(&nl, control, cfg.threads);
+                let report = control_json(&output);
+                if let Some(path) = raw {
+                    write_raw(path, raw_format, &output.results)?
+                }
+                let code = if json {
+                    print_json(&report)
+                } else {
+                    print_diags(&output.diagnostics);
+                    for line in &output.transcript.lines {
+                        println!("{line}")
+                    }
+                    ExitCode::SUCCESS
+                };
+                return Ok(if report.status == "error" {
+                    code.max_with(1)
+                } else {
+                    code
+                });
+            }
             Ok(nl) => sansho_engine::run_with(&nl, &cfg),
             Err(d) => return Ok(input_error(&d, json)),
         }
@@ -502,7 +584,17 @@ impl MaxWith for ExitCode {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|arg| {
+        !arg.to_string_lossy().starts_with('-')
+            && !matches!(
+                arg.to_str(),
+                Some("run" | "mc" | "batch" | "check" | "help")
+            )
+    }) {
+        args.insert(1, "run".into());
+    }
+    let cli = Cli::parse_from(args);
     let r = match &cli.command {
         Command::Run {
             netlist,
@@ -512,7 +604,17 @@ fn main() -> ExitCode {
             jobs,
             mc_seed,
             mc_run,
+            output_dir,
+            allow_external_paths,
+            iteration_limit,
         } => run(
+            &ControlOptions {
+                output_dir: output_dir
+                    .clone()
+                    .or_else(|| netlist.parent().map(Into::into)),
+                allow_external_paths: *allow_external_paths,
+                iteration_limit: *iteration_limit,
+            },
             netlist,
             raw.as_ref(),
             *raw_format,

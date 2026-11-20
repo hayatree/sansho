@@ -13,6 +13,8 @@
 
 #![forbid(unsafe_code)]
 
+mod control;
+mod control_analytic;
 mod reference;
 
 use reference::Problem;
@@ -83,11 +85,22 @@ fn known_difference(text: &str) -> Option<&str> {
     })
 }
 
-fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>), Problem> {
+fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), Problem> {
     let deck = deck.canonicalize()?;
     let text = std::fs::read_to_string(&deck)?;
     let nl = reference::parse(&deck, &text)?;
     let prepared = reference::prepare(&deck, &text, &nl, cli)?;
+    if !nl.controls.is_empty() {
+        let (report, analytic) = control::verify(
+            &deck,
+            &text,
+            &prepared,
+            &nl,
+            cli,
+            &Tolerances::from_deck(&text),
+        )?;
+        return Ok((report, known_difference(&text).map(str::to_owned), analytic));
+    }
     let stem = deck
         .file_stem()
         .map_or_else(|| "deck".into(), |s| s.to_string_lossy().into_owned());
@@ -179,7 +192,7 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>), Proble
         let r = reference_measures(&prepared, &stem, &nl, cli)?;
         compare_measures(&r, &ours, &tol, &mut report);
     }
-    Ok((report, known_difference(&text).map(str::to_owned)))
+    Ok((report, known_difference(&text).map(str::to_owned), false))
 }
 
 fn read_reference(path: &Path) -> Result<sansho_output::SimResults, Problem> {
@@ -287,9 +300,9 @@ fn main() -> ExitCode {
     }
     let mut entries = Vec::new();
     for d in &decks {
-        let (report, missing, known_difference) = match verify(d, &cli) {
-            Ok((r, reason)) => (r, None, reason),
-            Err(Problem::Failed(e)) => (fail(e), None, None),
+        let (report, missing, known_difference, analytic) = match verify(d, &cli) {
+            Ok((r, reason, analytic)) => (r, None, reason, analytic),
+            Err(Problem::Failed(e)) => (fail(e), None, None, false),
             Err(Problem::Missing(path)) => (
                 DeckReport {
                     vars: vec![],
@@ -298,6 +311,7 @@ fn main() -> ExitCode {
                 },
                 Some(path),
                 None,
+                false,
             ),
         };
         let pass = missing.is_none() && report.pass();
@@ -308,6 +322,8 @@ fn main() -> ExitCode {
                 "SKIP"
             } else if known_difference.is_some() && report.problems.is_empty() {
                 "KNOWN"
+            } else if pass && analytic {
+                "ANALYTIC"
             } else if pass {
                 "PASS"
             } else {
@@ -376,9 +392,13 @@ fn main() -> ExitCode {
         let passed = entries.iter().filter(|e| e.status == "PASS").count();
         let skipped = entries.iter().filter(|e| e.missing.is_some()).count();
         let known = entries.iter().filter(|e| e.status == "KNOWN").count();
+        let analytic = entries.iter().filter(|e| e.status == "ANALYTIC").count();
+        if analytic > 0 {
+            println!("{analytic} control decks passed closed-form comparisons");
+        }
         println!(
             "{passed}/{} decks passed, {known} known, {skipped} skipped",
-            entries.len() - skipped - known
+            entries.len() - skipped - known - analytic
         );
     }
     if all {
