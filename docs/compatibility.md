@@ -34,7 +34,7 @@ Language and analysis conventions follow the manual. SFFM argument order, E-tabl
 | Z | Partial | Level-one Statz NMF/PMF channel, Schottky gate, gate charge, RD/RS, thermal and flicker noise, device vectors and UIC. Gate charge uses the last accepted bias for its incremental partition. [Model details](r8-semiconductors.md) |
 | M, VDMOS | Partial | N-channel and p-channel power MOSFET, Miller charge, body diode, subthreshold smoothing, drain drift resistance, temperature, noise and UIC. THERMAL requires explicit junction and case nodes and uses RTHJC, CTHJ and RTHCA. The cached 44.2 sweeps confirm the RTHCA boundary, hot channel transfer and body-diode heat including RB. CTHJC, TEXP0 and TEXP1 give W-MODEL-IGNORED. [Parameters and limits](r8-semiconductors.md) |
 | Other built-in transistor families | Not supported | Includes MOS9, BSIM1/2, BSIM-SOI and HICUM model cards. Independently supplied Verilog-A modules can implement some of these families. |
-| A, analog code models | Partial | Arithmetic, smooth transfer curves, confined file sources, oscillators, dynamic operators and a resistive switch. [Ports, parameters and limits](xspice.md) |
+| A, analog code models | Partial | All 34 manual §8.2 families, including coupled cores, nonlinear passives, meters, file tables and analog delay. All ten R13 batch decks pass against cached ngspice 44.2 waveforms. [Ports, parameters and limits](xspice.md) |
 | Q, level 4 | Unsupported | [Native VBIC status](vbic.md) |
 | X, subcircuit instances | Supported | Nested flattening, parameters, local models and hierarchical names. |
 | Verilog-A via N and .hdl | Partial | Compiled analog subset with an interpreter and optional JIT. [Language coverage](verilog-a.md) |
@@ -86,7 +86,8 @@ Sansho uses the manual's order. The dedicated SFFM deck records this known diffe
 | .print, .plot, .width | Partial | OP, DC, TRAN, AC and noise print tables support voltage, current, named device outputs and AC projections. .plot warns and .width is accepted. Tables use the CLI layout. |
 | .options | Partial | RELTOL, ABSTOL, VNTOL, CHGTOL, TRTOL, GMIN, ITL1, ITL2, ITL4, RSHUNT, GMINSTEPS, SRCSTEPS, TEMP, TNOM, SCALE, DEFL/DEFW/DEFAD/DEFAS, METHOD=TRAP/TRAPEZOIDAL/GEAR, MAXORD=1/2, SAVECURRENTS, SEED and BYPASS. ITL5 and listing flags are accepted. INTERP, unknown options and invalid option values warn. |
 | .control / .endc, .csparam and Nutmeg | Partial | Batch analyses, bounded control flow, plot and vector algebra, measurements, circuit alterations and confined file output. API and MCP return structured transcripts. [Commands and differences](control.md) |
-| Digital XSPICE | Partial | Twelve-state OP/DC/transient, ADC/DAC, gates, storage, divider, oscillator, file stimulus and single-output LUT. Raw comparisons use DAC voltages. [Digital timing and limits](xspice.md#digital-nodes-and-bridges) |
+| Digital XSPICE | Partial | Twelve-state and real events, bidirectional and sampled-real bridges, PWM, state machines, RAM and multi-output LUTs in OP/DC/transient. Raw comparisons use DAC voltages. [Digital timing and limits](xspice.md#digital-nodes-and-bridges) |
+| External XSPICE models | Excluded | `d_process`, `d_cosim` and `codemodel` require external execution or shared-library loading and produce `E-UNSUPPORTED`. [Security policy](xspice.md#excluded-external-models) |
 | CIDER | Not supported | Numerical semiconductor simulation is outside coverage. |
 | OSDI / pre_osdi | Not supported | Native simulation loads VA source through .hdl. OSDI appears in the external verification workflow. |
 

@@ -1,0 +1,30 @@
+RAM output level and strength during a write and after deselection
+* Provenance: original Sansho probe of R13 write visibility.
+* sweep: read_delay 0.25n 1n 2n
+.param probe=1n
+Vdata din 0 PWL(0 0 2n 0 2.1n 1 11n 1 11.1n 0 18n 0 18.1n 1)
+Vwe wr 0 PWL(0 0 6n 0 6.1n 1 22n 1 22.1n 0)
+Vcs sel 0 PWL(0 1 26n 1 26.1n 0 30n 0 30.1n 1)
+Abits [din wr sel] [d we cs] adc
+Aaddr addr down
+Amem [d] [q] [addr] we [cs] ram
+Acopy [d] [bus] [addr] we [cs] ram
+Apull bus down
+Aout [q bus] [out loaded] dac
+Rq out 0 10k
+Rb loaded 0 10k
+.model adc adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0 fall_delay=0)
+.model down d_pulldown
+.model ram d_ram(ic=0 read_delay={probe})
+.model dac dac_bridge(out_low=0 out_high=1 out_undef=0.45 t_rise=0.2n t_fall=0.2n)
+.control
+tran 0.05n 35n
+eprint d
+eprint we
+eprint cs
+eprint q
+eprint bus
+print v(out) v(loaded)
+quit
+.endc
+.end

@@ -53,7 +53,7 @@ pub(crate) fn solve_op(
 ) -> Result<(), Diagnostic> {
     for _ in 0..crate::digital::DELTA_LIMIT {
         solve_analog_op(ckt, ctx, x, ws, opts, code, analysis)?;
-        if !ws.events.settle(&ckt.digital, x, 0., true)? {
+        if !ws.events.settle(&ckt.digital, x, 0., ctx.mode)? {
             return Ok(());
         }
     }
@@ -565,6 +565,10 @@ pub(crate) fn ac_rhs(ckt: &Circuit) -> Vec<c64> {
 
 /// Coefficients of the nonlocal terms in each line's two wave equations.
 pub(crate) enum DelayedStamp {
+    Table {
+        points: Vec<[f64; 3]>,
+        entries: Vec<(usize, f64)>,
+    },
     Delay {
         delay: f64,
         entries: Vec<(usize, f64)>,
@@ -598,6 +602,16 @@ impl DelayedStamp {
                         .collect(),
                 });
             }
+            if let Some((points, Some(r), pair)) = group.frequency_table() {
+                stamps.push(Self::Table {
+                    points: points.to_vec(),
+                    entries: pair
+                        .into_iter()
+                        .zip([-1., 1.])
+                        .filter_map(|(n, g)| Some((c.pattern.find(r, n?)?, g)))
+                        .collect(),
+                });
+            }
             group.transport_delays(state, &mut |delay, row, col, g| {
                 if let (Some(r), Some(c0)) = (row, col)
                     && let Some(slot) = c.pattern.find(r, c0)
@@ -613,6 +627,21 @@ impl DelayedStamp {
     }
     pub(crate) fn apply(&self, omega: f64, sign: f64, values: &mut [c64]) {
         match self {
+            Self::Table { points, entries } => {
+                let f = omega / std::f64::consts::TAU;
+                let j = points.partition_point(|p| p[0] < f);
+                let a = points[j.saturating_sub(1)];
+                let b = points[j.min(points.len() - 1)];
+                let t = if b[0] == a[0] {
+                    0.
+                } else {
+                    (f - a[0]) / (b[0] - a[0])
+                };
+                let v = c64::new(a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2]));
+                for &(slot, g) in entries {
+                    values[slot] += v * (sign * g);
+                }
+            }
             Self::Delay { delay, entries } => {
                 let phase = omega * delay;
                 let change = c64::new(-2. * (phase * 0.5).sin().powi(2), -phase.sin());
@@ -1230,6 +1259,7 @@ pub(crate) fn tran(
         .filter(|g| g.has_random_waveform())
         .collect();
     let mixed = !ckt.digital.names.is_empty();
+    let smooth_real = ckt.digital.smooth_real_outputs();
     let mut accepted_events = ws.events.clone();
     while t < tstop - eps {
         let begin = profile.then(std::time::Instant::now);
@@ -1238,11 +1268,11 @@ pub(crate) fn tran(
             ws.events.clone_from(&accepted_events);
         }
         let fixed_bp = bps.get(bp_idx).copied().unwrap_or(tstop);
-        let next_bp = random
+        let analog_bp = random
             .iter()
             .map(|g| g.next_random_breakpoint(t + eps))
-            .fold(fixed_bp, f64::min)
-            .min(ws.events.next(&ckt.digital, t));
+            .fold(fixed_bp, f64::min);
+        let next_bp = analog_bp.min(ws.events.next(&ckt.digital, t));
         while let Some((_, cap)) = step_limits.next_if(|&(start, _)| start <= t + eps) {
             hmax = hmax.min(cap);
         }
@@ -1331,7 +1361,7 @@ pub(crate) fn tran(
         let mut dac_jump = false;
         if mixed && result.is_ok() {
             for iteration in 0..crate::digital::DELTA_LIMIT {
-                if !ws.events.settle(&ckt.digital, &x_new, ctx.time, false)? {
+                if !ws.events.settle(&ckt.digital, &x_new, ctx.time, ctx.mode)? {
                     break;
                 }
                 dac_jump = true;
@@ -1499,7 +1529,11 @@ pub(crate) fn tran(
         }
         record(t, &x, &mut times, &mut cols);
         h *= grow;
-        if hit_bp {
+        if hit_bp && smooth_real && !has_storage && next_bp < analog_bp {
+            // Landing on a real event changes the slope of a continuous drive.
+            // Keep the unconstrained proposal on an algebraic analog circuit.
+            h = h.max(proposed_h);
+        } else if hit_bp {
             let gap = bps.get(bp_idx).copied().unwrap_or(tstop) - t;
             h = h.min(0.1 * hmax.min(gap));
         }

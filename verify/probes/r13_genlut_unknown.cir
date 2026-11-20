@@ -1,0 +1,30 @@
+Independent and simultaneous unknown address bits with asymmetric LUT delays
+* Provenance: original Sansho probe of R13 unknown-address arrival times.
+* sweep: input_delay 0.1n 0.5n 0.9n
+.param probe=0.5n
+Va in 0 PWL(0 0 3n 0 3.1n 0.5 7n 0.5 7.1n 1 11n 1 11.1n 0.5 15n 0.5 15.1n 0)
+Aadc [in] [a] bits
+Acmp [in] [k] binary
+Aref b down
+Afirst [a b] [p] lut
+Asecond [b a] [q] lut
+Aboth [a a] [r] lut
+Astate [a b] [s] tri
+Arelease [k b] [z] tri
+.model bits adc_bridge(in_low=0.25 in_high=0.75 rise_delay=0 fall_delay=0)
+.model binary adc_bridge(in_low=0.75 in_high=0.75 rise_delay=0 fall_delay=0)
+.model down d_pulldown
+.model lut d_genlut(table_values="0111" input_delay=[{probe} 0.4n] rise_delay=[1n] fall_delay=[0.2n])
+.model tri d_genlut(table_values="1Z1Z" input_delay=[{probe} 0.4n] rise_delay=[1n] fall_delay=[0.2n])
+.control
+tran 0.05n 19n
+eprint a
+eprint p
+eprint q
+eprint r
+eprint k
+eprint s
+eprint z
+quit
+.endc
+.end

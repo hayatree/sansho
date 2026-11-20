@@ -575,6 +575,11 @@ impl Pre<'_> {
                     }
                 }
                 ".end" => break,
+                ".codemodel" => self.error(
+                    "E-UNSUPPORTED",
+                    "codemodel requires loading an external shared library",
+                    line.span(),
+                ),
                 ".control" => {
                     let mut body = Vec::new();
                     let mut closed = false;
@@ -799,9 +804,11 @@ impl Flat<'_> {
         let literal_key = match tokens {
             [card, _, kind, ..] if card.text.eq_ignore_ascii_case(".model") => {
                 match kind.lower().as_str() {
-                    "d_lut" => Some("table_values"),
+                    "d_lut" | "d_genlut" => Some("table_values"),
                     "d_source" => Some("input_file"),
-                    "filesource" => Some("file"),
+                    "d_state" => Some("state_file"),
+                    "multi_input_pwl" => Some("model"),
+                    "filesource" | "table2d" | "table3d" | "xfer" => Some("file"),
                     _ => None,
                 }
             }
@@ -1108,11 +1115,24 @@ impl Flat<'_> {
             };
             if letter == 'a' && n >= 2 {
                 let mut fields = crate::xspice::brackets(&toks[1..n - 1]);
+                let mut source_name = false;
                 for t in &mut fields {
+                    if source_name {
+                        t.text = ctx.element(&t.text);
+                        source_name = false;
+                        continue;
+                    }
+                    if t.text.eq_ignore_ascii_case("%vnam") {
+                        source_name = true;
+                    }
                     if !t.text.starts_with('%')
                         && !matches!(t.lower().as_str(), "[" | "]" | "~" | "null")
                     {
-                        t.text = ctx.node(&self.defs, &t.text);
+                        t.text = if let Some(n) = t.text.strip_prefix('~') {
+                            format!("~{}", ctx.node(&self.defs, n))
+                        } else {
+                            ctx.node(&self.defs, &t.text)
+                        };
                     }
                 }
                 let mut model = toks[n - 1].clone();

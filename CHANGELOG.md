@@ -4,6 +4,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Add the 27 remaining built-in analog, hybrid and digital model families in ngspice 44 §§8.2–8.4, including PWL and hysteretic magnetic cores, winding coupling, two- and three-dimensional file tables, a clocked state machine and RAM. Real nodes sum sampled drivers and share propagation deadlines with digital nodes. Ten new decks exercise the library with one and two workers. [Model behavior and reference-probe choices](docs/xspice.md#r13-analog-models)
+
+- Report `E-UNSUPPORTED` for XSPICE external-process and co-simulation models and the `codemodel` library-loading command.
+
 - Add event-driven digital A models and ADC/DAC bridges to OP, DC sweeps and transient simulation. Batch controls and waveform queries expose strength-resolved changes. Match the probed ADC window and equality behavior, preserve delayed transitions until overtaken, and correct divider phase, oscillator startup strength and DC feedback initialization. Four mixed-signal deck comparisons pass. The counter has a 10 ps coarse-grid sampling difference that disappears on the refined grid. [Digital models and limits](docs/xspice.md#digital-nodes-and-bridges)
 
 - Simulate analog A cards with scalar and vector signal ports, confined file input, smooth curves, dynamic transfer functions, oscillators and a controlled resistor. Missing required parameters identify the model and field. Square waves start low and honor asymmetric edge times, and slew-limited outputs resolve the instant they reach the input. [Supported code models](docs/xspice.md)

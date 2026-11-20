@@ -46,9 +46,10 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`W-PLOT-IGNORED`](#w-plot-ignored) | warning | ASCII plot skipped |
 | [`W-OPT-INTERP`](#w-opt-interp) | warning | Transient output interpolation unavailable |
 | [`E-ELAB-CONTROL`](#e-elab-control) | error | Invalid controlling source |
-| [`E-XSPICE-FILE`](#e-xspice-file) | error | Invalid waveform table |
+| [`E-XSPICE-FILE`](#e-xspice-file) | error | Invalid code-model data file |
 | [`E-XSPICE-PORT`](#e-xspice-port) | error | Invalid code-model port |
 | [`E-XSPICE-OSCILLATION`](#e-xspice-oscillation) | error | Event iteration limit |
+| [`E-XSPICE-VALUE`](#e-xspice-value) | error | Invalid real event |
 | [`E-XSPICE-TIME`](#e-xspice-time) | error | Invalid event time |
 | [`E-XSPICE-MODEL`](#e-xspice-model) | error | Unsupported code model |
 | [`E-ELAB-EMPTY`](#e-elab-empty) | error | Empty netlist |
@@ -60,7 +61,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`W-ELAB-NODC`](#w-elab-nodc) | warning | No DC path to ground |
 | [`W-ELAB-NODE`](#w-elab-node) | warning | Unknown node in `.ic` / `.nodeset` |
 | [`W-ELAB-VLOOP`](#w-elab-vloop) | warning | Loop of voltage sources or inductors |
-| [`E-UNSUPPORTED`](#e-unsupported) | error | Unsupported device selector |
+| [`E-UNSUPPORTED`](#e-unsupported) | error | Unsupported device or external code model |
 | [`W-BSIM3-PARAM`](#w-bsim3-param) | warning | BSIM3 parameter check |
 | [`W-BSIM4-PARAM`](#w-bsim4-param) | warning | BSIM4 parameter check |
 | [`W-MODEL-IGNORED`](#w-model-ignored) | warning | Model parameter ignored |
@@ -325,9 +326,9 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## E-XSPICE-FILE
 
-**Invalid waveform table.** The waveform file could not be opened inside the deck directory or contains invalid data.
+**Invalid code-model data file.** The model data file could not be opened inside the deck directory or contains invalid records.
 
-- Use a relative path to a regular file with time and signal columns.
+- Use a relative path to a regular file and check its format against the model description.
 
 ## E-XSPICE-PORT
 
@@ -340,6 +341,12 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Event iteration limit.** A digital or mixed feedback loop did not settle at the indicated time.
 
 - Check feedback polarity and propagation delays in the loop.
+
+## E-XSPICE-VALUE
+
+**Invalid real event.** A real-valued driver, sum of drivers or analog bridge produced a nonfinite value.
+
+- Check model gains, offsets and the sum of the real drivers.
 
 ## E-XSPICE-TIME
 
@@ -409,9 +416,10 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## E-UNSUPPORTED
 
-**Unsupported device selector.** The selected device equation or analysis mode is unavailable.
+**Unsupported device or external code model.** The selected device equation or analysis mode is unavailable, or the deck requests an external XSPICE process or shared library.
 
 - See docs/bsim3.md and docs/bsim4.md for the available MOS selectors.
+- Use a built-in model in place of d_process, d_cosim or a library loaded with codemodel. See docs/xspice.md.
 
 ## W-BSIM3-PARAM
 

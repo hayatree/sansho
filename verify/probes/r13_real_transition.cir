@@ -1,0 +1,19 @@
+Real bridge response to a held step at unity gain
+* Provenance: original Sansho probe of the R13 real-bridge settling tail.
+* sweep: transition_time 0.2n 0.4n 0.8n
+.param probe=0.4n
+Vdata din 0 PWL(0 0 2n 0 2.1n 1 6n 1 6.1n 0 10n 0)
+Aadc [din] [d] bits
+Acode d NULL value convert
+Aout value out bridge
+Rout out 0 10k
+.model bits adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0 fall_delay=0)
+.model convert d_to_real(zero=0 one=1 delay=0.3n)
+.model bridge real_to_v(gain=1 transition_time={probe})
+.control
+tran 0.05n 10n
+eprint value
+print v(out)
+quit
+.endc
+.end

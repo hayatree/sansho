@@ -603,6 +603,9 @@ impl NoiseSource {
     }
 }
 
+/// Frequency, real and imaginary gain samples and their MNA branch/input coordinates.
+pub type FrequencyStamp<'a> = (&'a [[f64; 3]], Node, [Node; 2]);
+
 /// All instances of one device type.
 pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
     /// Device type name, e.g. `resistor`.
@@ -764,6 +767,11 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
         _out: &mut Vec<NoiseSource>,
     ) -> Result<(), Diagnostic> {
         Ok(())
+    }
+
+    /// Complex gain table, branch equation and input pair for AC-only transfer models.
+    fn frequency_table(&self) -> Option<FrequencyStamp<'_>> {
+        None
     }
 
     /// Forward transport terms whose small-signal gain acquires exp(-jωτ).

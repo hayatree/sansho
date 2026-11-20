@@ -1,0 +1,14 @@
+Minimum and maximum of two differential inputs
+* Provenance: original Sansho verification circuit.
+Vs a 0 0
+Vref b 0 0.25
+Alower %vd[a 0 b 0] %vd(lo 0) lower
+Aupper %vd[a 0 b 0] %vd(hi 0) upper
+Rload0 lo 0 10k
+Rload1 hi 0 10k
+.model lower multi_input_pwl(x=[-1 0 1] y=[-0.5 0 2] model="and")
+.model upper multi_input_pwl(x=[-1 0 1] y=[-0.5 0 2] model="or")
+.dc Vs -1 1 0.05
+.save v(lo) v(hi)
+.print dc v(lo) v(hi)
+.end

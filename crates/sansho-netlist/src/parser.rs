@@ -157,9 +157,31 @@ fn parse_expanded(
                 .get(m.span.file as usize)
                 .filter(|v| !v.is_empty())
                 .map(String::as_str);
-            if let Err(msg) = data.read(loader, from, m.kind == "d_source") {
+            if let Err(msg) = data.read(loader, from, &m.kind) {
                 p.diags
                     .push(Diagnostic::error("E-XSPICE-FILE", msg).with_span(m.span));
+            }
+        }
+    }
+    for element in &mut p.elements {
+        if let ElementKind::CodeModel { model, ports } = &mut element.kind
+            && let Some(&id) = p.model_names.get(model)
+        {
+            let real: &[usize] = match p.models[id].kind.as_str() {
+                "real_gain" => &[0, 1],
+                "real_delay" => &[0, 2],
+                "real_to_v" => &[0],
+                "d_to_real" => &[2],
+                _ => &[],
+            };
+            for &i in real {
+                if let Some(port) = ports.get_mut(i)
+                    && let Some(n) = port.nodes.first_mut()
+                    && n.starts_with('~')
+                {
+                    n.remove(0);
+                    port.inverted = true;
+                }
             }
         }
     }
@@ -268,6 +290,28 @@ pub(crate) fn sample_element(line: &Line, nl: &Netlist) -> Result<Element, Vec<D
     if head.starts_with('q') {
         p.models = nl.models.clone();
         p.has_hdl = !nl.hdl.is_empty();
+        for element in &mut p.elements {
+            if let ElementKind::CodeModel { model, ports } = &mut element.kind
+                && let Some(&id) = p.model_names.get(model)
+            {
+                let real: &[usize] = match p.models[id].kind.as_str() {
+                    "real_gain" => &[0, 1],
+                    "real_delay" => &[0, 2],
+                    "real_to_v" => &[0],
+                    "d_to_real" => &[2],
+                    _ => &[],
+                };
+                for &i in real {
+                    if let Some(port) = ports.get_mut(i)
+                        && let Some(n) = port.nodes.first_mut()
+                        && n.starts_with('~')
+                    {
+                        n.remove(0);
+                        port.inverted = true;
+                    }
+                }
+            }
+        }
         p.resolve_bjt_substrates();
     }
     if p.diags.iter().any(Diagnostic::is_error) {
@@ -1795,6 +1839,14 @@ impl Parser {
         };
         let name = t[1].lower();
         let kind = t[2].lower();
+        if matches!(kind.as_str(), "d_process" | "d_cosim") {
+            self.err(
+                "E-UNSUPPORTED",
+                format!("{kind} ({name}) requires an external process or shared library"),
+                t[2].span,
+            );
+            return;
+        }
         if self.code_models.contains(&name) && !crate::xspice::code_model(&kind) {
             self.err(
                 "E-XSPICE-MODEL",
@@ -1828,7 +1880,19 @@ impl Parser {
             return;
         }
         let t = &parameters.tokens;
-        let mut table = None;
+        let mut table = match kind.as_str() {
+            "filesource" => Some("filesource.txt"),
+            "d_source" => Some("source.txt"),
+            "d_state" => Some("state.txt"),
+            "table2d" => Some("2D-table-model.txt"),
+            "table3d" => Some("3D-table-model.txt"),
+            _ => None,
+        }
+        .map(|filename| crate::SourceTable {
+            filename: filename.into(),
+            rows: vec![],
+            records: vec![],
+        });
         let mut arrays = Vec::new();
         let mut params = Vec::new();
         let mut version = None;
@@ -1856,7 +1920,24 @@ impl Parser {
                 );
                 return;
             };
-            if kind == "d_lut" && k == "table_values" {
+            if kind == "multi_input_pwl" && k == "model" {
+                let value = match vt.lower().trim_matches('"') {
+                    "and" => 0.,
+                    "or" => 1.,
+                    _ => {
+                        self.err(
+                            "E-ELAB-PARAM",
+                            "multi_input_pwl model must be and or or",
+                            vt.span,
+                        );
+                        return;
+                    }
+                };
+                params.push((k, value));
+                i += 3;
+                continue;
+            }
+            if matches!(kind.as_str(), "d_lut" | "d_genlut") && k == "table_values" {
                 let values = vt
                     .text
                     .trim_matches('"')
@@ -1864,7 +1945,8 @@ impl Parser {
                     .map(|c| match c.to_ascii_lowercase() {
                         '0' => Some(0.),
                         '1' => Some(1.),
-                        'u' => Some(2.),
+                        'u' | 'x' => Some(2.),
+                        'z' if kind == "d_genlut" => Some(8.),
                         _ => None,
                     })
                     .collect::<Option<Vec<_>>>();
@@ -1876,9 +1958,13 @@ impl Parser {
                 i += 3;
                 continue;
             }
-            if kind == "filesource" && k == "file" || kind == "d_source" && k == "input_file" {
+            if matches!(kind.as_str(), "filesource" | "table2d" | "table3d" | "xfer") && k == "file"
+                || kind == "d_source" && k == "input_file"
+                || kind == "d_state" && k == "state_file"
+            {
                 table = Some(crate::SourceTable {
                     filename: vt.text.trim_matches('"').into(),
+                    records: vec![],
                     rows: vec![],
                 });
                 i += 3;
@@ -2514,6 +2600,24 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_code_models_are_rejected_before_binding() {
+        for card in [
+            "Aext a y ext\n.model ext D_PROCESS(process_file=\"missing\")",
+            ".model unused D_COSIM(simulation=\"missing\")",
+            ".control\nrepeat 2\nCodeModel missing.cm\nend\n.endc",
+            ".codemodel missing.cm",
+        ] {
+            let errors = parse(&format!("external model\n{card}\n.end")).unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|d| d.code == "E-UNSUPPORTED" && d.span.is_some()),
+                "{errors:?}"
+            );
+        }
+    }
 
     #[test]
     fn passive_initial_values_and_geometry_scale_survive_export() {

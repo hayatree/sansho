@@ -1,0 +1,11 @@
+Forced junction voltage across the leakage floor and avalanche knee
+* Provenance: original Sansho probe of the R13 incremental breakdown resistance.
+* sweep: r_breakdown 1.5 3 6 100
+.param probe=3
+Vrev ref 0 0
+Az %gd(0 ref) shunt
+.model shunt zener(v_breakdown=4.7 i_breakdown=10m r_breakdown={probe} i_rev=0.2u)
+.dc Vrev -0.1 4.75 0.0025
+.save v(ref) i(Vrev)
+.print dc v(ref) i(Vrev)
+.end

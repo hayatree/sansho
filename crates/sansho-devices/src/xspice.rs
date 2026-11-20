@@ -8,9 +8,18 @@ use crate::{
 use sansho_diag::Diagnostic;
 use sansho_netlist::{CodePort, ModelCard};
 
+#[path = "xspice_bidi.rs"]
+pub mod bidi;
+#[path = "xspice_multiport.rs"]
+pub mod multiport;
 #[path = "xspice_oscillator.rs"]
 mod oscillator;
+#[path = "xspice_signal.rs"]
+mod signal;
+#[path = "xspice_tables.rs"]
+mod tables;
 use oscillator::Oscillator;
+use signal::Signal;
 type D = Dual<1>;
 fn invalid(msg: impl Into<String>) -> Diagnostic {
     Diagnostic::error("E-ELAB-PARAM", msg)
@@ -24,6 +33,7 @@ struct Terminal {
     pair: [Node; 2],
     current: bool,
     branch: Node,
+    source: Option<String>,
 }
 impl Terminal {
     fn controls(&self) -> [Node; 2] {
@@ -35,6 +45,16 @@ impl Terminal {
     }
 }
 
+// Positive part rounded by the unique quadratic tangent to the two lines.
+fn positive<const N: usize>(v: Dual<N>, width: f64) -> Dual<N> {
+    if v.v <= -width {
+        Dual::cst(0.)
+    } else if v.v >= width {
+        v
+    } else {
+        (v + width).sq() / (4. * width)
+    }
+}
 /// A C1 corner between two lines. Both tangents meet at the specified center.
 fn corner(x: D, center: D, value: D, left: f64, right: f64, width: D) -> D {
     let dx = x - center;
@@ -158,6 +178,7 @@ impl Curve {
 
 #[derive(Debug)]
 enum Transfer {
+    Signal(Signal),
     Oscillator(Oscillator),
     Slew {
         rise: f64,
@@ -169,6 +190,7 @@ enum Transfer {
         roff: f64,
         ron: f64,
         log: bool,
+        limited: bool,
     },
     Gain,
     Summer,
@@ -221,7 +243,12 @@ impl Analog {
     ) -> Result<Self, Diagnostic> {
         let k = m.kind.as_str();
         m.check_code_model_params()?;
+        let raw_ports = ports;
+        let ports = signal::signal_ports(k, ports)?;
         let nports = match k {
+            "pwlts" => 1,
+            "delay" | "table2d" => 3,
+            "oneshot" | "table3d" => 4,
             "divide" => 3,
             "climit" => 4,
             _ => 2,
@@ -232,7 +259,7 @@ impl Analog {
         let mut ins = Vec::new();
         let mut outs = Vec::new();
         for (index, p) in ports.iter().enumerate() {
-            let vector = index == 0 && matches!(k, "summer" | "mult");
+            let vector = index == 0 && matches!(k, "summer" | "mult" | "multi_input_pwl");
             if p.vector != vector || p.nodes.is_empty() {
                 return Err(port_error(format!(
                     "{k} port {} needs a connected {} port",
@@ -251,6 +278,12 @@ impl Analog {
                 match p.modifier.as_str() {
                     "" | "v" | "vd" => false,
                     "i" | "id" => true,
+                    "vnam"
+                        if (k == "delay" && index == 0
+                            || matches!(k, "table2d" | "table3d") && index + 1 < nports) =>
+                    {
+                        false
+                    }
                     _ => return Err(port_error(format!("%{} is invalid for {k}", p.modifier))),
                 }
             };
@@ -268,6 +301,7 @@ impl Analog {
                     pair: [node(&t[0]), t.get(1).and_then(|n| node(n))],
                     current,
                     branch: None,
+                    source: (p.modifier == "vnam").then(|| t[0].clone()),
                 });
             }
         }
@@ -275,6 +309,7 @@ impl Analog {
         if k == "aswitch" {
             ins.push(Terminal {
                 pair: output.pair,
+                source: None,
                 current: false,
                 branch: None,
             });
@@ -296,13 +331,33 @@ impl Analog {
         let mut out_offset = 0.;
         let mut order = 0;
         let transfer = match k {
+            "core" if p.get("mode", 1.) == 1. => {
+                let area = p.get("area", 0.);
+                let length = p.get("length", 0.);
+                if area <= 0. || length <= 0. {
+                    return Err(invalid("core area and length must be positive"));
+                }
+                gains[0] = 1. / length;
+                out_gain = area;
+                Transfer::Curve(Curve::new(
+                    array("h_array", vec![]),
+                    array("b_array", vec![]),
+                    p.get("input_domain", 0.01),
+                    p.get("fraction", 1.) != 0.,
+                )?)
+            }
+            "core" if p.get("mode", 1.) != 2. => return Err(invalid("unknown core mode")),
+            "pwlts" | "multi_input_pwl" | "hyst" | "core" | "zener" | "sidiode" | "memristor"
+            | "oneshot" | "delay" | "cmeter" | "lmeter" | "table2d" | "table3d" | "xfer" => {
+                Transfer::Signal(Signal::new(k, &p, m, raw_ports, &mut array)?)
+            }
             "sine" | "triangle" | "square" => {
                 order = 1;
                 Transfer::Oscillator(Oscillator::new(
                     k,
                     &p,
-                    array("cntl_array", vec![]),
-                    array("freq_array", vec![]),
+                    array("cntl_array", vec![0., 1.]),
+                    array("freq_array", vec![1e3, 2e3]),
                 )?)
             }
             "slew" => {
@@ -317,7 +372,7 @@ impl Analog {
                 let on = p.get("cntl_on", 1.);
                 let off = p.get("cntl_off", 0.);
                 let ron = p.get("r_on", 1.);
-                let roff = p.get("r_off", 1e6);
+                let roff = p.get("r_off", 1e12);
                 if on == off || ron <= 0. || roff <= 0. {
                     return Err(invalid(
                         "aswitch needs distinct control levels and positive resistances",
@@ -329,6 +384,7 @@ impl Analog {
                     roff,
                     ron,
                     log: p.get("log", 1.) != 0.,
+                    limited: p.get("limit", 0.) != 0.,
                 }
             }
             "summer" | "mult" => {
@@ -348,7 +404,12 @@ impl Analog {
                 out_gain = p.get("out_gain", 1.);
                 out_offset = p.get("out_offset", 0.);
                 let minimum = p.get("den_lower_limit", 1e-10);
-                let domain = p.get("den_domain", 1e-16);
+                let domain = p.get("den_domain", 1e-10)
+                    * if p.get("fraction", 0.) != 0. {
+                        minimum
+                    } else {
+                        1.
+                    };
                 if minimum <= 0. || domain < 0. || domain > minimum {
                     return Err(invalid("invalid divide denominator limits"));
                 }
@@ -396,7 +457,7 @@ impl Analog {
                 let fixed_limits = || {
                     Limits::new(
                         &p,
-                        p.get("out_lower_limit", -1.),
+                        p.get("out_lower_limit", 0.),
                         p.get("out_upper_limit", 1.),
                     )
                 };
@@ -408,8 +469,8 @@ impl Analog {
                     "limit" => Transfer::Limit(fixed_limits()?),
                     "climit" => Transfer::ControlledLimit {
                         limits: Limits::new(&p, -1., 1.)?,
-                        lower_delta: p.get("out_lower_delta", 0.),
-                        upper_delta: p.get("out_upper_delta", 0.),
+                        lower_delta: p.opt(&["out_lower_delta", "lower_delta"]).unwrap_or(0.),
+                        upper_delta: p.opt(&["out_upper_delta", "upper_delta"]).unwrap_or(0.),
                     },
                     "int" => {
                         order = 1;
@@ -466,6 +527,11 @@ impl Analog {
         })
     }
 
+    pub fn scale_meter(&mut self, total: f64) {
+        if let Transfer::Signal(Signal::Meter(gain)) = &mut self.transfer {
+            *gain *= total;
+        }
+    }
     fn input(&self, i: usize, x: &[f64], seed: Option<usize>) -> D {
         let [a, b] = self.inputs[i].controls();
         let value = volt(x, a) - volt(x, b);
@@ -493,7 +559,11 @@ impl Analog {
                 D::cst(v)
             }
         };
-        let u = input(0);
+        let u = if self.inputs.is_empty() {
+            D::cst(0.)
+        } else {
+            input(0)
+        };
         let zero = D::cst(0.);
         let startup = matches!(ctx.mode, Mode::Dc) || ctx.mode == Mode::Tran && ctx.time == 0.;
         if row != 0 {
@@ -534,6 +604,7 @@ impl Analog {
             };
         }
         let value = match &self.transfer {
+            Transfer::Signal(s) => s.eval(ctx, input, self.inputs.len(), history, None),
             Transfer::Oscillator(o) => o.value(ctx.mode, u, state(0)),
             Transfer::Slew { rise, fall } => {
                 if ctx.mode == Mode::Tran && ctx.time > 0. {
@@ -555,11 +626,12 @@ impl Analog {
                 roff,
                 ron,
                 log,
+                limited,
             } => {
                 let t = (u - *off) / (on - off);
-                let r = if t.v <= 0. {
+                let r = if *limited && t.v <= 0. {
                     D::cst(*roff)
-                } else if t.v >= 1. {
+                } else if *limited && t.v >= 1. {
                     D::cst(*ron)
                 } else if *log {
                     (roff.ln() + t * (ron.ln() - roff.ln())).exp()
@@ -634,10 +706,33 @@ impl DeviceGroup for Analog {
         )
     }
     fn state_len(&self) -> usize {
-        if matches!(self.transfer, Transfer::Slew { .. }) {
+        if let Transfer::Signal(s) = &self.transfer {
+            s.state_len()
+        } else if matches!(self.transfer, Transfer::Slew { .. }) {
             2
         } else {
             0
+        }
+    }
+    fn frequency_table(&self) -> Option<crate::FrequencyStamp<'_>> {
+        if let Transfer::Signal(Signal::Frequency(table)) = &self.transfer {
+            Some((&table.0, self.output.branch, self.inputs[0].controls()))
+        } else {
+            None
+        }
+    }
+    fn transport_delays(&self, h: &[f64], emit: &mut dyn FnMut(f64, Node, Node, f64)) {
+        if matches!(self.transfer, Transfer::Signal(Signal::Delay { .. })) {
+            for (node, g) in self.inputs[0].controls().into_iter().zip([-1., 1.]) {
+                emit(h[2], self.output.branch, node, g);
+            }
+        }
+    }
+    fn breakpoints(&self, _: &crate::TranParams, out: &mut Vec<f64>) {
+        if let Transfer::Signal(Signal::Time { curve, .. }) = &self.transfer {
+            for (&t, &w) in curve.x.iter().zip(&curve.widths) {
+                out.extend([t - w, t, t + w]);
+            }
         }
     }
     fn step_limits(&self, _: &crate::TranParams, out: &mut Vec<(f64, f64)>) {
@@ -650,6 +745,14 @@ impl DeviceGroup for Analog {
             self.transfer,
             Transfer::Oscillator(_)
                 | Transfer::Slew { .. }
+                | Transfer::Signal(
+                    Signal::Pulse { .. }
+                        | Signal::Hyst { .. }
+                        | Signal::Multi { .. }
+                        | Signal::Delay { .. }
+                        | Signal::Diode { .. }
+                        | Signal::Mem { .. }
+                )
                 | Transfer::Curve(_)
                 | Transfer::Limit(_)
                 | Transfer::ControlledLimit { .. }
@@ -672,6 +775,139 @@ impl DeviceGroup for Analog {
             }
         };
         match &self.transfer {
+            Transfer::Signal(Signal::Diode { vf, vr, widths, .. }) => {
+                for v in [
+                    vf - widths[0],
+                    vf + widths[0],
+                    -vr - widths[1],
+                    -vr + widths[1],
+                ] {
+                    edge([v; 2]);
+                }
+            }
+            Transfer::Signal(Signal::Mem {
+                threshold,
+                range,
+                alpha,
+                beta,
+                ..
+            }) => {
+                edge([-threshold; 2]);
+                edge([*threshold; 2]);
+                let v = input[1];
+                let delta = (current[2] - accepted[2])
+                    * (beta * v + (alpha - beta) * v.clamp(-threshold, *threshold));
+                if accepted[0] != 0. && delta != 0. {
+                    for bound in range {
+                        let f = (bound - accepted[1]) / delta;
+                        if f > 1e-10 && f < 1. {
+                            first = Some(first.map_or(f, |prev| prev.min(f)));
+                        }
+                    }
+                }
+            }
+            Transfer::Signal(Signal::Delay { capacity, .. }) => {
+                let count = accepted[0] as usize;
+                if count < 1 {
+                    return None;
+                }
+                let at = |h: &[f64], i: usize| {
+                    let slot = (h[1] as usize + capacity - h[0] as usize + i) % capacity;
+                    (h[3 + 2 * slot], h[4 + 2 * slot])
+                };
+                let latest = at(current, current[0] as usize - 1);
+                let old = at(accepted, count - 1);
+                let a = old.0 - accepted[2];
+                let b = latest.0 - current[2];
+                if a == b {
+                    return None;
+                }
+                for j in 0..count {
+                    let (t, v) = at(accepted, j);
+                    let f = (t - a) / (b - a);
+                    if f <= 1e-10 || f >= 1. {
+                        continue;
+                    }
+                    let next = if j + 1 < count {
+                        at(accepted, j + 1)
+                    } else {
+                        latest
+                    };
+                    if next.0 <= t {
+                        continue;
+                    }
+                    let slope = (next.1 - v) / (next.0 - t);
+                    let previous = if j == 0 {
+                        0.
+                    } else {
+                        let prev = at(accepted, j - 1);
+                        (v - prev.1) / (t - prev.0)
+                    };
+                    if (slope - previous).abs() > 1e-7 * slope.abs().max(previous.abs()).max(1e-15)
+                    {
+                        first = Some(first.map_or(f, |old| old.min(f)));
+                    }
+                }
+            }
+            Transfer::Signal(Signal::Pulse {
+                trigger,
+                rise,
+                fall,
+                ..
+            }) => {
+                // Sample the clock on the transient grid. Schedule the output
+                // corners and retain the asynchronous clear crossing.
+                let mut times = vec![];
+                let clear = endpoints.map(|x| self.input(2, x, None).v - trigger);
+                if clear[0] * clear[1] < 0. {
+                    times.push(clear[0] / (clear[0] - clear[1]));
+                }
+                if accepted[6] != 0. && current[7] > accepted[7] {
+                    for at in [
+                        accepted[3],
+                        accepted[3] + rise,
+                        accepted[4],
+                        accepted[4] + fall,
+                    ] {
+                        times.push((at - accepted[7]) / (current[7] - accepted[7]));
+                    }
+                }
+                return times
+                    .into_iter()
+                    .filter(|f| *f > 1e-12 && *f <= 1.)
+                    .chain(first)
+                    .min_by(f64::total_cmp);
+            }
+            Transfer::Signal(Signal::Hyst { limits, shift, .. }) => {
+                let w = limits.width(D::cst(limits.lo), D::cst(limits.hi)).v;
+                for h in [-shift, *shift] {
+                    for k in [limits.lo, limits.hi] {
+                        edge([k + h - w; 2]);
+                        edge([k + h + w; 2]);
+                    }
+                }
+            }
+            Transfer::Signal(Signal::Multi { curve, .. }) => {
+                let mut earliest = None;
+                for i in 0..self.inputs.len() {
+                    let a = endpoints.map(|x| self.input(i, x, None).v);
+                    for t in curve
+                        .x
+                        .iter()
+                        .map(|&v| [v, v])
+                        .chain((0..i).map(|j| endpoints.map(|x| self.input(j, x, None).v)))
+                    {
+                        let d = [a[0] - t[0], a[1] - t[1]];
+                        if d[0] * d[1] < 0. {
+                            let f = d[0] / (d[0] - d[1]);
+                            if f > 1e-12 {
+                                earliest = Some(earliest.map_or(f, |p: f64| p.min(f)));
+                            }
+                        }
+                    }
+                }
+                return earliest;
+            }
             Transfer::Slew { rise, fall } => {
                 // Locate where the rate-limited ramp catches the linearly interpolated input.
                 let [time, output] = [accepted[0], accepted[1]];
@@ -747,6 +983,17 @@ impl DeviceGroup for Analog {
         }
     }
     fn setup(&mut self, b: &mut StampBuilder<'_>) -> Result<(), Diagnostic> {
+        for p in &mut self.inputs {
+            if let Some(source) = &p.source {
+                p.pair =
+                    [
+                        Some(b.branch(source).ok_or_else(|| {
+                            port_error(format!("undefined voltage branch {source}"))
+                        })?),
+                        None,
+                    ];
+            }
+        }
         for p in self
             .inputs
             .iter()
@@ -803,13 +1050,52 @@ impl DeviceGroup for Analog {
             f += 3;
             g += 5;
         }
+        let mut limited = [0.];
+        let h = if let Transfer::Signal(Signal::Zener {
+            limited: true,
+            saturation,
+            emission,
+            ..
+        }) = self.transfer
+        {
+            let v = self.input(0, x, None).v;
+            let nvt = crate::thermal_voltage(ctx.temp) * emission;
+            let (at, changed) = if ctx.limit {
+                crate::junction::limit_junction(
+                    v,
+                    history.current[0],
+                    nvt,
+                    crate::junction::vcrit(saturation, nvt),
+                )
+            } else {
+                (v, false)
+            };
+            limited[0] = at;
+            history.current[0] = at;
+            out.noncon |= changed;
+            &limited[..]
+        } else {
+            history.accepted
+        };
         let mut c = 0;
         for r in 0..=self.states.len() {
-            let (v, q) = self.equation(r, ctx, x, None, history.accepted);
+            let (v, q) = self.equation(r, ctx, x, None, h);
             let sign = if r == 0 { -1. } else { 1. };
             if r == 0 {
                 if matches!(self.transfer, Transfer::Slew { .. }) {
                     history.current.copy_from_slice(&[ctx.time, v.v]);
+                }
+                if let Transfer::Signal(s) = &self.transfer
+                    && s.state_len() > 0
+                    && !matches!(s, Signal::Zener { .. })
+                {
+                    s.eval(
+                        ctx,
+                        |i| self.input(i, x, None),
+                        self.inputs.len(),
+                        history.accepted,
+                        Some(history.current),
+                    );
                 }
                 out.f[f - 1] -= v.v;
             } else {
@@ -818,7 +1104,7 @@ impl DeviceGroup for Analog {
                 out.q[r - 1] = q.v;
             }
             for j in 0..self.inputs.len() + self.states.len() {
-                let (v, q) = self.equation(r, ctx, x, Some(j), history.accepted);
+                let (v, q) = self.equation(r, ctx, x, Some(j), h);
                 let d = sign * v.d[0];
                 out.g[g..g + 2].copy_from_slice(&[d, -d]);
                 g += 2;

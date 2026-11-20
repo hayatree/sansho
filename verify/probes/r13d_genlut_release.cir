@@ -1,0 +1,32 @@
+LUT release through an unknown address with independent delay controls
+* Provenance: original Sansho follow-up to the ngspice 44.2 R13c pin sweep.
+* sweep: fall_delay 0.1n 0.2n 0.5n
+.param probe=0.2n
+Va in 0 PWL(0 0 3n 0 3.1n 0.5 7n 0.5 7.1n 1 11n 1 11.1n 0.5 15n 0.5 15.1n 0)
+Abits [in] [a] bits
+Acmp [in] [k] binary
+Aref down weak
+Abase [a down] [base] lut
+Arise [a down] [rise] slow
+Astatic [a down] [unusedpin] other
+Adirect [k down] [direct] lut
+Alow [a down] [low] fromlow
+.model bits adc_bridge(in_low=0.25 in_high=0.75 rise_delay=0 fall_delay=0)
+.model binary adc_bridge(in_low=0.75 in_high=0.75 rise_delay=0 fall_delay=0)
+.model weak d_pulldown
+.model lut d_genlut(table_values="1Z1Z" input_delay=[0.1n 0.4n] rise_delay=[1n] fall_delay=[{probe}])
+.model slow d_genlut(table_values="1Z1Z" input_delay=[0.1n 0.4n] rise_delay=[2n] fall_delay=[{probe}])
+.model other d_genlut(table_values="1Z1Z" input_delay=[0.1n 0.8n] rise_delay=[1n] fall_delay=[{probe}])
+.model fromlow d_genlut(table_values="0Z0Z" input_delay=[0.1n 0.4n] rise_delay=[1n] fall_delay=[{probe}])
+.control
+tran 0.05n 19n
+eprint a
+eprint k
+eprint base
+eprint rise
+eprint unusedpin
+eprint direct
+eprint low
+quit
+.endc
+.end

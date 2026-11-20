@@ -26,18 +26,20 @@ pub(super) enum Storage {
 
 #[derive(Debug)]
 pub(super) enum Model {
+    Extended(super::extended::Extended),
     Gate(Function, bool),
     Lut(Vec<Level>),
     Adc {
-        input: Node,
+        input: [Node; 2],
         low: f64,
         high: f64,
     },
     Osc {
-        input: Node,
+        input: [Node; 2],
         control: Vec<f64>,
         frequency: Vec<f64>,
         duty: f64,
+        phase: f64,
     },
     Sequential {
         kind: Storage,
@@ -55,6 +57,7 @@ pub(super) enum Model {
 
 #[derive(Debug, Default, Clone)]
 pub(super) struct Memory {
+    pub(super) extended: Option<Box<super::extended::Storage>>,
     q: Level,
     clock: Option<Level>,
     count: u32,
@@ -65,17 +68,24 @@ impl Model {
     pub(super) fn eval(
         &self,
         inputs: &[Option<usize>],
-        nodes: &[Value],
+        nodes: &[super::Sample],
         x: &[f64],
         t: f64,
         dc: bool,
         m: &mut Memory,
     ) -> (Value, Option<f64>) {
-        let pin = |i: usize| inputs.get(i).copied().flatten().map_or(Low, |n| nodes[n].0);
+        let pin = |i: usize| {
+            inputs
+                .get(i)
+                .copied()
+                .flatten()
+                .map_or(Low, |n| nodes[n].logic().0)
+        };
         let strong = |v| Value(v, Drive::Strong);
-        let levels = || inputs.iter().flatten().map(|&n| nodes[n].0);
+        let levels = || inputs.iter().flatten().map(|&n| nodes[n].logic().0);
         let mut delay = None;
         let out = match self {
+            Self::Extended(_) => return (Value::default(), None),
             Self::Gate(f, invert) => {
                 let q = match f {
                     Function::Pull(v) => return (Value(*v, Drive::Resistive), None),
@@ -132,7 +142,7 @@ impl Model {
                 strong(table[index])
             }
             Self::Adc { input, low, high } => {
-                let v = volt(x, *input);
+                let v = volt(x, input[0]) - volt(x, input[1]);
                 strong(if v <= *low {
                     Low
                 } else if v >= *high {
@@ -146,6 +156,7 @@ impl Model {
                 control,
                 frequency,
                 duty,
+                phase,
             } => {
                 if dc || !m.started || m.next.is_some_and(|at| at <= t) {
                     m.q = if dc || !m.started {
@@ -155,7 +166,7 @@ impl Model {
                     } else {
                         High
                     };
-                    let v = volt(x, *input);
+                    let v = volt(x, input[0]) - volt(x, input[1]);
                     let i = control.partition_point(|&c| c <= v);
                     let f = if i == 0 {
                         frequency[0]
@@ -166,7 +177,17 @@ impl Model {
                             + (v - control[i - 1]) / (control[i] - control[i - 1])
                                 * (frequency[i] - frequency[i - 1])
                     };
-                    m.next = Some(t + if m.q == High { *duty } else { 1. - duty } / f);
+                    let mut remaining = if m.q == High { *duty } else { 1. - duty };
+                    if (dc || !m.started) && *phase != 0. {
+                        let angle = (phase / 360.).rem_euclid(1.);
+                        m.q = if angle >= 1. - duty { High } else { Low };
+                        remaining = if m.q == High {
+                            1. - angle
+                        } else {
+                            1. - duty - angle
+                        };
+                    }
+                    m.next = Some(t + remaining / f);
                 }
                 if m.q == Unknown {
                     Value(Low, Drive::Unknown)

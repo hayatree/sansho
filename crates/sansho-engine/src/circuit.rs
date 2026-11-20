@@ -1413,14 +1413,46 @@ fn native_groups<'a>(
                     continue;
                 };
                 if sansho_netlist::digital_model(&card.kind) {
-                    if card.kind == "dac_bridge"
-                        && let Some(outputs) = ports.get(1)
+                    if card.kind == "bidi_bridge"
+                        && let Some(p) = ports.first()
                     {
-                        for (i, n) in outputs.nodes.iter().enumerate() {
+                        let params = ModelParams::new(&card.params);
+                        for (index, pair) in p
+                            .nodes
+                            .chunks(if p.differential() { 2 } else { 1 })
+                            .enumerate()
+                        {
+                            match sansho_devices::xspice::bidi::Bidi::new(
+                                format!("{}:{index}", e.name),
+                                [node(&pair[0]), pair.get(1).and_then(|n| node(n))],
+                                &params,
+                            ) {
+                                Ok(d) => {
+                                    controlled.push(Box::new(d));
+                                    nonlinear_count += 1;
+                                }
+                                Err(d) => errors.push(d.with_span(e.span)),
+                            }
+                        }
+                    }
+                    // Input-current sensors and output-voltage constraints share a zero-volt branch.
+                    let family = card.kind.as_str();
+                    let output = matches!(family, "dac_bridge" | "real_to_v");
+                    if matches!(
+                        family,
+                        "d_osc" | "d_pwm" | "adc_bridge" | "dac_bridge" | "real_to_v"
+                    ) && let Some(port) = ports.get(usize::from(output))
+                        && output != port.modifier.starts_with('i')
+                    {
+                        for (i, pair) in port
+                            .nodes
+                            .chunks(if port.differential() { 2 } else { 1 })
+                            .enumerate()
+                        {
                             vsrc.cur().push(
                                 &format!("{}:{i}", e.name),
-                                node(n),
-                                None,
+                                node(&pair[0]),
+                                pair.get(1).and_then(|n| node(n)),
                                 Default::default(),
                             );
                         }
@@ -1451,8 +1483,62 @@ fn native_groups<'a>(
                     }
                     continue;
                 }
+                if matches!(
+                    card.kind.as_str(),
+                    "lcouple" | "pswitch" | "potentiometer" | "ilimit"
+                ) {
+                    match sansho_devices::xspice::multiport::Multiport::new(
+                        &e.name, ports, card, &node,
+                    ) {
+                        Ok(d) => {
+                            nonlinear_count += usize::from(!d.is_linear());
+                            controlled.push(Box::new(d));
+                        }
+                        Err(d) => errors.push(d.with_span(e.span)),
+                    }
+                    continue;
+                }
                 match sansho_devices::xspice::Analog::new(&e.name, ports, card, &node) {
-                    Ok(d) => {
+                    Ok(mut d) => {
+                        if matches!(card.kind.as_str(), "cmeter" | "lmeter") {
+                            let mut sum = 0.;
+                            let pins = &ports[0].nodes;
+                            for component in &nl.elements {
+                                let (p, n, value, params, model) = match &component.kind {
+                                    ElementKind::Capacitor {
+                                        p,
+                                        n,
+                                        value,
+                                        params,
+                                        model,
+                                    } if card.kind == "cmeter" => (p, n, value, params, model),
+                                    ElementKind::Inductor {
+                                        p,
+                                        n,
+                                        value,
+                                        params,
+                                        model,
+                                    } if card.kind == "lmeter" => (p, n, value, params, model),
+                                    _ => continue,
+                                };
+                                if pins.len() == 1 && (pins.contains(p) || pins.contains(n))
+                                    || pins.len() == 2
+                                        && ((pins[0] == *p && pins[1] == *n)
+                                            || (pins[0] == *n && pins[1] == *p))
+                                {
+                                    match passive_value(
+                                        *value,
+                                        params,
+                                        model.as_ref().and_then(|n| model_cache.card(n)),
+                                        opts,
+                                    ) {
+                                        Ok(v) => sum += v,
+                                        Err(err) => errors.push(err.with_span(component.span)),
+                                    }
+                                }
+                            }
+                            d.scale_meter(sum);
+                        }
                         nonlinear_count += usize::from(!d.is_linear());
                         controlled.push(Box::new(d));
                     }

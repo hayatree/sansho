@@ -1,0 +1,28 @@
+Real-chain DC scale and individual sampled events
+* Provenance: original Sansho probe of the R13 real-chain voltage discrepancy.
+* sweep: gain 0 0.5 1 2
+.param probe=0.5
+Vdata din 0 PWL(0 0 9n 0 10n 1 24n 1)
+Vclock tick 0 PULSE(0 1 4n 0.1n 0.1n 2n 10n)
+Aadc [din tick] [d clk] bits
+Acode d NULL value convert
+Aamp value scaled amp
+Ahold scaled clk held reg
+Aout held out bridge
+Rout out 0 10k
+.model bits adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0 fall_delay=0)
+.model convert d_to_real(zero=0.25 one=1.25 delay=0.3n)
+.model amp real_gain(gain=2 in_offset=0.25 out_offset=-0.5 delay=0.4n)
+.model reg real_delay(delay=0.5n)
+.model bridge real_to_v(gain={probe} transition_time=0.4n)
+.control
+tran 0.05n 23n
+eprint d
+eprint clk
+eprint value
+eprint scaled
+eprint held
+print v(out)
+quit
+.endc
+.end

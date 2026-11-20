@@ -2,6 +2,11 @@
 
 Each original deck runs at its printed setting with a single analysis card. From the repository root, run the sweeps with a local ngspice 44.2 executable. The driver varies the one value listed on each deck's `* sweep:` line. It writes the exact circuit, ASCII raw file and log for every setting under `verify/out/probes/`.
 
+The R13c sweep lines name the parameter before its settings. The driver
+substitutes each numeric setting into `.param probe=`. Older decks list
+the settings alone. For decks ending in a control-block `quit`, the log
+contains the requested printed records.
+
 ```sh
 verify/probes/sweep.sh
 # Select the noise families using the repository's installed reference image
@@ -347,3 +352,102 @@ Run `sansho run -j 1 verify/out/probes/r12c_boundaries_0.1.cir` and compare with
 The default ADC stays low on the 0.1 V plateau, reports unknown at 0.101 and 0.899 V, and reaches high at 0.9 V. Relative to `d`, both `w` and `q` take the 2 ns rise delay for low → unknown and unknown → high. Both take the 0.25 ns fall delay for high → unknown and unknown → low. Before the correction, Sansho’s mean-delay rule put the first unknown at 6.135 ns and suppressed the second. The oscillator drives at the phase crossings even with the same explicit delay pair. Sansho previously added those delays and placed the first two edges at 9.5 and 10.25 ns.
 
 With DAC rails of −1 and +3 V and 1 ns full-swing times, the output reaches the implicit +1 V midpoint at 5.51 ns and holds it through 16 ns. Linearly interpolating Sansho’s 419 analog samples onto all 355 reference times gives maximum absolute differences below 6e−15 V for the input and 5e−14 V for the DAC output.
+
+## R13c XSPICE residuals
+
+Run the five self-contained probes from the repository root in the oracle environment.
+Keep each expanded circuit and its adjacent log or raw.
+
+```sh
+NGSPICE=tools/ngspice/ngspice.sh verify/probes/sweep.sh verify/probes/r13_*.cir
+```
+
+| Probe | What to measure in 44.2 |
+|---|---|
+| `r13_genlut_unknown` | The same input drives the first pin, the second pin or both pins on three LUTs. Subtract each input event time from the corresponding output event time. Only the first pin delay varies (0.1, 0.5, 0.9 ns), crossing the second pin's fixed 0.4 ns. This separates earliest, latest and fixed-pin selection for simultaneous unknowns. Low→U and high→U have distinct output delays of 1 and 0.2 ns. The additional tristate tables expose direct releases and changes between U and Z. |
+| `r13_ram_write` | Compare the bare output symbol with a copy driving a weak pulldown. At high data, a released output leaves the pulled bus at `0r` and a strong output drives it to `1s`. Data changes twice during one selected write. Compare the delays from data, write enable and select to the output across the three read-delay settings. |
+| `r13_real_gain` | Compare `value`, `scaled`, `held` and the two analog plateaus while varying only the final bridge gain (0, 0.5, 1, 2). The expected real levels are (0.25, 1.25), then (0.5, 2.5), then the sampled pair after the rising clocks. The gain-zero case distinguishes a bridge that ignores gain from excess gain upstream. |
+| `r13_real_transition` | A single 0→1→0 real signal drives a unity-gain bridge. At fixed maximum step 0.05 ns compare time to settle and the sample-to-sample error ratios for transition times 0.2, 0.4 and 0.8 ns. A linear ramp reaches its rail after one transition time. A repeated fractional update leaves a tail with error factor `1 − Δt / transition_time`. Use the actual recorded Δt. |
+| `r13_zener_resistance` | Directly impose reverse voltage and read `−i(Vrev)`, including at 4.7 V. Remove the parallel leakage before taking log-current slopes. At 10 mA the predicted e-fold voltages are 15, 30, 60 and 1000 mV. The wide knee makes the low-bias continuation measurable. |
+
+The batch-deck measurements and the gain difference are recorded in the
+[XSPICE verification notes](../../docs/xspice.md#r13c-residuals).
+
+## R13d probe results
+
+These measurements compare the maintainer’s 17 ngspice 44.2 runs of the five
+R13c decks with Sansho as of R13d. The digital times below are in ns. Replay an expanded circuit with
+`sansho run -j 1 verify/out/probes/<stem>_<setting>.cir`. For a zener DC sweep,
+add `-r <output.raw>` and compare the source current at each bias.
+
+| Probe | 44.2 measurements and Sansho replay |
+|---|---|
+| `r13_genlut_unknown` | Input `a` changes at 3.075, 7.075, 11.075 and 15.075. Subtract the pin delay from the output lag on `p` or `q` to get 1, 1, 0.2 and 0.2. For the tied pins `r`, the low → Uu lags are 1.1, 1.5 and 1.9 across the sweep. The Uu → high lags are 1.4, 1.5 and 1.9. This identifies the first unknown pin and the maximum delay for recovery to a known address. The direct high → Z → high path gives `1s → Uz → 1s` with output delays 0.2 and 1. The path through an unknown gives `1s → Uu → 0z → Uu → 1s` with output delays 0.2, 0.4, 0.6 and 1. Sansho matches all 93 symbols and 90 times to 1e−18 s. The three Uu → 0z times are each 0.2 ns late. |
+| `r13_ram_write` | Relative to 6.075, 11.075, 18.075, 22.075, 26.075 and 30.075, the bare output emits `1z, 0z, 1z, 1s, Uz, 1s` exactly 0.25, 1 or 2 ns later according to `read_delay`. The pulled bus resolves to `0r, 0r, 0r, 1s, 0r, 1s`. Stored data tracks both changes during a selected write. All resolved state changes agree. Sansho coalesces the repeated `0r` records. Interpolating both DAC outputs onto the reference rows gives a maximum difference below 3.4 × 10⁻¹⁴ V. |
+| `r13_real_gain` | In all four settings `value` changes from 0.25 to 1.25 at 9.825. The reference `scaled` history is 0 at startup, 0.5 at 0.8 and 2.5 at 10.225. Both held values arrive at 4.575 and 14.575. At 4.625 the outputs for gains 0, 0.5, 1 and 2 are 0, 0.03125, 0.0625 and 0.125 V. At 14.625 they are 0.5, 0.625, 0.75 and 1 V. At each time the gain-zero trace gives the previous internal state and gain one gives the current state. Interpolating between or extrapolating from those two gives the other two gains even on the shortened clock-corner steps. All four approach 0.5 and 2.5 V. Replay agrees with all 1,992 printed analog rows within 5.1 × 10⁻⁷ V. Sansho starts `scaled` at 0.5. The subsequent data and clocked events match. |
+| `r13_real_transition` | The input rises at 2.375 and falls at 6.375. At 2.425 the unity-gain outputs are 0.25, 0.125 and 0.0625 V for transition times of 0.2, 0.4 and 0.8 ns. In a 0.05 ns step the remaining error is multiplied by 0.75, 0.875 or 0.9375. Using the actual step in `1 − Δt/T` also predicts the corner samples. For example, with T = 0.8 ns the 6.000 → 6.005 ns step takes 0.9907073 to 0.9907653 V. Both polarities agree over all 660 printed analog rows within 5.1 × 10⁻⁸ V. |
+| `r13_zener_resistance` | Each raw contains 1,941 forced biases from −0.1 to 4.75 V. The shunt conductance is 42.55319 nS. After removing the shunt, use the ratio of the successive 25 mV current differences ending at 4.725 and 4.750 V to recover e-fold voltages of 15, 30, 60 and 1000 mV. The corresponding currents at 4.7 V after shunt subtraction are 10.000000, 10.000000, 9.991557 and 9.999969 mA. For 100 Ω the total reverse-oriented currents at −0.1, 0, +0.5 and +4.7 V are −9.183058 µA, approximately 0, 59.565376 µA and 10.000169 mA. They identify the forward-side tangent and a reverse exponential normalized at both zero and the rating. Maximum differences across the four full replays are 0.201 nA, 0.259 nA, 19.43 µA and 33.10 nA. At 6 Ω the measured high-current factor of 0.999156 agrees with evaluating the exponential by its tangent from the preceding 2.5 mV bias, `(1+h/S) exp(−h/S)`. The device uses the analytic curve. |
+
+Running `sansho-verify --cached verify/r13-decks` gives ten passes, zero known
+differences and zero skips. The worst scores by deck are 0.487 (hyst), 0.422
+(transformer), 0.064 (zener) and below 0.001 for genlut, ilimit, multi_pwl,
+oneshot, ram, real and state. The real deck's largest absolute error across all
+288 reference samples is 3.27 × 10⁻¹¹ V or less.
+[Model equations and scope](../../docs/xspice.md#r13d-measured-laws)
+
+### R13d follow-up sweep settings
+
+```sh
+NGSPICE=tools/ngspice/ngspice.sh verify/probes/sweep.sh verify/probes/r13d_*.cir
+```
+
+| Probe | Measurement that distinguishes the remaining choices |
+|---|---|
+| `r13d_genlut_release` | Sweep the fall delay through 0.1, 0.2 and 0.5 ns. Parallel LUTs independently double the rise delay or the static pin delay. Subtract the changing input's fixed 0.1 ns from Uu → Z and Z → Uu lags. The low-start and direct-release controls also test which bare level accompanies Z. |
+| `r13d_real_startup` | Sweep the amplifier delay through 0.1, 0.4 and 0.7 ns. Compare zero-delay and 0.3 ns converters, and amplifiers with zero and −1 IC. Measure the initial value and first non-IC publication time on each node to separate converter startup, amplifier delay and IC behavior. |
+| `r13d_real_short` | With a nonzero initial real input, compare unity and double gain for T = 0, 0.025, 0.05 and 0.1 ns. The 0.05 ns grid crosses Δt/T = 1. Measure the DC value, first increment, possible overshoot and subsequent state on both edges to distinguish clamping from extrapolation and identify the zero-time limit. |
+
+## R13e probe results
+
+The maintainer supplied ten ngspice 44.2 logs for these three sweeps. Replay
+each existing expanded circuit with
+`sansho run -j 1 verify/out/probes/r13d_<probe>_<setting>.cir`. All 150
+event records match in value (including digital strength) and in time to
+1e−18 s. All ten Sansho probe replays produce byte-identical CLI output with
+one and four threads. Replaying the earlier `r13_genlut_unknown` and `r13_real_gain`
+sweeps also reproduces all 93 and 60 event records respectively, including
+the three previously late releases and the amplifier startup publications.
+The cached verifier passes all ten R13 batch decks at their original
+tolerances, with zero known differences and zero skips. The largest
+normalized score is 0.487 on `r13_hyst`. The maximum `r13_real` voltage
+error is 3.262 × 10⁻¹¹ V over 288 reference points.
+
+The following times are in ns.
+
+| Probe | Measured result |
+|---|---|
+| `r13d_genlut_release` | Subtract the changing pin's 0.1 ns delay from each lag. With fall F = 0.1, 0.2, 0.5, the high-start Uu → 0z lags then measure 0.2, 0.4, 1.0 and the 0z → Uu lags measure 0.3, 0.6, 1.5. Doubling the rise delay changes only the final return to high. Doubling the static pin delay changes none of the times. Starting low gives 1 + F for release and 1 + 2F for the return to Uu. The direct high → Z → high control emits `Uz` with output delays F and R. All 93 records agree. |
+| `r13d_real_startup` | Both converters publish 0.25 at zero. The amplifier outputs start at 0, 0 and −1, then all reach 0.5 at 0.2, 0.8 or 1.4 as amplifier delay D takes 0.1, 0.4 or 0.7. Later the fast converter publishes 1.25 at 4.0625, the slow one at 4.3625, and their amplifiers publish 2.5 one D later. All 45 records agree. Interpolating Sansho's analog output onto all 882 printed times gives maximum error below 5 × 10⁻⁷ V. |
+| `r13d_real_short` | All four real histories give 0.5, 1.5 and 0.5 at 0, 2.375 and 3.375. The DC voltages at gains one and two are 0.5 and 1 V. At 2.425, the pair is (1.5, 3) for T = 0, 0.025 and 0.05, and (1, 1.5) for T = 0.1. At 2.475 the T = 0.1 pair is (1.25, 1.5). At 3.425 the T = 0.05 pair is (0.5, −0.5), followed by (0.5, 1) at 3.475. The negative sample is consistent with applying double gain to the increment from 1.5 down to 0.5. |
+
+The short-bridge analog comparison below uses linear interpolation at the
+140 printed reference times per run. The count in parentheses is the number
+of rows differing by more than 2 µV, above the observed print rounding.
+
+| T (ns) | Maximum unity error in V (rows) | Maximum double-gain error in V (rows) |
+|---|---:|---:|
+| 0 | 1 (1) | 2 (1) |
+| 0.025 | 0 (0) | 1.5 (4) |
+| 0.05 | 0 (0) | 1.5 (54) |
+| 0.1 | ≤ 5.1 × 10⁻⁷ (0) | 0.5 (2) |
+
+**Open items.** For positive T, the reference keeps the DC double-gain
+output of 1 V at 0.5 and 1 ps, then gives 0.5 V at 2 ps. All runs have
+the same initial step sequence. At nominal Δt = T, the printed times cannot
+establish which side of equality the actual interval occupies. Sansho uses
+direct gain at exact equality. Finally, the zero-time bridge applies the
+rising event in its 2.375 ns reference sample but still reports the old
+value in its 3.375 ns sample. Sansho publishes both edges at the real
+event. The positive-T 0.025 ns trace also has one discrepant event sample
+at 2.375 ns. The logs do not determine the ordering at finer precision.
+[Model laws](../../docs/xspice.md#r13e-measured-laws)

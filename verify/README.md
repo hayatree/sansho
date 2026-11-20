@@ -461,3 +461,26 @@ The table gives DAC **ramp starts** in ns. Durations below come from the slope b
 | ring | Starts at 1 V. The enable crosses 0.5 V at 5.50 ns and is sampled high at 5.75 ns. Three 2 ns delays put the first falling ramp at 11.75 ns. Subsequent ramps alternate at 6 ns intervals through 77.75 ns, with 0.20 ns full-scale transitions. | 100 → 0.000 |
 
 A score of 1 is the pass threshold. Explicit DAC levels and constant slew already match these references. The two-grid counter histories trace the residual to the fourth ADC sample and agree throughout the refined run. The supplied circuits use explicit timing parameters and none contains a digital oscillator. [Digital-history probes](probes/README.md#r12-digital-histories)
+
+## XSPICE external-model diagnostics
+
+Run `cargo test -p sansho-netlist external_code_models_are_rejected_before_binding` to check the source-located error for a process model, an unused co-simulation model and a library-loading command inside a control loop or on a dot card.
+
+## R13 code-model decks
+
+Run `cargo test -p sansho-engine --test xspice_library` for the Sansho measurements. The suite checks all ten batch decks for warnings and compares their analog plots and event histories on one and two workers. Each deck has an analog print and save list. Keep the four stimulus and state data files beside the decks. The cached CI runs the independent checks and compares any R13 reference raws present. To generate the ngspice 44 references in the oracle environment, run `cargo run --release -p sansho-verify --features jit -- verify/r13-decks`. Add `--cached` before the directory to replay the full reference suite.
+
+| Deck | Quantities to compare |
+|---|---|
+| r13_hyst | Rising and falling output knees under the same triangular input. |
+| r13_ilimit | Loaded output voltage and both supply currents across the −12 mA and +8 mA limits. |
+| r13_multi_pwl | Smaller and larger differential inputs selected on opposite sides of a fixed 0.25 V reference. |
+| r13_zener | Reverse leakage, regulator knee and loaded incremental breakdown resistance. |
+| r13_transformer | Primary and secondary sine voltages, primary current and signed 30:50 turns ratio. |
+| r13_oneshot | Clock threshold, finite rise/fall and extension of a live pulse by the second edge. |
+| r13_state | Two DAC outputs visiting three file-defined states on successive clock edges. |
+| r13_ram | Writes and reads of distinct values at two addresses, then deselection. |
+| r13_genlut | Two output words, asymmetric pin delays and a weak pulldown that distinguishes high impedance from an unknown address. |
+| r13_real | Digital levels converted to real values, scaled, sampled on a separate clock and ramped onto an analog output. |
+
+Additional tests cover both magnetic modes, passive devices, meters, PWM, bidirectional drive, AC interpolation, grid files, delayed waveforms, real-driver summation and port inversion. All ten batch decks pass the ngspice 44.2 cached comparison at their original tolerances. [R13e timing laws and open sampling questions](../docs/xspice.md#r13e-measured-laws)

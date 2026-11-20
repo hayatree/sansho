@@ -10,6 +10,14 @@ pub(super) enum Level {
 }
 use Level::{High, Low, Unknown};
 impl Level {
+    /// Propagation toward the requested level, including a partial transition to U.
+    pub(super) fn transition_delay(self, previous: Self, [fall, rise]: [f64; 2]) -> f64 {
+        match (self, previous) {
+            (Low, _) | (Unknown, High) => fall,
+            (High, _) | (Unknown, Low) => rise,
+            (Unknown, Unknown) => 0.5 * fall + 0.5 * rise,
+        }
+    }
     pub(super) fn invert(self) -> Self {
         match self {
             Low => High,

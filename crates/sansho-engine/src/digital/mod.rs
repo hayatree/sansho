@@ -2,11 +2,13 @@
 //! Provenance: XSPICE event and node conventions, discrete-event simulation and delta cycles.
 
 mod bind;
+mod extended;
 mod logic;
 mod model;
 pub(crate) use bind::Ports;
 use logic::{Drive, Level, Value, resolve};
 use model::{Memory, Model};
+use sansho_devices::Mode;
 use sansho_diag::Diagnostic;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -16,6 +18,24 @@ pub(crate) fn oscillation(t: f64) -> Diagnostic {
         "E-XSPICE-OSCILLATION",
         format!("mixed-signal network failed to settle in {DELTA_LIMIT} iterations at {t:e} s"),
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Sample {
+    Digital(Value),
+    Real(f64),
+}
+impl Sample {
+    fn logic(self) -> Value {
+        if let Self::Digital(v) = self {
+            v
+        } else {
+            Value::default()
+        }
+    }
+    fn real(self) -> f64 {
+        if let Self::Real(v) = self { v } else { 0. }
+    }
 }
 
 #[derive(Debug)]
@@ -29,12 +49,40 @@ struct Cell {
 struct Dac {
     output: sansho_devices::Node,
     input: usize,
-    row: usize,
+    rows: [Option<usize>; 2],
+    real: Option<RealBridge>,
+    current: bool,
+    negative: sansho_devices::Node,
     levels: [f64; 3],
     times: [f64; 2],
 }
+#[derive(Debug)]
+struct RealBridge {
+    gain: f64,
+    polarity: f64,
+}
+#[derive(Debug)]
+struct BidiPin {
+    rows: [usize; 4],
+    bus: usize,
+    driver: usize,
+    dir: Option<usize>,
+    direction: u32,
+    strength: u32,
+    analog: [sansho_devices::Node; 2],
+    thresholds: [f64; 2],
+    times: [f64; 2],
+    delays: [f64; 2],
+}
+#[derive(Clone, Default, Debug)]
+struct BidiState {
+    ramps: [Ramp; 4],
+    level: Level,
+}
 #[derive(Debug, Default)]
 pub(crate) struct Network {
+    bidis: Vec<BidiPin>,
+    real: Vec<bool>,
     pub(crate) names: Vec<String>,
     pub(super) loads: Vec<f64>,
     cells: Vec<Cell>,
@@ -64,48 +112,120 @@ impl Ramp {
     }
 }
 
+#[derive(Clone, Copy, Default, Debug)]
+struct DacState {
+    ramp: Ramp,
+    // Emitted sample before re-anchoring the internal real state at this time.
+    emitted: f64,
+}
+
+impl DacState {
+    /// Internal state and analog output at the end of this trial interval.
+    fn sample(&self, dac: &Dac, t: f64) -> (f64, f64) {
+        let r = self.ramp;
+        let Some(bridge) = &dac.real else {
+            let v = r.at(t);
+            return (v, v);
+        };
+        let dt = t - r.begin;
+        if dt == 0. {
+            (r.from, self.emitted)
+        } else if dt >= dac.times[0] {
+            (r.to, bridge.gain * r.to)
+        } else {
+            let increment = (dt / dac.times[0]) * (r.to - r.from);
+            (r.from + increment, r.from + bridge.gain * increment)
+        }
+    }
+}
+
+impl Network {
+    /// Event deadlines are continuous analog boundaries when all outputs
+    /// reach the analog system through finite-time real bridges.
+    pub(crate) fn smooth_real_outputs(&self) -> bool {
+        self.bidis.is_empty()
+            && !self.dacs.is_empty()
+            && self
+                .dacs
+                .iter()
+                .all(|d| d.real.is_some() && d.times[0] > 0.)
+    }
+}
+
 /// Private to one analysis. Keys are IEEE bits of nonnegative times, then driver ordinal.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Events {
-    nodes: Vec<Value>,
-    drivers: Vec<Value>,
+    nodes: Vec<Sample>,
+    drivers: Vec<Sample>,
     pending: Vec<VecDeque<u64>>,
-    desired: Vec<Option<Value>>,
-    queue: BTreeMap<(u64, usize), Value>,
+    desired: Vec<Option<Sample>>,
+    queue: BTreeMap<(u64, usize), Sample>,
     memory: Vec<Memory>,
-    ramps: Vec<Ramp>,
+    bidis: Vec<BidiState>,
+    dacs: Vec<DacState>,
     started: bool,
     stimulus_index: usize,
 }
 impl Events {
     pub(crate) fn new(net: &Network) -> Self {
         let startup = Value(Level::Low, Drive::Unknown);
-        Self {
+        let mut events = Self {
             nodes: net
                 .drivers
                 .iter()
-                .map(|d| {
-                    if d.is_empty() {
-                        Value::default()
+                .enumerate()
+                .map(|(i, d)| {
+                    if net.real[i] {
+                        Sample::Real(0.)
                     } else {
-                        startup
+                        Sample::Digital(if d.is_empty() {
+                            Value::default()
+                        } else {
+                            startup
+                        })
                     }
                 })
                 .collect(),
-            drivers: vec![startup; net.driver_nodes.len()],
+            drivers: net
+                .driver_nodes
+                .iter()
+                .map(|&n| {
+                    if net.real[n] {
+                        Sample::Real(0.)
+                    } else {
+                        Sample::Digital(startup)
+                    }
+                })
+                .collect(),
             desired: vec![None; net.driver_nodes.len()],
             pending: vec![VecDeque::new(); net.driver_nodes.len()],
+            bidis: vec![BidiState::default(); net.bidis.len()],
             memory: vec![Memory::default(); net.cells.len()],
-            ramps: net
+            dacs: net
                 .dacs
                 .iter()
-                .map(|d| Ramp {
-                    to: d.levels[2],
+                .map(|d| DacState {
+                    ramp: Ramp {
+                        to: d.levels[2],
+                        ..Default::default()
+                    },
                     ..Default::default()
                 })
                 .collect(),
             ..Self::default()
+        };
+        for cell in &net.cells {
+            if let Model::Extended(extended::Extended::Gain { ic, .. }) = cell.model
+                && let Some(&Some(driver)) = cell.outputs.first()
+            {
+                events.drivers[driver] = Sample::Real(ic);
+            }
         }
+        for (i, drivers) in net.drivers.iter().enumerate().filter(|(i, _)| net.real[*i]) {
+            events.nodes[i] =
+                Sample::Real(drivers.iter().map(|&id| events.drivers[id].real()).sum());
+        }
+        events
     }
     /// UIC supplies the analog starting vector. Reflect the DC DAC constraints
     /// into it before sampling input bridges and initializing charge history.
@@ -115,12 +235,14 @@ impl Events {
         x: &mut [f64],
     ) -> Result<(), Diagnostic> {
         for _ in 0..DELTA_LIMIT {
-            for (d, r) in net.dacs.iter().zip(&self.ramps) {
-                if let Some(n) = d.output {
-                    x[n] = r.at(0.);
+            for (d, r) in net.dacs.iter().zip(&self.dacs) {
+                if let Some(n) = d.output
+                    && !d.current
+                {
+                    x[n] = r.sample(d, 0.).1 + sansho_devices::volt(x, d.negative);
                 }
             }
-            if !self.settle(net, x, 0., true)? {
+            if !self.settle(net, x, 0., Mode::Tran)? {
                 return Ok(());
             }
         }
@@ -128,13 +250,16 @@ impl Events {
     }
     pub(crate) fn record(&self, net: &Network, axis: f64, traces: &mut sansho_output::EventTraces) {
         for (n, v) in net.names.iter().zip(&self.nodes) {
-            let symbol = v.symbol();
+            let symbol = match v {
+                Sample::Digital(v) => v.symbol().to_owned(),
+                Sample::Real(v) => format!("{v:e}"),
+            };
             if let Some(trace) = traces.get_mut(n) {
-                if trace.last().is_none_or(|(_, s)| s != symbol) {
-                    trace.push((axis, symbol.into()));
+                if trace.last().is_none_or(|(_, s)| s != &symbol) {
+                    trace.push((axis, symbol));
                 }
             } else {
-                traces.insert(n.clone(), vec![(axis, symbol.into())]);
+                traces.insert(n.clone(), vec![(axis, symbol)]);
             }
         }
     }
@@ -143,8 +268,12 @@ impl Events {
             .queue
             .first_key_value()
             .map_or(f64::INFINITY, |((time, _), _)| f64::from_bits(*time));
-        self.ramps
+        net.dacs
             .iter()
+            .zip(&self.dacs)
+            .filter(|(d, _)| d.real.is_none())
+            .map(|(_, state)| &state.ramp)
+            .chain(self.bidis.iter().flat_map(|b| &b.ramps))
             .map(|r| r.end)
             .chain(net.stimulus.get(self.stimulus_index).map(|s| s.0))
             .chain(net.external.iter().filter_map(|&i| self.memory[i].next))
@@ -152,11 +281,27 @@ impl Events {
             .fold(first, f64::min)
     }
     pub(crate) fn stamp(&self, net: &Network, b: &mut [f64], t: f64, factor: f64) {
-        for (d, r) in net.dacs.iter().zip(&self.ramps) {
-            b[d.row] += factor * r.at(t);
+        for (pin, state) in net.bidis.iter().zip(&self.bidis) {
+            for (row, r) in pin.rows.iter().zip(&state.ramps) {
+                b[*row] += factor * r.at(t);
+            }
+        }
+        for (d, r) in net.dacs.iter().zip(&self.dacs) {
+            let drive = factor * r.sample(d, t).1 * if d.current { -1. } else { 1. };
+            if let Some(row) = d.rows[0] {
+                b[row] += drive;
+            }
+            if let Some(row) = d.rows[1] {
+                b[row] -= drive;
+            }
         }
     }
-    fn schedule(&mut self, id: usize, v: Value, t: f64, delay: f64) -> Result<(), Diagnostic> {
+    fn schedule(&mut self, id: usize, v: Sample, t: f64, delay: f64) -> Result<(), Diagnostic> {
+        if let Sample::Real(x) = v
+            && !x.is_finite()
+        {
+            return Err(Diagnostic::error("E-XSPICE-VALUE", "nonfinite real event"));
+        }
         if self.desired[id] == Some(v) {
             return Ok(());
         }
@@ -178,7 +323,12 @@ impl Events {
         }
         Ok(())
     }
-    fn deliver(&mut self, net: &Network, t: f64, dirty: &mut BTreeSet<usize>) {
+    fn deliver(
+        &mut self,
+        net: &Network,
+        t: f64,
+        dirty: &mut BTreeSet<usize>,
+    ) -> Result<(), Diagnostic> {
         let mut changed = BTreeSet::new();
         while self
             .queue
@@ -195,17 +345,34 @@ impl Events {
             if time > t {
                 break;
             }
-            self.drivers[driver] = v;
+            self.drivers[driver] = Sample::Digital(v);
             changed.insert(net.driver_nodes[driver]);
             self.stimulus_index += 1;
         }
         for n in changed {
-            let value = resolve(net.drivers[n].iter().map(|&d| self.drivers[d]));
+            let value = if net.real[n] {
+                let total = net.drivers[n]
+                    .iter()
+                    .map(|&d| self.drivers[d].real())
+                    .sum::<f64>();
+                if !total.is_finite() {
+                    return Err(Diagnostic::error(
+                        "E-XSPICE-VALUE",
+                        "real node sum overflow",
+                    ));
+                }
+                Sample::Real(total)
+            } else {
+                Sample::Digital(resolve(
+                    net.drivers[n].iter().map(|&d| self.drivers[d].logic()),
+                ))
+            };
             if self.nodes[n] != value {
                 self.nodes[n] = value;
                 dirty.extend(&net.fanout[n]);
             }
         }
+        Ok(())
     }
     /// Deliver a simultaneous batch before evaluating fanout. Zero-delay responses enter
     /// the following delta. Only the final resolved node values reach the analog bridges.
@@ -214,21 +381,127 @@ impl Events {
         net: &Network,
         x: &[f64],
         t: f64,
-        dc: bool,
+        mode: Mode,
     ) -> Result<bool, Diagnostic> {
         if net.names.is_empty() {
             return Ok(false);
         }
+        let dc = t == 0.;
         let mut dirty: BTreeSet<_> = if self.started {
             net.external.iter().copied().collect()
         } else {
             (0..net.cells.len()).collect()
         };
         self.started = true;
+        let mut bidi_changed = false;
         for _ in 0..DELTA_LIMIT {
-            self.deliver(net, t, &mut dirty);
+            self.deliver(net, t, &mut dirty)?;
+            for (index, pin) in net.bidis.iter().enumerate() {
+                let external = resolve(
+                    net.drivers[pin.bus]
+                        .iter()
+                        .filter(|&&id| id != pin.driver)
+                        .map(|&id| self.drivers[id].logic()),
+                );
+                let direction = match pin.direction {
+                    0 => Level::Low,
+                    1 => Level::High,
+                    _ => pin
+                        .dir
+                        .map_or(Level::Unknown, |id| self.nodes[id].logic().0),
+                };
+                let dac = direction != Level::High
+                    && matches!(external.1, Drive::Strong | Drive::Resistive)
+                    && external.0 != Level::Unknown;
+                let adc = direction == Level::High || direction == Level::Unknown && !dac;
+                let st = &mut self.bidis[index];
+                let v =
+                    sansho_devices::volt(x, pin.analog[0]) - sansho_devices::volt(x, pin.analog[1]);
+                let [lo, hi] = pin.thresholds;
+                st.level = if lo > hi && v > hi && v < lo {
+                    st.level
+                } else if v <= lo.min(hi) {
+                    Level::Low
+                } else if v >= hi.max(lo) {
+                    Level::High
+                } else {
+                    Level::Unknown
+                };
+                let output = if adc {
+                    Value(
+                        st.level,
+                        match pin.strength {
+                            0 => Drive::Strong,
+                            1 => Drive::Resistive,
+                            _ => Drive::HiZ,
+                        },
+                    )
+                } else {
+                    Value(Level::Unknown, Drive::HiZ)
+                };
+                let active = usize::from(external.1 == Drive::Resistive) * 2
+                    + usize::from(external.0 == Level::High);
+                for (j, r) in st.ramps.iter_mut().enumerate() {
+                    let to = f64::from(dac && j == active);
+                    if r.to != to {
+                        let from = r.at(t);
+                        let end = t + if dc {
+                            0.
+                        } else {
+                            pin.times[usize::from(external.0 == Level::High)] * (to - from).abs()
+                        };
+                        *r = Ramp {
+                            begin: t,
+                            end,
+                            from,
+                            to,
+                        };
+                        bidi_changed |= from != r.at(t);
+                    }
+                }
+                self.schedule(
+                    pin.driver,
+                    Sample::Digital(output),
+                    t,
+                    if dc {
+                        0.
+                    } else {
+                        pin.delays[usize::from(output.0 == Level::High)]
+                    },
+                )?;
+            }
             for id in std::mem::take(&mut dirty) {
                 let cell = &net.cells[id];
+                if let Model::Extended(model) = &cell.model {
+                    let values =
+                        model.eval(&cell.inputs, &self.nodes, x, t, dc, &mut self.memory[id]);
+                    if self.memory[id]
+                        .next
+                        .is_some_and(|at| !at.is_finite() || at <= t)
+                    {
+                        return Err(Diagnostic::error(
+                            "E-XSPICE-TIME",
+                            "PWM edge cannot advance",
+                        ));
+                    }
+                    for (driver, (v, d)) in cell.outputs.iter().zip(values) {
+                        if let Some(driver) = driver {
+                            let delay = if !dc {
+                                d
+                            } else if mode == Mode::Tran
+                                && matches!(model, extended::Extended::Gain { .. })
+                            {
+                                // Hold the IC through transient initialization.
+                                // The settled input's first publication is due at 2D.
+                                2. * d
+                            } else {
+                                0.
+                            };
+                            self.schedule(*driver, v, t, delay)?;
+                        }
+                    }
+                    continue;
+                }
                 let (value, control) =
                     cell.model
                         .eval(&cell.inputs, &self.nodes, x, t, dc, &mut self.memory[id]);
@@ -247,21 +520,12 @@ impl Events {
                         if index == 1 {
                             v.0 = v.0.invert();
                         }
-                        let delay = match v.0 {
-                            Level::Low => cell.delay[0],
-                            Level::High => cell.delay[1],
-                            Level::Unknown => {
-                                // Follow the requested transition even if its predecessor is pending.
-                                match self.desired[driver].unwrap_or(self.drivers[driver]).0 {
-                                    Level::Low => cell.delay[1],
-                                    Level::High => cell.delay[0],
-                                    Level::Unknown => 0.5 * cell.delay[0] + 0.5 * cell.delay[1],
-                                }
-                            }
-                        };
+                        // The preceding request can still be in flight.
+                        let previous = self.desired[driver].unwrap_or(self.drivers[driver]).logic();
+                        let delay = v.0.transition_delay(previous.0, cell.delay);
                         self.schedule(
                             driver,
-                            v,
+                            Sample::Digital(v),
                             t,
                             if dc {
                                 0.
@@ -277,31 +541,58 @@ impl Events {
                 .first_key_value()
                 .is_none_or(|((time, _), _)| *time > t.to_bits())
             {
-                let mut changed = false;
-                for (d, ramp) in net.dacs.iter().zip(&mut self.ramps) {
-                    let to = d.levels[self.nodes[d.input].0 as usize];
-                    if to != ramp.to {
-                        let from = ramp.at(t);
+                let mut changed = bidi_changed;
+                for (d, state) in net.dacs.iter().zip(&mut self.dacs) {
+                    let (mut from, before) = state.sample(d, t);
+                    let ramp = &mut state.ramp;
+                    let (to, duration) = if let Some(bridge) = &d.real {
+                        let input = bridge.polarity * self.nodes[d.input].real();
+                        if dc || d.times[0] == 0. {
+                            from = input;
+                            state.emitted = bridge.gain * input;
+                        } else {
+                            // Only the unscaled increment feeds the next internal state.
+                            state.emitted = before;
+                        }
+                        if !state.emitted.is_finite() {
+                            return Err(Diagnostic::error(
+                                "E-XSPICE-VALUE",
+                                "real bridge output overflow",
+                            ));
+                        }
+                        (input, d.times[0])
+                    } else {
+                        let to = d.levels[self.nodes[d.input].logic().0 as usize];
+                        if to == ramp.to {
+                            continue;
+                        }
                         let swing = (d.levels[1] - d.levels[0]).abs();
                         let duration = if dc || swing == 0. {
                             0.
                         } else {
                             d.times[usize::from(to > from)] * ((to - from) / swing).abs()
                         };
-                        if !(t + duration).is_finite() {
-                            return Err(Diagnostic::error(
-                                "E-XSPICE-TIME",
-                                "DAC ramp endpoint overflow",
-                            ));
-                        }
-                        *ramp = Ramp {
-                            from,
-                            to,
-                            begin: t,
-                            end: t + duration,
-                        };
-                        changed |= from != ramp.at(t);
+                        (to, duration)
+                    };
+                    if !to.is_finite() {
+                        return Err(Diagnostic::error(
+                            "E-XSPICE-VALUE",
+                            "bridge output overflow",
+                        ));
                     }
+                    if !(t + duration).is_finite() {
+                        return Err(Diagnostic::error(
+                            "E-XSPICE-TIME",
+                            "DAC ramp endpoint overflow",
+                        ));
+                    }
+                    *ramp = Ramp {
+                        from,
+                        to,
+                        begin: t,
+                        end: t + duration,
+                    };
+                    changed |= before != state.sample(d, t).1;
                 }
                 return Ok(changed);
             }

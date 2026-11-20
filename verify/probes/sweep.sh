@@ -11,6 +11,14 @@ fi
 for deck in "$@"; do
     stem=$(basename "$deck" .cir)
     read -ra values <<< "$(sed -n 's/^\* sweep: //p' "$deck")"
+    # New decks name the swept model parameter before its numeric settings.
+    if [[ ${values[0]:-} =~ ^[[:alpha:]_][[:alnum:]_]*$ ]]; then
+        values=("${values[@]:1}")
+    fi
+    if (( ${#values[@]} == 0 )); then
+        echo "missing sweep values in $deck" >&2
+        exit 1
+    fi
     for value in "${values[@]}"; do
         base="$out/${stem}_$value"
         sed -e "s/^\.param probe=.*/.param probe=$value/" \

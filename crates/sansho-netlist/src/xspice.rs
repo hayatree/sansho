@@ -10,6 +10,8 @@ pub struct CodePort {
     /// Empty selects the model's default port type.
     pub modifier: String,
     pub vector: bool,
+    /// Invert the sign at a scalar real terminal.
+    pub inverted: bool,
     /// Consecutive differential pairs for d-suffixed types. Empty denotes NULL.
     pub nodes: Vec<String>,
 }
@@ -25,7 +27,10 @@ impl CodePort {
         } else {
             format!("%{} ", self.modifier)
         };
-        let nodes = self.nodes.join(" ");
+        let mut nodes = self.nodes.join(" ");
+        if self.inverted {
+            nodes.insert(0, '~');
+        }
         let body = if self.nodes.is_empty() {
             "NULL".into()
         } else if self.vector {
@@ -80,6 +85,7 @@ pub(crate) fn ports(tokens: &[Token]) -> Result<Vec<CodePort>, String> {
         }
         let mut port = CodePort {
             modifier,
+            inverted: false,
             vector: first.text == "[",
             nodes: Vec::new(),
         };
@@ -123,6 +129,24 @@ pub fn analog_model(kind: &str) -> bool {
             | "square"
             | "slew"
             | "aswitch"
+            | "pwlts"
+            | "xfer"
+            | "delay"
+            | "hyst"
+            | "ilimit"
+            | "multi_input_pwl"
+            | "zener"
+            | "core"
+            | "lcouple"
+            | "oneshot"
+            | "cmeter"
+            | "lmeter"
+            | "pswitch"
+            | "sidiode"
+            | "potentiometer"
+            | "memristor"
+            | "table2d"
+            | "table3d"
             | "filesource"
             | "gain"
             | "summer"
@@ -166,6 +190,15 @@ pub fn digital_model(kind: &str) -> bool {
             | "d_fdiv"
             | "d_source"
             | "d_lut"
+            | "d_state"
+            | "d_ram"
+            | "d_genlut"
+            | "bidi_bridge"
+            | "real_gain"
+            | "real_delay"
+            | "real_to_v"
+            | "d_to_real"
+            | "d_pwm"
     )
 }
 
@@ -178,8 +211,20 @@ impl ModelCard {
     pub fn check_code_model_params(&self) -> Result<(), Diagnostic> {
         let (scalars, arrays): (&[&str], &[&str]) = match self.kind.as_str() {
             "d_dt" | "int" => (&["out_lower_limit", "out_upper_limit"], &[]),
-            "sine" | "triangle" | "square" | "d_osc" => (&[], &["cntl_array", "freq_array"]),
-            "pwl" => (&[], &["x_array", "y_array"]),
+
+            "multi_input_pwl" => (&[], &["x", "y"]),
+            "zener" => (&["v_breakdown"], &[]),
+            "core"
+                if !self
+                    .params
+                    .iter()
+                    .rev()
+                    .find(|(k, _)| k == "mode")
+                    .is_some_and(|(_, v)| *v == 2.) =>
+            {
+                (&["area", "length"], &["h_array", "b_array"])
+            }
+            "pwl" | "pwlts" => (&[], &["x_array", "y_array"]),
             "s_xfer" => (&[], &["num_coeff", "den_coeff"]),
             _ => (&[], &[]),
         };
@@ -196,9 +241,16 @@ impl ModelCard {
         let missing = missing
             .or_else(|| (self.kind == "d_source" && self.table.is_none()).then_some("input_file"))
             .or_else(|| {
-                (self.kind == "d_lut" && self.arrays.iter().all(|(k, _)| k != "table_values"))
-                    .then_some("table_values")
+                (matches!(self.kind.as_str(), "d_lut" | "d_genlut")
+                    && self.arrays.iter().all(|(k, _)| k != "table_values"))
+                .then_some("table_values")
             });
+        let missing = missing.or_else(|| {
+            (self.kind == "xfer"
+                && self.table.is_none()
+                && !self.arrays.iter().any(|(k, _)| k == "table"))
+            .then_some("table or file")
+        });
         if let Some(key) = missing {
             return Err(Diagnostic::error(
                 "E-ELAB-PARAM",
@@ -218,6 +270,9 @@ impl ModelCard {
 pub struct SourceTable {
     pub filename: String,
     pub rows: Vec<Vec<f64>>,
+    /// Token records for model-specific state and frequency file grammars.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub records: Vec<String>,
 }
 
 impl SourceTable {
@@ -225,7 +280,7 @@ impl SourceTable {
         &mut self,
         loader: &dyn crate::SourceLoader,
         from: Option<&str>,
-        digital: bool,
+        kind: &str,
     ) -> Result<(), String> {
         let path = std::path::Path::new(&self.filename);
         if path.components().any(|c| {
@@ -237,6 +292,10 @@ impl SourceTable {
             return Err("filesource path must be relative and cannot contain ..".into());
         }
         let data = loader.waveform(path, from)?;
+        if matches!(kind, "d_state" | "xfer") {
+            self.records = data.lines().map(str::to_owned).collect();
+            return Ok(());
+        }
         for (i, line) in data.lines().enumerate() {
             let data = line
                 .split(['#', ';', '*'])
@@ -251,7 +310,7 @@ impl SourceTable {
                 .filter(|s| !s.is_empty())
                 .enumerate()
                 .map(|(col, s)| {
-                    if digital && col > 0 {
+                    if kind == "d_source" && col > 0 {
                         return digital_code(s).map(f64::from).ok_or_else(|| {
                             format!("{}:{}: invalid digital value {s}", self.filename, i + 1)
                         });
@@ -261,7 +320,9 @@ impl SourceTable {
                         .ok_or_else(|| format!("{}:{}: invalid sample", self.filename, i + 1))
                 })
                 .collect::<Result<_, _>>()?;
-            if row.len() < 2 || self.rows.first().is_some_and(|r| r.len() != row.len()) {
+            if !matches!(kind, "table2d" | "table3d")
+                && (row.len() < 2 || self.rows.first().is_some_and(|r| r.len() != row.len()))
+            {
                 return Err(format!(
                     "{}:{}: inconsistent filesource columns",
                     self.filename,

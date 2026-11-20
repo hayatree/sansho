@@ -742,7 +742,15 @@ impl State<'_> {
                         .get(name)
                         .ok_or_else(|| error(format!("unknown event node {name}")))?;
                     if cmd == "edisplay" {
-                        self.transcript.lines.push(format!("{name} digital"));
+                        let kind = if trace
+                            .first()
+                            .is_some_and(|(_, v)| sansho_netlist::digital_code(v).is_some())
+                        {
+                            "digital"
+                        } else {
+                            "real"
+                        };
+                        self.transcript.lines.push(format!("{name} {kind}"));
                     } else {
                         self.transcript
                             .lines

@@ -36,6 +36,13 @@ pub(crate) fn parse(lines: &[Line]) -> Result<Vec<Statement>, Diagnostic> {
                 .split_once(char::is_whitespace)
                 .unwrap_or((&line.raw, ""));
             let head = name.to_ascii_lowercase();
+            if head == "codemodel" {
+                return Err(Diagnostic::error(
+                    "E-UNSUPPORTED",
+                    "codemodel requires loading an external shared library",
+                )
+                .with_span(line.span()));
+            }
             if matches!(head.as_str(), "else" | "end") {
                 break;
             }

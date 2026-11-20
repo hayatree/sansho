@@ -136,15 +136,17 @@ fn required_parameters_name_the_model_and_missing_field() {
     for (kind, fields) in [
         ("int", &["out_lower_limit=-1", "out_upper_limit=1"][..]),
         ("d_dt", &["out_lower_limit=-1", "out_upper_limit=1"]),
-        ("square", &["cntl_array=[0 1]", "freq_array=[1 2]"]),
-        ("sine", &["cntl_array=[0 1]", "freq_array=[1 2]"]),
-        ("triangle", &["cntl_array=[0 1]", "freq_array=[1 2]"]),
         ("pwl", &["x_array=[0 1]", "y_array=[0 1]"]),
         ("s_xfer", &["num_coeff=[1]", "den_coeff=[1 1]"]),
-        ("filesource", &["file=\"wave.dat\""]),
-        ("d_source", &["input_file=\"bits.dat\""]),
+        ("zener", &["v_breakdown=4.7"]),
+        ("multi_input_pwl", &["x=[0 1]", "y=[0 1]"]),
+        (
+            "core",
+            &["h_array=[0 1]", "b_array=[0 1]", "length=1", "area=1"],
+        ),
+        ("d_genlut", &["table_values=\"10\""]),
+        ("pwlts", &["x_array=[0 1]", "y_array=[0 1]"]),
         ("d_lut", &["table_values=\"10\""]),
-        ("d_osc", &["cntl_array=[0 1]", "freq_array=[1 2]"]),
     ] {
         for (i, field) in fields.iter().enumerate() {
             let params = fields
@@ -199,8 +201,8 @@ fn local_model_arrays_roundtrip_and_failures() {
     let again = parse(&text).unwrap();
     assert_eq!(nl.elements[0].kind, again.elements[0].kind);
     assert!(text.contains("x1.out"));
-    for kind in ["d_unsupported", "d_state(state_file=\"abc\")"] {
-        let ds = parse(&format!("digital\nA1 [a b] out m\n.model m {kind}")).unwrap_err();
+    {
+        let ds = parse("digital\nA1 [a b] out m\n.model m d_unsupported").unwrap_err();
         assert!(ds.iter().any(|d|d.code=="E-XSPICE-MODEL" && d.message.contains("unsupported code model")));
     }
     for path in ["../waveform.dat", "/outside.dat", "input.dat"] {

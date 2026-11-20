@@ -1,0 +1,19 @@
+Real-valued gain and clocked sample feeding a voltage bridge
+* Provenance: original Sansho verification circuit.
+Asrc [d unused] inputs
+Atick [clk] ticks
+Acode d NULL value toreal
+Aamp value scaled amplify
+Ahold scaled clk held reg
+Aout held out analog
+Rload0 out 0 10k
+.model inputs d_source(input_file="address.dat")
+.model ticks d_source(input_file="clock.dat")
+.model toreal d_to_real(zero=0.25 one=1.25 delay=0.3n)
+.model amplify real_gain(gain=2 in_offset=0.25 out_offset=-0.5 delay=0.4n)
+.model reg real_delay(delay=0.5n)
+.model analog real_to_v(gain=0.5 transition_time=0.4n)
+.tran 0.1n 28n
+.save v(out)
+.print tran v(out)
+.end

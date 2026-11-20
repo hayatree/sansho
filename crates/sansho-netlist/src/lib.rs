@@ -442,6 +442,7 @@ impl ElementKind {
         match self {
             Self::CodeModel { ports, .. } => ports
                 .iter()
+                .filter(|p| p.modifier != "vnam")
                 .flat_map(|p| p.nodes.iter().map(String::as_str))
                 .collect(),
             Self::Coupling { .. } => vec![],

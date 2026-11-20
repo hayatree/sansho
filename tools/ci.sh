@@ -40,6 +40,23 @@ skip() {
   skipped+=("$1: $2")
 }
 
+verify_r13() {
+  cargo test -q -p sansho-engine --test xspice_library
+  local deck
+  local refs=()
+  for deck in verify/r13-decks/*.cir; do
+    local stem=${deck##*/}
+    if [[ ${#verify_args[@]} == 0 || -e "verify/out/${stem%.cir}.ref.raw" ]]; then
+      refs+=("$deck")
+    fi
+  done
+  if (( ${#refs[@]} )); then
+    cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" "${refs[@]}"
+  else
+    echo "R13 circuits passed Sansho checks. No local R13 oracle raws."
+  fi
+}
+
 step "fmt" cargo fmt --all --check
 step "clippy" cargo clippy --workspace --all-targets -- -D warnings
 step "test" cargo test --workspace
@@ -67,6 +84,7 @@ if (( !quick )); then
     step "verify vs ngspice" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}"
     step "verify R11 analog code models" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" verify/r11-decks
     step "verify R12 digital code models" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" verify/r12-decks
+    step "verify R13 code models" verify_r13
     step "verify BSIM3 decks" cargo run -q --release -p sansho-verify -- "${verify_args[@]}" verify/bsim3-decks
     step "verify BSIM4 decks" cargo run -q --release -p sansho-verify -- "${verify_args[@]}" verify/bsim4-decks
     if [[ -d va-models/volare-sky130 ]]; then

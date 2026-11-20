@@ -130,7 +130,11 @@ pub(crate) fn extract(
         for i in 0..count {
             let (t, s) = points[i * (points.len() - 1) / count.saturating_sub(1).max(1)];
             x.push(*t);
-            y.push(f64::from(sansho_netlist::digital_code(s)?));
+            y.push(
+                sansho_netlist::digital_code(s)
+                    .map(f64::from)
+                    .or_else(|| s.parse::<f64>().ok())?,
+            );
             symbols.push(s.clone());
         }
         return Some(Waveform {

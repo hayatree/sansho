@@ -327,9 +327,11 @@ pub const CODES: &[CodeInfo] = &[
     ),
     e(
         "E-XSPICE-FILE",
-        "Invalid waveform table",
-        "The waveform file could not be opened inside the deck directory or contains invalid data.",
-        &["Use a relative path to a regular file with time and signal columns."],
+        "Invalid code-model data file",
+        "The model data file could not be opened inside the deck directory or contains invalid records.",
+        &[
+            "Use a relative path to a regular file and check its format against the model description.",
+        ],
     ),
     e(
         "E-XSPICE-PORT",
@@ -342,6 +344,12 @@ pub const CODES: &[CodeInfo] = &[
         "Event iteration limit",
         "A digital or mixed feedback loop did not settle at the indicated time.",
         &["Check feedback polarity and propagation delays in the loop."],
+    ),
+    e(
+        "E-XSPICE-VALUE",
+        "Invalid real event",
+        "A real-valued driver, sum of drivers or analog bridge produced a nonfinite value.",
+        &["Check model gains, offsets and the sum of the real drivers."],
     ),
     e(
         "E-XSPICE-TIME",
@@ -414,9 +422,12 @@ pub const CODES: &[CodeInfo] = &[
     ),
     e(
         "E-UNSUPPORTED",
-        "Unsupported device selector",
-        "The selected device equation or analysis mode is unavailable.",
-        &["See docs/bsim3.md and docs/bsim4.md for the available MOS selectors."],
+        "Unsupported device or external code model",
+        "The selected device equation or analysis mode is unavailable, or the deck requests an external XSPICE process or shared library.",
+        &[
+            "See docs/bsim3.md and docs/bsim4.md for the available MOS selectors.",
+            "Use a built-in model in place of d_process, d_cosim or a library loaded with codemodel. See docs/xspice.md.",
+        ],
     ),
     w(
         "W-BSIM3-PARAM",

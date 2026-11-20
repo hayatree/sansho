@@ -426,3 +426,26 @@ The ngspice XSPICE code-model library chapter is the syntax and compatibility ta
 ### R12 event-driven simulation
 
 The compatibility target is the ngspice user manual’s XSPICE mixed-mode and digital library descriptions. The queue, delta iteration, drive resolution and analog rollback are original implementations based on general discrete-event simulation and circuit principles. R12b compared the five original circuits with maintainer-supplied ngspice 44.2 batch waveforms. Measured DAC slopes, sampled ADC timing, propagation of a short set pulse and the divide-by-two startup phase informed the corrections. Independent tests use Boolean timing and the first-order RC response. R12c used the maintainer’s 16 event-history logs to refine ADC thresholds, output scheduling, DC initialization and divider and oscillator phase. [Probe measurements](../verify/probes/README.md#r12-digital-histories)
+
+### R13 external code-model exclusions
+
+The parser's rejection of `d_process`, `d_cosim` and `codemodel` implements the Sansho R13 security requirements. The diagnostic tests use original deck fragments.
+
+### R13 built-in code models
+
+The analog equations, table readers, clocked file machine, RAM, generalized LUT and real-valued event cells are original Rust implementations based on the user-facing descriptions and port/parameter tables in the ngspice 44 user manual §§8.2–8.5. The coupler uses Faraday's law and ampere-turn balance (§§8.2.21–22). The table Jacobians use Newton divided differences with locally selected ENO stencils (§§8.2.30–31). Junction limiting reuses Sansho's existing Nagel implementation. Event synchronization extends the R12 deterministic queue (§§21.3 and 22.2.1). All R13 circuits, data and analytic checks are original. [Model-specific assumptions](xspice.md#choices-for-reference-probes)
+
+R13c uses maintainer-supplied 44.2 analog raws and the same manual sections.
+The zener avalanche scale follows from the derivative of an exponential at
+the rated current. The clock sampling convention, RAM write level and LUT
+partial-transition delays follow from the one-shot and DAC ramp timings.
+[Measured waveforms and probe limits](xspice.md#r13c-residuals)
+
+R13d derives the LUT timing, RAM strengths, sampled real-bridge law and normalized
+zener continuation from the maintainer’s 17 black-box 44.2 sweeps of original
+Sansho probes. [Equations and measurement limits](xspice.md#r13d-measured-laws)
+
+R13e derives the per-output LUT delay history, transient amplifier startup
+deadline and short real-bridge step behavior from the ten maintainer-supplied
+44.2 logs for the three original R13d follow-ups.
+[Measurements and unresolved boundaries](xspice.md#r13e-measured-laws)

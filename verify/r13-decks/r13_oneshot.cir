@@ -1,0 +1,11 @@
+Second trigger extends a live pulse
+* Provenance: original Sansho verification circuit.
+Vclock clk 0 PWL(0 0 1n 0 2n 1 3n 1 4n 0 7n 0 8n 1 9n 1 10n 0)
+Vwidth ctl 0 0.5
+Apulse clk ctl NULL out pulse
+Rload0 out 0 10k
+.model pulse oneshot(cntl_array=[0 1] pw_array=[8n 12n] retrig=true clk_trig=0.5 pos_edge_trig=true rise_delay=1n fall_delay=1n rise_time=2n fall_time=2n)
+.tran 0.1n 26n
+.save v(clk) v(out)
+.print tran v(clk) v(out)
+.end

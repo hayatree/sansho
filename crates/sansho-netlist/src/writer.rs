@@ -347,13 +347,21 @@ pub fn write_model(m: &crate::ModelCard) -> String {
     let ps: Vec<String> = m
         .params
         .iter()
-        .map(|(k, v)| format!("{k}={}", num(*v)))
+        .map(|(k, v)| {
+            if m.kind == "multi_input_pwl" && k == "model" {
+                format!("model=\"{}\"", if *v == 0. { "and" } else { "or" })
+            } else {
+                format!("{k}={}", num(*v))
+            }
+        })
         .collect();
     if let Some(v) = &m.version {
         let _ = write!(l, "version={v} ");
     }
     if let Some(t) = &m.table {
-        let key = if m.kind == "d_source" {
+        let key = if m.kind == "d_state" {
+            "state_file"
+        } else if m.kind == "d_source" {
             "input_file"
         } else {
             "file"
@@ -362,7 +370,7 @@ pub fn write_model(m: &crate::ModelCard) -> String {
     }
     l += &ps.join(" ");
     for (k, values) in &m.arrays {
-        if m.kind == "d_lut" && k == "table_values" {
+        if matches!(m.kind.as_str(), "d_genlut" | "d_lut") && k == "table_values" {
             let table: String = values
                 .iter()
                 .map(|&v| {
@@ -371,7 +379,13 @@ pub fn write_model(m: &crate::ModelCard) -> String {
                     } else if v == 1. {
                         '1'
                     } else {
-                        'U'
+                        if v == 8. {
+                            'Z'
+                        } else if m.kind == "d_genlut" {
+                            'X'
+                        } else {
+                            'U'
+                        }
                     }
                 })
                 .collect();
