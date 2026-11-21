@@ -168,7 +168,9 @@ pub(crate) fn extract(
             Reduce::Mag
         }
         (true, Reduce::Auto) if a.kind == AnalysisKind::Pz => Reduce::Re,
-        (true, Reduce::Auto) if a.kind == AnalysisKind::Sens => Reduce::Mag,
+        (true, Reduce::Auto) if matches!(a.kind, AnalysisKind::Sens | AnalysisKind::PssFreq) => {
+            Reduce::Mag
+        }
         (true, Reduce::Auto) => Reduce::Db,
         (false, Reduce::Auto) => Reduce::Real,
         _ => reduce,

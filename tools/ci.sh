@@ -80,6 +80,8 @@ if (( !quick )); then
     skip "cargo-deny" "run 'cargo install cargo-deny'"
   fi
 
+  step "verify R19 PSS (analytic)" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" --out target/verify-pss verify/pss-decks
+
   if [[ "${1:-}" == --cached ]] || docker image inspect sansho-ngspice:latest >/dev/null 2>&1; then
     step "verify vs ngspice" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}"
     step "verify R11 analog code models" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" verify/r11-decks

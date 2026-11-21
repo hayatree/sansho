@@ -86,7 +86,7 @@ const TOOLS: &[Tool] = &[
                 "netlist":{"type":"string","description":NETLIST},
                 "path":{"type":"string","description":PATH},
                 "analyses":{"type":"array","items":{"type":"string"},
-                            "description":"analysis cards replacing those in the netlist (op, dc, ac, tran, sp, disto, noise, tf, sens, four, pz); include tran with four"}}})
+                            "description":"analysis cards replacing those in the netlist (op, dc, ac, tran, pss, sp, disto, noise, tf, sens, four, pz); include tran with four"}}})
         },
     },
     Tool {

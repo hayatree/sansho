@@ -11,6 +11,7 @@ with `get_waveform`. The CLI writes all plots to one raw file with `sansho run d
 | `.dc src1 start stop step [src2 start stop step]` | DC solutions versus independent source value, nominal resistor value or ambient temperature (`temp`) on either axis. The outer loop advances src2. Each complete inner sweep follows the previous one in the same plot, with the inner value as scale. |
 | `.ac dec\|oct\|lin n start stop` | Complex node voltages and branch currents versus frequency in Hz. Sources use their AC magnitude and phase. |
 | `.tran step stop [start [maxstep]] [uic]` | Node voltages and branch currents versus time in seconds. The integrator adapts its internal step. |
+| `.pss gfreq tstab oscnob psspoints harms [sciter [steadycoeff]] [driven] [uic]` | One period of time samples and a complex peak-amplitude spectrum. |
 | `.sp dec\|oct\|lin n start stop [donoise]` | One complex frequency plot of the scattering, admittance and impedance matrices. |
 | `.disto dec\|oct\|lin n start stop [f2overf1]` | Two harmonic plots for one tone or three intermodulation plots for two tones. |
 | `.noise v(out[,ref]) source dec\|oct\|lin n start stop [interval]` | A noise spectrum and a separate plot of integrated RMS noise. |
@@ -217,6 +218,101 @@ Contracting the matrix difference with the nominal solutions includes the bias
 dependence of conductances and capacitances. The AC source amplitudes and phases
 stay fixed when differentiating a source's DC value. Two extra bias solves per
 parameter can make this analysis expensive for large models.
+
+## Periodic steady state
+
+The autonomous card follows the ngspice 44 manual §§1.2.8 and 11.3.12. For
+example, `.pss 4k 2m out 256 10 25 1e-7 uic` starts a tank from its device
+and node initial conditions, estimates its frequency at node `out`, and reports
+ten harmonics. For a circuit driven by a 1 kHz source, use
+`.pss 1k 0 out 128 5 8 1e-9 driven`. The Sansho keyword `driven` fixes the
+period at `1/gfreq` and keeps the phase of the external excitation. The source
+itself must specify a compatible periodic waveform.
+
+**Startup and phase.** The ordinary adaptive transient supplies the initial
+trajectory. Without `uic` it solves the initial bias with the usual `.ic`
+constraints. With `uic` it uses the transient device and node initial conditions.
+Driven shooting begins at `tstab` seconds. For oscillators the observation
+interval is at least three guessed periods. Choose a longer `tstab` for a slow
+startup. The monitor accepts a bare node, `v(node)`, a branch name, `i(device)`
+or `device#branch`. Sansho sets the phase level halfway between the monitor's
+extrema in the latter half of the retained observation interval (up to 64 guessed periods). It interpolates the
+state at the last rising crossing of that level and estimates the period from
+the previous rising crossing. A frequency guess more than 10% away from the
+observed frequency is replaced by that estimate.
+
+**Shooting equations.** Each iteration solves for an initial MNA vector
+`x` such that the endpoint `Φ(x,T)` equals `x`. Node voltage differences
+determine capacitor and junction charges, and branch currents determine
+inductor fluxes. Internal device unknowns participate in the same system.
+Each time step integrates the assembled charge equations with a two-stage,
+second-order, L-stable diagonally implicit Runge–Kutta method,
+`γ = 1 − 1/√2`. At each converged stage the solver factors
+`G + C/(γh)` and propagates the charge derivatives for all initial coordinates
+through that factorization. The endpoint derivatives form the monodromy matrix.
+The outer Newton matrix is `∂Φ/∂x − I`. Autonomous shooting adds a column for
+the derivative with respect to `log T` and a row holding the initial monitor
+value at the rising-crossing level. Each period correction is limited to 0.25
+in log units. For a linear free-running tank, an implicit midpoint step preserves quadratic
+energy. An additional amplitude condition fixes a second initial coordinate,
+chosen for its normalized excursion at the phase crossing. All endpoint equations
+still participate in the convergence test. The device assembly, column solves
+and Fourier sums have a fixed order.
+
+**Convergence and resolution.** `sciter` limits the number of period integrations
+(default 50). The manual describes a weighted global error and leaves its
+normalization unspecified. Sansho divides each absolute endpoint mismatch by
+the larger of that coordinate's peak-to-peak swing and its absolute voltage
+or current tolerance. The mean must be at most `steadycoeff` (default 0.001).
+This controls periodic closure. Integration accuracy also depends on the mesh.
+The number of equal steps per shot is the largest of 512, eight times `harms`,
+and `ceil(2π/√reltol)`. Linear autonomous shooting rounds up to an odd step count to resolve algebraic perturbations. Tighten `reltol` and check frequency and amplitude
+again for sharp edges, stiff networks or high harmonics. The shooting mesh has
+no adaptive event location. The usual adaptive controls apply to stabilization.
+
+**Results.** The manual describes time samples and monitor harmonics and leaves
+the literal plot names, endpoint convention and complex normalization unspecified.
+Sansho uses the following conventions in ASCII and binary raw files, the session
+API, MCP and the control command `pss`.
+
+| Raw plot | Control name | Scale and vectors |
+|---|---|---|
+| `Periodic Steady State (time domain)` | `pss1`, … | Real voltages and branch currents at `kT/N`, for `k = 0 … N−1`, relative to the start of the shot. Linear interpolation of the converged shot gives `N = max(psspoints, 2 × harms + 1)` time samples. |
+| `Periodic Steady State (frequency domain)` | `pssfreq1`, … | The same signals as complex, cosine-reference peak phasors at `h/T` Hz for `h = 1 … harms`. The coefficient is twice the mean of the internal samples times `exp(−j2πhk/steps)`. A unit sine starting at zero gives `−j` at the fundamental. |
+
+The harmonic table gives frequency, peak magnitude and phase in degrees for
+`oscnob`. The session and MCP waveform query defaults to linear magnitude for
+the spectrum. The DC level is the mean of a period. Increasing `psspoints`
+changes only time-domain sampling.
+
+**Scope.** The implementation supports deterministic lumped circuits with a
+smooth charge/flux description. For classical Meyer MOS capacitances it uses
+the transient device's incremental capacitance Jacobian, so the outer correction
+is a quasi-Newton step. Distributed lines, device transport-delay histories,
+switches, XSPICE, Verilog-A and stochastic waveforms require additional history
+or event sensitivities and produce a diagnostic. Explicitly time-dependent
+behavioral expressions in driven circuits must repeat over the supplied period.
+Autonomous behavioral equations must be time invariant during shooting.
+The phase condition assumes an observable limit cycle with an isolated amplitude.
+Multiple undamped modes or an unanchored nonlinear family of cycles can give a singular
+shooting system. A stationary operating point requires a startup perturbation.
+
+The dense monodromy limit is 256 MNA unknowns. Both the internal mesh and
+output time grid have a 65,536-point limit. The direct Fourier transform permits
+at most 16,777,216 harmonic-by-mesh-point products per signal. Stabilization
+accepts up to one million guessed periods. PSS outputs cover node voltages and
+MNA branch currents.
+
+**Verification.** The cached ngspice 44.2 build lacks PSS. Run
+`cargo run --release -p sansho-verify -- --cached --out target/verify-pss verify/pss-decks -v`
+to print the independent comparisons. At 1 kHz the measured complex phasor
+errors are 1.73 µV (RC) and 56.85 µV (series RLC). The diode reservoir output
+differs by at most 82.4 µV from the final period of a 20 ms transient. Against
+rising crossings in independent transients, the sustained LC tank differs by
+0.0641 Hz at 5.028 kHz and the CMOS ring by 88.9 Hz at 40.395 MHz. The
+half peak-to-peak amplitudes differ by 21.1 µV and 1.77 µV respectively.
+The Van der Pol circuit at μ = 1 gives 2.00848 V for the expected amplitude
+of about 2 V. [Analytic acceptance decks](../verify/pss-decks)
 
 ## Fourier
 

@@ -17,6 +17,7 @@ mod control;
 mod control_analytic;
 #[cfg(test)]
 mod digital_analytic;
+mod pss_analytic;
 mod reference;
 
 use reference::Problem;
@@ -136,6 +137,9 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), 
         let mut w = std::io::BufWriter::new(f);
         // Best effort: the raw file is only kept for inspection.
         let _ = sansho_output::write_raw_ascii(&ours, &mut w);
+    }
+    if let Some(case) = directive(&text, "sansho-verify: pss-analytic") {
+        return Ok((pss_analytic::check(case, &ours)?, None, true));
     }
     if cli.cached
         && text

@@ -1,0 +1,9 @@
+Driven series RLC with the output across the capacitor
+* Provenance: original circuit, series impedance divider.
+* sansho-verify: pss-analytic rlc
+Vdrive in 0 SIN(0 1 1k)
+R1 in mid 30
+L1 mid out 10m
+C1 out 0 2u
+.pss 1k 0 i(l1) 128 5 8 1e-9 driven uic
+.end

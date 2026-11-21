@@ -210,6 +210,18 @@ fn analysis_work(a: &AnalysisCard) -> (u64, u64) {
         | AnalysisCard::Sens { ac: None, .. }
         | AnalysisCard::Pz { .. } => (1, 20),
         AnalysisCard::Four { .. } => (10, 0),
+        AnalysisCard::Pss { spec, .. } => {
+            let points =
+                spec.points
+                    .max(spec.harmonics.saturating_mul(2).saturating_add(1)) as u64;
+            (
+                points.saturating_add(spec.harmonics as u64),
+                points
+                    .max(512)
+                    .saturating_mul(spec.iterations as u64)
+                    .saturating_mul(4),
+            )
+        }
         AnalysisCard::Dc { inner, outer, .. } => {
             let points = |a: &sansho_netlist::DcSweep| a.count().unwrap_or(0) as u64;
             let n = points(inner).saturating_mul(outer.as_ref().map_or(1, points));
@@ -402,7 +414,10 @@ fn summarize(index: usize, a: &AnalysisResult, max_signals: usize) -> AnalysisSu
                 let values: Vec<_> = columns[i].iter().map(|z| z.0).collect();
                 s.signals.push(stats_of(&v.name, unit, &values));
             }
-            (Data::Complex { columns }, AnalysisKind::Sens | AnalysisKind::Sp) => {
+            (
+                Data::Complex { columns },
+                AnalysisKind::Sens | AnalysisKind::Sp | AnalysisKind::PssFreq,
+            ) => {
                 let magnitude: Vec<_> = columns[i].iter().map(|(re, im)| re.hypot(*im)).collect();
                 s.signals.push(stats_of(&v.name, unit, &magnitude));
             }

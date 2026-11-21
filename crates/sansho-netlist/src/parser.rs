@@ -2250,6 +2250,78 @@ impl Parser {
         }
     }
 
+    fn pss(&mut self, tokens: &[Token], span: Span) -> Option<crate::PssSpec> {
+        let mut t = tokens;
+        let mut flag = |name: &str| {
+            if t.last().is_some_and(|v| v.text.eq_ignore_ascii_case(name)) {
+                t = &t[..t.len() - 1];
+                true
+            } else {
+                false
+            }
+        };
+        let uic = flag("uic");
+        let driven = flag("driven");
+        let grouped =
+            t.get(4).is_some_and(|v| v.ends_group) && matches!(t[3].lower().as_str(), "i" | "v");
+        let k = if grouped { 5 } else { 4 };
+        if !(k + 2..=k + 4).contains(&t.len()) {
+            self.err(
+                "E-PARSE-ARITY",
+                ".pss gfreq tstab oscnob psspoints harms [sciter [steadycoeff]] [driven] [uic]",
+                span,
+            );
+            return None;
+        }
+        let oscnob = if grouped {
+            format!("{}({})", t[3].lower(), t[4].lower())
+        } else {
+            t[3].lower()
+        };
+        let gfreq = self.number(&t[1], "PSS frequency")?;
+        let tstab = self.number(&t[2], "PSS stabilization time")?;
+        let steadycoeff = match t.get(k + 3) {
+            Some(v) => self.number(v, "PSS convergence coefficient")?,
+            None => 1e-3,
+        };
+        let mut count = |i: usize| {
+            t[i].positive_integer().or_else(|| {
+                self.err(
+                    "E-PARSE-VALUE",
+                    "PSS counts must be positive integers",
+                    t[i].span,
+                );
+                None
+            })
+        };
+        let points = count(k)?;
+        let harmonics = count(k + 1)?;
+        let iterations = if t.len() > k + 2 { count(k + 2)? } else { 50 };
+        if ![gfreq, tstab, steadycoeff].iter().all(|v| v.is_finite())
+            || gfreq <= 0.
+            || tstab < 0.
+            || steadycoeff <= 0.
+        {
+            self.err(
+                "E-PARSE-VALUE",
+                "PSS requires positive frequency and steadycoeff, and nonnegative tstab",
+                span,
+            );
+            return None;
+        }
+        Some(crate::PssSpec {
+            gfreq,
+            tstab,
+            oscnob,
+            points,
+            harmonics,
+            iterations,
+            steadycoeff,
+            uic,
+            driven,
+        })
+    }
+
     fn dot_card(&mut self, head: &str, line: &Line) {
         let span = line.span();
         let t = &line.tokens;
@@ -2399,6 +2471,11 @@ impl Parser {
                     poles: mode != "zer",
                     zeros: mode != "pol",
                 });
+            }
+            ".pss" => {
+                if let Some(spec) = self.pss(t, span) {
+                    self.analyses.push(AnalysisCard::Pss { span, spec });
+                }
             }
             ".sp" | ".disto" => {
                 if !(5..=6).contains(&t.len()) {

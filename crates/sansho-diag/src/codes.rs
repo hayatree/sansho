@@ -553,6 +553,22 @@ pub const CODES: &[CodeInfo] = &[
         ],
     ),
     e(
+        "E-CONV-PSS",
+        "Periodic shooting did not converge",
+        "A transient stage or the periodic sensitivity system failed, or the mean normalized endpoint error exceeded steadycoeff at the shooting iteration limit.",
+        &[
+            "Check the frequency guess and initial conditions. Allow more stabilization time or shooting iterations. Tighten reltol to refine the shooting grid for sharp transitions.",
+        ],
+    ),
+    e(
+        "E-PSS-NOOSC",
+        "Oscillation could not be resolved",
+        "The selected oscillator node or branch has insufficient swing or too few rising crossings to identify a cycle.",
+        &[
+            "Choose a node or branch that oscillates. Check the startup excitation and extend tstab.",
+        ],
+    ),
+    e(
         "E-ANALYSIS",
         "Invalid small-signal or Fourier analysis",
         "An analysis requires resolvable ports, a defined transfer, finite model noise and a valid analysis range.",

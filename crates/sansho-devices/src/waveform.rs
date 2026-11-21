@@ -180,6 +180,47 @@ pub fn step_limit(f: &TranFn, tp: &TranParams) -> Option<(f64, f64)> {
     (frequency > 0. && m.td < tp.tstop).then(|| (m.td.max(0.), frequency.recip() / 64.))
 }
 
+/// Whether a source is constant after startup, or repeats over a driven PSS period.
+pub fn periodic_after(f: &TranFn, tp: &TranParams, start: f64, period: Option<f64>) -> bool {
+    let repeats = |frequency: f64| {
+        frequency == 0.
+            || period.is_some_and(|t| {
+                let cycles = (t * frequency).abs();
+                cycles.is_finite()
+                    && cycles.round() >= 1.
+                    && (cycles - cycles.round()).abs() <= 32. * f64::EPSILON * cycles
+            })
+    };
+    match f {
+        TranFn::Sin(p) => {
+            param_or(p, 1, 0., false) == 0.
+                || start >= param_or(p, 3, 0., false)
+                    && param_or(p, 4, 0., false) == 0.
+                    && repeats(param_or(p, 2, tp.tstop.recip(), true))
+        }
+        TranFn::Pulse(p) => {
+            let pulse = Pulse::new(p, tp);
+            let end = pulse.tr + pulse.pw + pulse.tf;
+            pulse.v1 == pulse.v2
+                || pulse
+                    .np
+                    .is_some_and(|n| start >= pulse.td + (n.ceil() - 1.) * pulse.per + end)
+                || start >= pulse.td && pulse.np.is_none() && repeats(pulse.per.recip())
+        }
+        TranFn::Pwl(v) => v.last().is_none_or(|&(t, _)| start >= t),
+        TranFn::Sffm(p) | TranFn::Am(p) => {
+            let m = if matches!(f, TranFn::Am(_)) {
+                Modulation::new(p, 4, 3, tp)
+            } else {
+                Modulation::new(p, 2, 4, tp)
+            };
+            start >= m.td && repeats(m.fc) && repeats(m.fm)
+        }
+        TranFn::Exp(p) => param_or(p, 0, 0., false) == param_or(p, 1, 0., false),
+        TranFn::TrRandom(_) | TranFn::TrNoise(_) => false,
+    }
+}
+
 /// Evaluate a transient function at time `t`.
 pub fn value(f: &TranFn, t: f64, tp: &TranParams) -> f64 {
     match f {

@@ -571,12 +571,24 @@ impl State<'_> {
             };
             self.add_plot(a, grid);
         }
+        let mut pss_plot = 0;
         for table in run.results.prints {
-            if let Some(p) = self.plots[first_plot..].iter().find(|p| {
-                p.analysis
-                    .as_ref()
-                    .is_some_and(|a| a.kind == table.analysis)
-            }) {
+            let ordinal = if table.analysis == sansho_output::AnalysisKind::PssFreq {
+                let current = pss_plot;
+                pss_plot += 1;
+                current
+            } else {
+                0
+            };
+            if let Some(p) = self.plots[first_plot..]
+                .iter()
+                .filter(|p| {
+                    p.analysis
+                        .as_ref()
+                        .is_some_and(|a| a.kind == table.analysis)
+                })
+                .nth(ordinal)
+            {
                 self.transcript.prints.push(Print {
                     plot: p.name.clone(),
                     expressions: table.headings.clone(),
@@ -664,7 +676,7 @@ impl State<'_> {
     fn command(&mut self, cmd: &str, args: &str, depth: usize) -> Result<Flow> {
         match cmd {
             "op" | "dc" | "ac" | "tran" | "noise" | "tf" | "sens" | "pz" | "sp" | "disto"
-            | "four" | "fourier" | "run" => {
+            | "pss" | "four" | "fourier" | "run" => {
                 self.analysis(if cmd == "fourier" { "four" } else { cmd }, args)?
             }
             "set" => self.set(args)?,

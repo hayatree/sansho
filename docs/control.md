@@ -23,7 +23,7 @@ The three measurements are 0.5, 0.666667 and 0.8 V. Each belongs to its own DC p
 
 | Command | Behavior |
 |---|---|
-| `op dc ac tran noise tf sens pz sp disto` | Use the corresponding analysis-card grammar and solver. Each result becomes current as it is produced. Noise and distortion can produce several plots. |
+| `op dc ac tran noise tf sens pz sp disto pss` | Use the corresponding analysis-card grammar and solver. Each result becomes current as it is produced. Noise, distortion and PSS can produce several plots. |
 | `four`, `fourier` | Evaluate the requested fundamental and outputs on the current transient. |
 | `run` | Execute the loaded analysis cards in card order, with the current circuit values. |
 | `setplot [name]` | List plots with the newest first, or select a named plot. `setplot new` creates an empty vector workspace. `$curplot` expands to the current name. |

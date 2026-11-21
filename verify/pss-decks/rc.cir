@@ -1,0 +1,8 @@
+Driven RC low-pass with a one-volt peak sine input
+* Provenance: original circuit, single-pole phasor response.
+* sansho-verify: pss-analytic rc
+Vdrive in 0 SIN(0 1 1k)
+R1 in out 1k
+C1 out 0 220n
+.pss 1k 0 out 128 5 8 1e-9 driven
+.end

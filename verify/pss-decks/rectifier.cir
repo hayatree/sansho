@@ -1,0 +1,12 @@
+Half-wave diode rectifier with junction charge and a reservoir capacitor
+* Provenance: original circuit, independent long-transient comparison.
+* sansho-verify: pss-analytic rectifier
+Vdrive in 0 SIN(0 2 1k)
+Rs in anode 100
+D1 anode out dm
+.model dm D(IS=1p N=1.2 CJO=50p TT=10n)
+C1 out 0 470n
+R1 out 0 2k
+.pss 1k 1m out 256 12 15 1e-7 driven
+.tran 2u 20m 18.9m 2u
+.end

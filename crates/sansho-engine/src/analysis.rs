@@ -1026,20 +1026,14 @@ fn schedule_arrival(bps: &mut Vec<f64>, time: f64, eps: f64, tstop: f64) {
     }
 }
 
-/// `.tran`
-pub(crate) fn tran(
+pub(crate) fn transient_start(
     ckt: &Circuit,
     opts: &SimOptions,
-    tp: TranParams,
-    tstart: f64,
-    tmax: Option<f64>,
+    ctx: &EvalCtx,
     uic: bool,
     nl: &sansho_netlist::Netlist,
-) -> Result<(AnalysisResult, crate::TranStats), Diagnostic> {
-    let _phase = sansho_diag::Phase::start("analysis");
+) -> Result<(Workspace, Vec<f64>), Diagnostic> {
     let n = ckt.dim();
-    let TranParams { tstep, tstop } = tp;
-    let mut ctx = make_ctx(opts, Mode::Tran, tp);
     let mut ws = Workspace::new(ckt);
     let mut x = vec![0.0; n];
     if uic {
@@ -1109,7 +1103,7 @@ pub(crate) fn tran(
         ws.clamp = ckt.ics.clone();
         let r = solve_op(
             ckt,
-            &ctx,
+            ctx,
             &mut x,
             &mut ws,
             opts,
@@ -1119,6 +1113,25 @@ pub(crate) fn tran(
         ws.clamp.clear();
         r?;
     }
+
+    Ok((ws, x))
+}
+
+/// `.tran`
+pub(crate) fn tran(
+    ckt: &Circuit,
+    opts: &SimOptions,
+    tp: TranParams,
+    tstart: f64,
+    tmax: Option<f64>,
+    uic: bool,
+    nl: &sansho_netlist::Netlist,
+) -> Result<(AnalysisResult, crate::TranStats), Diagnostic> {
+    let _phase = sansho_diag::Phase::start("analysis");
+    let n = ckt.dim();
+    let TranParams { tstep, tstop } = tp;
+    let mut ctx = make_ctx(opts, Mode::Tran, tp);
+    let (mut ws, mut x) = transient_start(ckt, opts, &ctx, uic, nl)?;
 
     // Default maximum step as in SPICE: min(tstep, (tstop - tstart) / 50).
     let hmax = tmax

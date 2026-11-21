@@ -77,6 +77,8 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-CONV-OP`](#e-conv-op) | error | Operating point did not converge |
 | [`E-CONV-DC`](#e-conv-dc) | error | DC sweep did not converge |
 | [`E-CONV-TRAN`](#e-conv-tran) | error | Timestep too small |
+| [`E-CONV-PSS`](#e-conv-pss) | error | Periodic shooting did not converge |
+| [`E-PSS-NOOSC`](#e-pss-noosc) | error | Oscillation could not be resolved |
 | [`E-ANALYSIS`](#e-analysis) | error | Invalid small-signal or Fourier analysis |
 | [`E-DC-SOURCE`](#e-dc-source) | error | Invalid DC sweep source |
 | [`E-SOLVE-SINGULAR`](#e-solve-singular) | error | Singular matrix |
@@ -522,6 +524,18 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 - Look at the culprit nodes for discontinuities (ideal switches, very fast edges).
 - Give sources finite rise and fall times; increase `.options itl4`.
+
+## E-CONV-PSS
+
+**Periodic shooting did not converge.** A transient stage or the periodic sensitivity system failed, or the mean normalized endpoint error exceeded steadycoeff at the shooting iteration limit.
+
+- Check the frequency guess and initial conditions. Allow more stabilization time or shooting iterations. Tighten reltol to refine the shooting grid for sharp transitions.
+
+## E-PSS-NOOSC
+
+**Oscillation could not be resolved.** The selected oscillator node or branch has insufficient swing or too few rising crossings to identify a cycle.
+
+- Choose a node or branch that oscillates. Check the startup excitation and extend tstab.
 
 ## E-ANALYSIS
 

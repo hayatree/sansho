@@ -1,0 +1,9 @@
+Van der Pol oscillator with mu = 1, time in milliseconds
+* Provenance: the classical dimensionless Van der Pol differential equation.
+* sansho-verify: pss-analytic vdp
+Cx out 0 1m ic=1
+Cy y 0 1m ic=0
+Bx 0 out I={v(y)}
+By 0 y I={(1-v(out)*v(out))*v(y)-v(out)}
+.pss 145 20m out 256 8 20 1e-8 uic
+.end

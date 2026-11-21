@@ -186,6 +186,8 @@ pub(super) fn prefix(kind: AnalysisKind) -> &'static str {
         AnalysisKind::Op => "op",
         AnalysisKind::Ac => "ac",
         AnalysisKind::Dc => "dc",
+        AnalysisKind::Pss => "pss",
+        AnalysisKind::PssFreq => "pssfreq",
         AnalysisKind::Sp => "sp",
         AnalysisKind::Sens => "sens",
         AnalysisKind::Four => "four",

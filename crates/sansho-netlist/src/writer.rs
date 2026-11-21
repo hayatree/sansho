@@ -198,6 +198,18 @@ pub fn write_measure(m: &MeasureCard) -> String {
 /// Write one analysis card.
 pub fn write_analysis(a: &AnalysisCard) -> String {
     match a {
+        AnalysisCard::Pss { spec: p, .. } => format!(
+            ".pss {} {} {} {} {} {} {}{}{}",
+            num(p.gfreq),
+            num(p.tstab),
+            p.oscnob,
+            p.points,
+            p.harmonics,
+            p.iterations,
+            num(p.steadycoeff),
+            if p.driven { " driven" } else { "" },
+            if p.uic { " uic" } else { "" }
+        ),
         AnalysisCard::Sp { grid, .. } | AnalysisCard::Disto { grid, .. } => {
             let (name, extra) = match a {
                 AnalysisCard::Disto { ratio, .. } => ("disto", ratio.map(num)),

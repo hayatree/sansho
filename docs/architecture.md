@@ -304,9 +304,9 @@ the accepted time grid. [BSIM4 startup and restart conventions](bsim4.md#numeric
 - **Noise** uses a complex adjoint per frequency and integrates independent output and input power spectra.
 - **Sensitivity** uses one nominal DC adjoint or a forward and adjoint AC solve at each frequency. The AC matrix derivative includes operating-point motion.
 
-### 5.5 Periodic steady state (later)
+### 5.5 Periodic steady state
 
-Shooting-method PSS and HB. Thanks to the DAE form (D1), devices need no additional code.
+PSS propagates the transient charge and current Jacobians over one period. A bordered shooting system solves for the period of autonomous oscillators. Driven circuits use a prescribed period. [Shooting equations and limits](analyses.md#periodic-steady-state)
 
 ---
 

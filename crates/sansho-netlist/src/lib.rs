@@ -660,10 +660,28 @@ impl DcSweep {
     }
 }
 
+/// Periodic shooting controls (ngspice 44 §11.3.12).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PssSpec {
+    pub gfreq: f64,
+    pub tstab: f64,
+    pub oscnob: String,
+    pub points: usize,
+    pub harmonics: usize,
+    pub iterations: usize,
+    pub steadycoeff: f64,
+    pub uic: bool,
+    pub driven: bool,
+}
+
 /// Analysis requests.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "analysis", rename_all = "snake_case")]
 pub enum AnalysisCard {
+    Pss {
+        span: Span,
+        spec: PssSpec,
+    },
     Sp {
         span: Span,
         grid: FrequencySweep,

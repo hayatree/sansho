@@ -110,6 +110,8 @@ pub struct Variable {
 pub enum AnalysisKind {
     /// User-created vector plot.
     Vectors,
+    Pss,
+    PssFreq,
     Sp,
     Harmonic2,
     Harmonic3,
@@ -144,6 +146,8 @@ impl AnalysisKind {
     pub fn plot_name(self) -> &'static str {
         match self {
             Self::Vectors => "unknown",
+            Self::Pss => "Periodic Steady State (time domain)",
+            Self::PssFreq => "Periodic Steady State (frequency domain)",
             Self::Sp => "SP Analysis",
             Self::Harmonic2 => "DISTORTION - 2nd harmonic",
             Self::Harmonic3 => "DISTORTION - 3rd harmonic",

@@ -20,6 +20,7 @@ pub mod monte_carlo;
 mod options;
 mod parallel;
 mod probes;
+mod pss;
 mod rf;
 mod small_signal;
 mod solve;
@@ -67,7 +68,8 @@ pub struct TranStats {
     pub assemblies: usize,
 }
 
-enum Stats {
+enum AnalysisDetails {
+    Harmonics(sansho_output::PrintTable),
     Dc(DcStats),
     Tran(TranStats),
 }
@@ -187,7 +189,7 @@ fn run_analysis(
     nl: &Netlist,
     opts: &SimOptions,
     card: &AnalysisCard,
-) -> Result<(Vec<sansho_output::AnalysisResult>, Option<Stats>), Diagnostic> {
+) -> Result<(Vec<sansho_output::AnalysisResult>, Option<AnalysisDetails>), Diagnostic> {
     let mut stats = None;
     // Retained VA interpreter variables belong to an analysis, never to concurrent analyses.
     let owned = if nl.analyses.len() > 1
@@ -217,6 +219,13 @@ fn run_analysis(
     };
     let ckt = owned.as_ref().unwrap_or(ckt);
     let mut result = match card {
+        AnalysisCard::Pss { spec, .. } => {
+            let (mut plots, report) = pss::analyze(ckt, nl, opts, spec)?;
+            for plot in &mut plots {
+                add_aliases(ckt, plot);
+            }
+            return Ok((plots, Some(AnalysisDetails::Harmonics(report))));
+        }
         AnalysisCard::Sp { grid, noise, .. } => {
             return rf::analyze(ckt, nl, opts, *grid, *noise).map(|p| (vec![p], None));
         }
@@ -281,7 +290,7 @@ fn run_analysis(
             })?
             .0;
             analysis::dc_sweep(&mut own, opts, nl, inner, outer.as_ref()).map(|(analysis, dc)| {
-                stats = Some(Stats::Dc(dc));
+                stats = Some(AnalysisDetails::Dc(dc));
                 analysis
             })
         }
@@ -312,7 +321,7 @@ fn run_analysis(
             nl,
         )
         .map(|(a, t)| {
-            stats = Some(Stats::Tran(t));
+            stats = Some(AnalysisDetails::Tran(t));
             a
         }),
     }?;
@@ -351,6 +360,8 @@ fn project_results(full: &mut SimResults, saves: &[String]) -> Option<Measuremen
                 && !matches!(
                     a.kind,
                     sansho_output::AnalysisKind::Op
+                        | sansho_output::AnalysisKind::Pss
+                        | sansho_output::AnalysisKind::PssFreq
                         | sansho_output::AnalysisKind::Tran
                         | sansho_output::AnalysisKind::Ac
                         | sansho_output::AnalysisKind::Dc
@@ -394,7 +405,8 @@ fn project_results(full: &mut SimResults, saves: &[String]) -> Option<Measuremen
 
 fn card_span(card: &AnalysisCard) -> sansho_diag::Span {
     match card {
-        AnalysisCard::Sp { span, .. }
+        AnalysisCard::Pss { span, .. }
+        | AnalysisCard::Sp { span, .. }
         | AnalysisCard::Disto { span, .. }
         | AnalysisCard::Four { span, .. }
         | AnalysisCard::Pz { span, .. }
@@ -502,7 +514,7 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
                 analysis::dc_sweep(&mut ckt, &opts, nl, inner, outer.as_ref()).map(
                     |(mut result, stats)| {
                         add_aliases(&ckt, &mut result);
-                        (vec![result], Some(Stats::Dc(stats)))
+                        (vec![result], Some(AnalysisDetails::Dc(stats)))
                     },
                 ),
             ]
@@ -544,8 +556,9 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
             Ok((a, stats)) => {
                 results.analyses.extend(a);
                 match stats {
-                    Some(Stats::Dc(s)) => dc_stats.push(s),
-                    Some(Stats::Tran(s)) => tran_stats.push(s),
+                    Some(AnalysisDetails::Harmonics(report)) => results.prints.push(report),
+                    Some(AnalysisDetails::Dc(s)) => dc_stats.push(s),
+                    Some(AnalysisDetails::Tran(s)) => tran_stats.push(s),
                     None => {}
                 }
             }

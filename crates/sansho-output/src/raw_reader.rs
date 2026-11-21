@@ -32,6 +32,8 @@ fn err(line: usize, message: impl Into<String>) -> RawError {
 fn kind_of(plot: &str) -> Option<AnalysisKind> {
     let p = plot.to_ascii_lowercase();
     for kind in [
+        AnalysisKind::Pss,
+        AnalysisKind::PssFreq,
         AnalysisKind::Vectors,
         AnalysisKind::Sp,
         AnalysisKind::Harmonic2,
@@ -214,6 +216,8 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
             || matches!(
                 kind,
                 AnalysisKind::Sp
+                    | AnalysisKind::Pss
+                    | AnalysisKind::PssFreq
                     | AnalysisKind::Ac
                     | AnalysisKind::Dc
                     | AnalysisKind::Tran

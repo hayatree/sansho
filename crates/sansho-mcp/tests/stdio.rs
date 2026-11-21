@@ -341,3 +341,30 @@ fn control_transcript_and_disabled_files() {
             .any(|d| d["code"] == "E-CONTROL-OUTPUT")
     );
 }
+
+#[test]
+fn pss_override_and_control_return_both_domains() {
+    let mut client = Client::start();
+    let netlist =
+        "PSS\nV1 in 0 sin(0 2 1k)\nR1 in 0 1k\n.control\npss 1k 0 in 32 4 driven\n.endc\n.end";
+    for request in [
+        json!({"netlist":netlist}),
+        json!({"netlist":netlist,"analyses":["pss 1k 0 in 32 4 driven"]}),
+    ] {
+        let (r, err) = client.tool("simulate", request);
+        let job = &r["job"];
+        assert!(!err && job["status"] == "ok", "{r}");
+        assert_eq!(job["analyses"][0]["kind"], "pss");
+        assert_eq!(job["analyses"][1]["kind"], "pssfreq");
+        if let Some(control) = job.get("control") {
+            assert_eq!(control["plots"], json!(["pss1", "pssfreq1"]));
+        }
+        let (wave, err) = client.tool(
+            "get_waveform",
+            json!({"job_id":job["job_id"],"signal":"v(in)","analysis":1}),
+        );
+        assert!(!err, "{wave}");
+        assert_eq!(wave["unit"], "V");
+        assert!((wave["y"][0].as_f64().unwrap() - 2.).abs() < 1e-12);
+    }
+}
