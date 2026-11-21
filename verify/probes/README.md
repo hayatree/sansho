@@ -843,3 +843,44 @@ All 36 follow-up settings now have 44.2 output. Three noise runs contain AC data
 verify/probes/sweep.sh verify/probes/r17b_*.cir
 python3 verify/compare_vbic.py --pattern 'r17b_*'
 ```
+
+## R18 KSPICE lines
+
+Each template has three settings. Use the same terminal-voltage traces for both simulators. The seven acceptance circuits in `verify/decks/r18_*.cir` use the cached 44.2 comparisons and error diagnostics described below. The analytic target for AC is the coupled telegrapher solution. The ngspice 44 manual §6.4 describes its Y and P elements as transient-only. Keep the AC logs if the reference returns no AC waveform. [Equations and scope](../../docs/distributed-lines.md#txl-and-cpl)
+
+| Probe | Measurement |
+|---|---|
+| `r18_txl_tail` | Sweep series resistance at G = 0. Compare the first far-end front and the post-pulse relaxation over 150 ns. Early and late residuals distinguish attenuation from the finite pole fit. |
+| `r18_txl_cascade` | Compare one line to two half-length sections at each resistance. The exact responses coincide. Their difference exposes the combined rational propagation and time-interpolation error. |
+| `r18_txl_shunt` | Sweep through equal series and shunt loss rates. The middle setting is distortionless with 50 Ω characteristic impedance. The upper setting exercises the reciprocal-impedance filter. |
+| `r18_cpl_loss` | Hold L, C and victim loads fixed while changing the second series resistance. Compare near-end and far-end victim peaks against the equal-loss case to quantify any omitted modal loss coupling. |
+| `r18_cpl_equal_delay` | Hold both LC delays at 5 ns and introduce mutual resistance. The zero setting isolates the victim. The nonzero settings test the choice of basis for equal velocities. |
+| `r18_cpl_delay` | Sweep the timestep ceiling at fixed stimulus. Compare both modal arrivals, front slopes and reflected near-end peaks on their actual time axes. |
+| `r18_cpl_order` | Vary only L13 on an asymmetric three-conductor line. Compare the third conductor's far end to the second and monitor the driven conductor. L22 stays fixed. |
+| `r18_txl_uic` | Sweep the near-end initial voltage with an initially quiescent source. Measure the far-end signal through the first flight time to distinguish startup histories. |
+
+All seven acceptance decks and all 24 probe settings produced byte-identical binary raw files on one and two threads. The maximum far-end difference between the single and cascaded TXLs was 3.57 nV, 4.77 µV and 50.7 µV at 10, 100 and 300 Ω/unit respectively. In the equal-delay CPL case, the peak absolute far-end victim voltage was 0, 9.04 and 27.14 mV at mutual resistances of 0, 2 and 6 Ω/unit. The 1 V UIC probe gave zero far-end voltage before the 5 ns arrival and 0.417745 V at the front.
+
+R18c reuses the cached 44.2 settings for both rounds.
+
+## R18b reference follow-ups
+
+The supplied R18 comparison used a CLI that rejected every P and Y card during parsing. Rebuild the CLI before comparing probe settings. The R18b replay produces five waveform passes, fifteen out-of-tolerance comparisons and four 44.2 rejections. All 24 settings run in Sansho. The five passes are cascade 10 Ω, shunt 1 and 16 mS, tail 4 Ω and UIC 0 V. The fifteen numerical differences comprise nine CPL delay/loss/order comparisons, four strongly lossy TXL cascade/tail comparisons and the two nonzero UIC settings. The three equal-delay rejections include the zero mutual-resistance control. Shunt 4 mS reproduces the distortionless setup failure. [Measured delays, attenuation and crosstalk](../../docs/distributed-lines.md#r18b-measurements-against-ngspice-442)
+
+```sh
+cargo build --offline --release -p sansho-cli --features jit
+python3 verify/compare_vbic.py --pattern 'r18*' --out verify/out/r18c
+```
+
+The R18b follow-ups add six waveform passes, fourteen known waveform differences and four reference rejections. The uncoupled CPL logs at all three settings report a forbidden parameter combination. Their zero-point raw headers precede an initialization row. The balanced TXL at 4 mS reports a setup pivot failure and leaves an empty raw. Both groups run in Sansho. The R18c replay totals 11 PASS, 29 KNOWN-DIFFERENCE and 8 ORACLE-REJECTED. Per-signal scores remain in the replay output. [Loss, modal delays and settling measurements](../../docs/distributed-lines.md#r18c-loss-coupling-and-settling)
+
+| Probe | Variable and decision |
+|---|---|
+| `r18b_txl_ac_ports` | Sweep source resistance 25/50/100 Ω. Compare the operating point with the complex AC ports at each frequency. A static 50 Ω input and isolated far end would give near voltages 2/3, 1/2 and 1/3 V in AC. A physical DC line gives finite through voltage. |
+| `r18b_txl_zero` | Supply R explicitly as 0, 1 µΩ and 0.1 Ω. Compare to the ideal T line in the same run. The original missing-R diagnostic alone cannot establish whether a literal zero is accepted. |
+| `r18b_txl_balance` | Sweep G through 3.99/4.00/4.01 mS. Record which settings reach the first 5 ns flight and measure the near and far plateaus. The equal-rate limit is continuous at 0.409365 V. |
+| `r18b_txl_ltra` | Compare independent TXL and O lines on the same source and load at 4/40/200 Ω. Record the first post-ramp voltage, the relaxation after the falling edge and the largest within-run voltage difference. |
+| `r18b_cpl_modes` | Drive one pair in phase and another in opposition, each matched to its modal impedance, alongside scalar TXL controls. Scale both losses by 0.01/1/4. The even and odd direct waves arrive after 6.10164 and 5.48452 ns and have amplitudes 0.5 exp(−0.109274·scale) and 0.5 exp(−0.146458·scale) V. Separating the modes removes uncertainty from overlapping crosstalk fronts. |
+| `r18b_cpl_settling` | Sweep the undriven conductor's R through 12/24/60 Ω with G = 0. At 100 ns the driven far end should approach 75/137 V and the near and far victim voltages should approach zero. Compare these values as well as the first crosstalk pulse. |
+| `r18b_cpl_coincident` | Sweep mutual C through −19/−20/−21 pF with nonzero mutual L. At −20 pF the LC product is scalar and both flights are √24 ns. Check for rejection exactly at coincidence and record the two separated controls. |
+| `r18b_cpl_uncoupled` | Keep all mutual entries zero and vary L22 through 225/250/275 nH. Only the middle setting has coincident velocities. Taken with the preceding probe, this separates sensitivity to zero mutual storage from sensitivity to a repeated delay. |

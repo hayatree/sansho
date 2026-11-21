@@ -508,6 +508,7 @@ impl Parser {
                     model: t[5].lower(),
                 })
             }
+            Some(b'y' | b'p' | b'n') => self.multiport(line),
             Some(b'u') => self.urc(line),
             Some(b't') => self.line_device(line),
             Some(b'j' | b'z') => self.jfet(line),
@@ -527,7 +528,6 @@ impl Parser {
             Some(b'd') => self.diode(line),
             Some(b'q') => self.bjt(line),
             Some(b'm') => self.mosfet(line),
-            Some(b'n') => self.va(line),
             _ => {
                 self.err(
                     "E-PARSE-ELEMENT",
@@ -1308,15 +1308,37 @@ impl Parser {
         Some(())
     }
 
-    fn va(&mut self, line: &Line) -> Option<ElementKind> {
-        let t = self.need(line, 2, "Nname nodes... model [key=value ...]")?;
+    fn multiport(&mut self, line: &Line) -> Option<ElementKind> {
+        let letter = line.tokens[0].lower();
+        let va = letter.starts_with('n');
+        let usage = if va {
+            "Nname nodes... model [key=value ...]"
+        } else {
+            "Y/Pname near... ref1 far... ref2 model [LEN=value]"
+        };
+        let t = self.need(line, 2, usage)?;
         let end = (1..t.len())
             .find(|&i| t.get(i + 1).is_some_and(Token::is_eq))
             .unwrap_or(t.len());
         if end < 2 {
-            return self.arity(line, "Nname nodes... model [key=value ...]");
+            return self.arity(line, usage);
         }
-        let nodes = t[1..end - 1].iter().map(node_name).collect();
+        let nodes: Vec<_> = t[1..end - 1].iter().map(node_name).collect();
+        if !va
+            && (!(4..=18).contains(&nodes.len())
+                || !nodes.len().is_multiple_of(2)
+                || letter.starts_with('y') && nodes.len() != 4)
+        {
+            return self.arity(line, usage);
+        }
+        if letter.starts_with('y') && (nodes[1] != crate::GROUND || nodes[3] != crate::GROUND) {
+            self.err(
+                "E-LINE-PARAM",
+                "TXL reference terminals must be ground",
+                line.span(),
+            );
+            return None;
+        }
         let model = t[end - 1].lower();
         let mut params = Vec::new();
         let mut i = end;
@@ -1325,14 +1347,28 @@ impl Parser {
                 self.err("E-PARSE-ARITY", "expected key=value", t[i].span);
                 return None;
             }
-            params.push((t[i].lower(), self.number(&t[i + 2], "VA parameter")?));
+            params.push((
+                t[i].lower(),
+                self.number(
+                    &t[i + 2],
+                    if va { "VA parameter" } else { "line parameter" },
+                )?,
+            ));
             i += 3;
         }
-        Some(ElementKind::Va {
-            nodes,
-            model,
-            params,
-        })
+        if va {
+            Some(ElementKind::Va {
+                nodes,
+                model,
+                params,
+            })
+        } else {
+            Some(ElementKind::Kspice {
+                ports: nodes,
+                model,
+                params,
+            })
+        }
     }
 
     fn diode(&mut self, line: &Line) -> Option<ElementKind> {
@@ -1720,6 +1756,7 @@ impl Parser {
                 | ElementKind::Jfet { model, params, .. }
                 | ElementKind::Mesfet { model, params, .. }
                 | ElementKind::Vdmos { model, params, .. }
+                | ElementKind::Kspice { model, params, .. }
                 | ElementKind::Urc { model, params, .. }
                 | ElementKind::Diode { model, params, .. }
                 | ElementKind::Bjt { model, params, .. }
@@ -1831,6 +1868,8 @@ impl Parser {
                 ElementKind::Capacitor { .. } => &["c"],
                 ElementKind::Inductor { .. } => &["l"],
                 ElementKind::Jfet { .. } => &["njf", "pjf"],
+                ElementKind::Kspice { .. } if e.name.starts_with('y') => &["txl"],
+                ElementKind::Kspice { .. } => &["cpl"],
                 ElementKind::Urc { .. } => &["urc"],
                 ElementKind::Ltra { .. } => &["ltra"],
                 ElementKind::Mesfet { .. } => &["nmf", "pmf"],
@@ -2000,6 +2039,23 @@ impl Parser {
                 );
                 return;
             };
+            if kind == "cpl" && matches!(k.as_str(), "r" | "l" | "g" | "c") {
+                i += 2;
+                let mut values = Vec::new();
+                while i < t.len() && !t.get(i + 1).is_some_and(Token::is_eq) {
+                    let Some(value) = self.number(&t[i], &k) else {
+                        return;
+                    };
+                    values.push(value);
+                    i += 1;
+                }
+                if values.is_empty() {
+                    self.err("E-LINE-MATRIX", format!("empty {k} matrix"), vt.span);
+                    return;
+                }
+                arrays.push((k, values));
+                continue;
+            }
             if kind == "multi_input_pwl" && k == "model" {
                 let value = match vt.lower().trim_matches('"') {
                     "and" => 0.,
@@ -2868,12 +2924,17 @@ R2 ignored after end 1
 
     #[test]
     fn reports_all_errors_with_spans() {
-        let src = "t\nR1 a b\nY1 c b e mod\nC1 a 0 xyz\n";
+        let src = "t\nR1 a b\nY1 c b e mod\nC1 a 0 xyz\n?1 a b\n";
         let diags = parse(src).err().unwrap_or_default();
         let codes: Vec<_> = diags.iter().map(|d| d.code).collect();
         assert_eq!(
             codes,
-            ["E-PARSE-ARITY", "E-PARSE-ELEMENT", "E-PARSE-NUMBER"]
+            [
+                "E-PARSE-ARITY",
+                "E-PARSE-ARITY",
+                "E-PARSE-NUMBER",
+                "E-PARSE-ELEMENT"
+            ]
         );
         assert_eq!(diags[2].span, Some(Span::new(4, 8)));
     }

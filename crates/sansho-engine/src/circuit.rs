@@ -865,6 +865,38 @@ pub(crate) fn compile_cached(
             ElementKind::Urc { .. } => {
                 dc.union(p, n);
             }
+            ElementKind::Kspice { ports, model, .. } => {
+                let (near, far) = ports.split_at(ports.len() / 2);
+                if let (Some((a, pa)), Some((b, pb))) = (near.split_last(), far.split_last()) {
+                    let card = nl.models.iter().find(|m| &m.name == model);
+                    for (j, (p, q)) in pa.iter().zip(pb).enumerate() {
+                        let leaking = card.is_some_and(|m| {
+                            if let Some((_, g)) = m.arrays.iter().rev().find(|(k, _)| k == "g") {
+                                let n = pa.len();
+                                let diagonal = if g.len() == n {
+                                    j
+                                } else {
+                                    j * (2 * n + 1 - j) / 2
+                                };
+                                g.get(diagonal).is_some_and(|&v| v > 0.)
+                            } else {
+                                m.params
+                                    .iter()
+                                    .rev()
+                                    .find(|(k, _)| k == "g")
+                                    .is_some_and(|(_, v)| *v > 0.)
+                            }
+                        });
+                        if a == b {
+                            dc.union(g_id(node(p)), g_id(node(q)));
+                        }
+                        if a != b || leaking {
+                            dc.union(g_id(node(p)), g_id(node(a)));
+                            dc.union(g_id(node(q)), g_id(node(b)));
+                        }
+                    }
+                }
+            }
             ElementKind::Ltra { ports, .. } => {
                 let (a, b) = (g_id(node(&ports[2])), g_id(node(&ports[3])));
                 if n == b {
@@ -1665,6 +1697,28 @@ fn native_groups<'a>(
                         nonlinear_count += usize::from(!dev.is_linear());
                         controlled.push(Box::new(dev));
                     }
+                    Err(d) => errors.push(d.with_span(e.span)),
+                }
+                ModelCache::warn_ignored(card, &p.unused(), diags);
+                warn_instance(e, &inst, diags);
+            }
+            ElementKind::Kspice {
+                ports,
+                model,
+                params,
+            } => {
+                let Some(card) = model_cache.card(model) else {
+                    errors.push(
+                        Diagnostic::error("E-ELAB-MODEL", format!("undefined line model {model}"))
+                            .with_span(e.span),
+                    );
+                    continue;
+                };
+                let p = ModelParams::new(&card.params);
+                let inst = ModelParams::new(params);
+                let nodes = ports.iter().map(|s| node(s)).collect::<Vec<_>>();
+                match crate::kspice::KLine::new(&e.name, &nodes, card, &p, &inst) {
+                    Ok(line) => controlled.push(Box::new(line)),
                     Err(d) => errors.push(d.with_span(e.span)),
                 }
                 ModelCache::warn_ignored(card, &p.unused(), diags);

@@ -700,10 +700,11 @@ pub(super) fn pz(
     poles: bool,
     zeros: bool,
 ) -> Result<AnalysisResult, Diagnostic> {
-    if c.groups
-        .iter()
-        .any(|g| g.line().is_some() || g.ltra().is_some_and(|line| line.values.c > 0.))
-    {
+    if c.groups.iter().any(|g| {
+        crate::kspice::KLine::from_group(g.as_ref()).is_some()
+            || g.line().is_some()
+            || g.ltra().is_some_and(|line| line.values.c > 0.)
+    }) {
         return Err(error(
             "pole-zero analysis requires lumped elements; a distributed line has an exponential delay",
         ));

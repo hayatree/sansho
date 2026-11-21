@@ -162,6 +162,12 @@ pub enum ElementKind {
         model: String,
         params: Vec<(String, f64)>,
     },
+    /// TXL or CPL with a reference terminal after each group of conductors.
+    Kspice {
+        ports: Vec<String>,
+        model: String,
+        params: Vec<(String, f64)>,
+    },
     /// Convolutional lossy two-port.
     Ltra { ports: [String; 4], model: String },
     /// Ideal lossless line, port order [+1, -1, +2, -2].
@@ -409,6 +415,7 @@ impl ElementKind {
             | Self::Switch { model, .. }
             | Self::Va { model, .. }
             | Self::Urc { model, .. }
+            | Self::Kspice { model, .. }
             | Self::Ltra { model, .. }
             | Self::Jfet { model, .. }
             | Self::Mesfet { model, .. }
@@ -426,7 +433,7 @@ impl ElementKind {
 pub struct ModelCard {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<SourceTable>,
-    /// Ordered numeric arrays on code-model cards.
+    /// Ordered numeric arrays on code-model and CPL cards.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub arrays: Vec<(String, Vec<f64>)>,
     /// Multi-component version labels that cannot be represented by an f64.
@@ -488,6 +495,7 @@ impl ElementKind {
                 .flat_map(|p| p.nodes.iter().map(String::as_str))
                 .collect(),
             Self::Coupling { .. } => vec![],
+            Self::Kspice { ports, .. } => ports.iter().map(String::as_str).collect(),
             Self::Urc { ports, .. } => ports.iter().map(String::as_str).collect(),
             Self::Line { ports, .. } | Self::Ltra { ports, .. } => {
                 ports.iter().map(String::as_str).collect()

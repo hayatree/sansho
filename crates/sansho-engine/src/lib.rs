@@ -13,6 +13,7 @@ mod fourier;
 pub use fourier::fourier;
 mod digital;
 mod distortion;
+mod kspice;
 mod lint;
 mod measure;
 pub mod monte_carlo;

@@ -642,12 +642,14 @@ Digital connectivity and fanout are immutable after elaboration. Each analysis o
 
 The [batch control interpreter](control.md) parses scoped command blocks in the netlist layer and runs them against isolated circuit and plot state in the session layer.
 
+TXL and CPL use the distributed RLGC solution in DC and AC, with delayed modal
+propagation in transient. [Line equations and compatibility](distributed-lines.md#txl-and-cpl)
+
 ### Not yet supported
 
-Distributed lossy lines, line IC tuples, pole-zero extraction for distributed
-delays, JFET level two, full MOS2/MOS3 short-channel corrections, interactive Nutmeg,
-CIDER and an OSDI loader remain outside the current
-implementation. [Compatibility and numerical differences](compatibility.md)
+T-line IC tuples, pole-zero extraction for distributed delays, JFET level two,
+full MOS2/MOS3 short-channel corrections, interactive Nutmeg, CIDER and an OSDI
+loader remain outside the current implementation. [Compatibility and numerical differences](compatibility.md)
 
 ---
 

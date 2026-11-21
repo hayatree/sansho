@@ -72,8 +72,17 @@ pub const CODES: &[CodeInfo] = &[
         "Invalid transmission line parameters",
         "The line parameters do not define a supported passive two-port or RC ladder.",
         &[
+            "For Y and P, supply a positive model LENGTH and a positive instance LEN when overriding it. Ground both TXL references.",
             "For T, supply Z0 and either TD in seconds or F in hertz with optional NL in wavelengths.",
             "For O, specify positive LEN and RLC, RC, LC or RG per-unit-length parameters. For U, specify positive L and K greater than one. An explicit N must be an integer from 1 through 4096.",
+        ],
+    ),
+    e(
+        "E-LINE-MATRIX",
+        "Invalid transmission line matrix",
+        "A per-unit-length line matrix has an incompatible size, a non-finite entry or an inadmissible eigenvalue.",
+        &[
+            "Supply N(N+1)/2 upper-triangle entries in row order. R and G also accept N diagonal entries. L and C must be positive definite, R and G positive semidefinite.",
         ],
     ),
     e(

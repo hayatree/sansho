@@ -1,0 +1,16 @@
+Coupled storage matrices with coincident or distinct velocities
+* Provenance: original Sansho R18b circuit.
+* sweep: storage -19p -20p -21p
+* known-difference: -19p -20p -21p | v(a) v(b) v(x) v(y)
+.param probe=-19p
+Vin src 0 pulse(0 1 1n .1n .1n 20n 50n)
+Ra src a 50
+Rb b 0 50
+P1 a b 0 x y 0 pair
+.model pair cpl length=1 r=10 0 10 g=0 0 0
++ l=250n 50n 250n c=100p {probe} 100p
+Rx x 0 50
+Ry y 0 50
+.tran .04n 18n
+.save v(a) v(b) v(x) v(y)
+.end

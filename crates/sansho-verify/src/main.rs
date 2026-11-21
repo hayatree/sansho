@@ -78,13 +78,27 @@ fn fail(msg: String) -> DeckReport {
     }
 }
 
-fn known_difference(text: &str) -> Option<&str> {
+fn directive<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     text.lines().find_map(|line| {
         let directive = line.trim_start().strip_prefix('*')?.trim_start();
-        let reason = directive.strip_prefix("sansho-verify: known-difference")?;
+        let reason = directive.strip_prefix(key)?;
         (reason.starts_with(char::is_whitespace) && !reason.trim().is_empty())
             .then(|| reason.trim())
     })
+}
+
+fn known_difference(text: &str) -> Option<&str> {
+    directive(text, "sansho-verify: known-difference")
+}
+
+// Require both a real batch failure and the designated full diagnostic line.
+fn known_rejection(text: &str, log: &str) -> Option<Problem> {
+    let expected = directive(text, "sansho-verify: reference-error")?;
+    let reason = known_difference(text)?;
+    log.strip_prefix("reference simulator exited with exit status: 1:")?
+        .lines()
+        .any(|line| line.trim() == expected)
+        .then(|| Problem::KnownRejection(format!("{reason} [reference diagnostic: {expected}]")))
 }
 
 fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), Problem> {
@@ -131,6 +145,15 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), 
     {
         return Err(Problem::Missing(ref_raw.display().to_string()));
     }
+    let error_log = cli.out.join(format!("{stem}.ref.error"));
+    if cli.cached
+        && directive(&text, "sansho-verify: reference-error").is_some()
+        && !ref_raw.try_exists()?
+    {
+        let log = std::fs::read_to_string(&error_log)
+            .map_err(|e| Problem::Failed(format!("cannot read {}: {e}", error_log.display())))?;
+        return Err(known_rejection(&text, &log).unwrap_or(Problem::Failed(log)));
+    }
     let mut reference = if cli.cached {
         read_reference(&ref_raw)?
     } else {
@@ -148,6 +171,15 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), 
             run_reference(cli, &path, Some(&pending)).and_then(|_| read_reference(&pending));
         if fresh.is_err() {
             let _ = std::fs::remove_file(&pending);
+        }
+        if let Err(Problem::Failed(log)) = &fresh
+            && let Some(known) = known_rejection(&text, log)
+        {
+            let tmp = error_log.with_extension(format!("{}.error", std::process::id()));
+            std::fs::write(&tmp, log)?;
+            std::fs::rename(tmp, &error_log)?;
+            // A previous valid raw, if present, remains available for comparison in cached mode.
+            return Err(known);
         }
         let fresh = fresh?;
         std::fs::rename(pending, &ref_raw)?;
@@ -194,7 +226,13 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), 
         let r = reference_measures(&prepared, &stem, &nl, cli)?;
         compare_measures(&r, &ours, &tol, &mut report);
     }
-    Ok((report, known_difference(&text).map(str::to_owned), false))
+    // A successful oracle run supersedes an annotation for a specific rejection.
+    let reason = if directive(&text, "sansho-verify: reference-error").is_some() {
+        None
+    } else {
+        known_difference(&text).map(str::to_owned)
+    };
+    Ok((report, reason, false))
 }
 
 fn read_reference(path: &Path) -> Result<sansho_output::SimResults, Problem> {
@@ -305,6 +343,21 @@ fn main() -> ExitCode {
         let (report, missing, known_difference, analytic) = match verify(d, &cli) {
             Ok((r, reason, analytic)) => (r, None, reason, analytic),
             Err(Problem::Failed(e)) => (fail(e), None, None, false),
+            Err(Problem::KnownRejection(reason)) => {
+                entries.push(Entry {
+                    deck: d.display().to_string(),
+                    status: "KNOWN",
+                    pass: false,
+                    known_difference: Some(reason),
+                    missing: None,
+                    report: DeckReport {
+                        vars: vec![],
+                        measures: vec![],
+                        problems: vec![],
+                    },
+                });
+                continue;
+            }
             Err(Problem::Missing(path)) => (
                 DeckReport {
                     vars: vec![],

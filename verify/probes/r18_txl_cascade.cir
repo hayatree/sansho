@@ -1,0 +1,17 @@
+Single TXL and two half-length sections on identical loads
+* Provenance: original Sansho R18 circuit.
+* sweep: resistance 10 100 300
+* known-difference: 100 300 | v(x) v(y) v(a) v(b)
+.param probe=10
+Vin src 0 pulse(0 1 1n .2n .2n 60n 140n)
+R1 src a 50
+R2 src b 50
+Y1 a 0 x 0 wire
+Y2 b 0 mid 0 wire len=.5
+Y3 mid 0 y 0 wire len=.5
+.model wire txl length=1 r={probe} l=250n c=100p g=.2m
+Rx x 0 75
+Ry y 0 75
+.tran .025n 120n
+.save v(x) v(y) v(a) v(b)
+.end

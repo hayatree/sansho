@@ -14,6 +14,7 @@ pub(crate) const WRAPPER: &str = "tools/ngspice/ngspice.sh";
 /// Distinguish missing circuit inputs from tool failures and missing cached results.
 #[derive(Debug)]
 pub(crate) enum Problem {
+    KnownRejection(String),
     Missing(String),
     Failed(String),
 }

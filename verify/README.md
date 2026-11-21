@@ -27,6 +27,17 @@ and a `known_difference` reason. The `pass` field records the tolerance result.
 Missing inputs retain their `SKIP` status. Simulation errors, unreadable cached
 references and problems that prevent comparison produce `FAIL`.
 
+For an analysis-card deck with a documented oracle rejection, pair the reason with
+`* sansho-verify: reference-error <exact diagnostic line>`. A successful native
+run and reference exit status 1 with that complete line produce `KNOWN` with
+`pass: false`. Fresh runs save the matching diagnostic in `<stem>.ref.error`.
+In cached mode a reference raw takes precedence and receives the ordinary
+waveform comparison. Without a raw the verifier checks the saved error log.
+A missing log or a different diagnostic fails verification. The R18b error
+sidecars are the three per-deck failure reports from `verify/out/r18_ver.txt`,
+starting with `reference simulator exited with exit status: 1:`.
+[TXL and CPL deck results](../docs/distributed-lines.md#r18b-measurements-against-ngspice-442) · [Cached probe results](../docs/distributed-lines.md#verification-status)
+
 For compact devices, the maintainer uses black-box behavior from ngspice 44.2 as the reference for extracted model cards. The three BSIM4 KU0 layout decks pass with the measured mobility behavior. [Compatibility policy](../docs/compatibility.md#compact-model-compatibility)
 
 All decks are original circuits written for this project. Raw files go to `verify/out/`

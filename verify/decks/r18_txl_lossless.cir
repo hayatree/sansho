@@ -1,0 +1,15 @@
+TXL and ideal line with identical delays and loads
+* Provenance: original Sansho R18 circuit.
+* sansho-verify: known-difference 44.2 requires a supplied R despite the zero default in manual §6.4.1. The lossless TXL agrees with its ideal T control.
+* sansho-verify: reference-error Fatal error: model wire: lossy line series resistance not given
+Vin src 0 dc 0 ac 1 pulse(0 1 1n .1n .1n 45n 100n)
+Rs src near 50
+Y1 near 0 far 0 wire
+.model wire txl(l=250n c=100p length=1)
+Rl far 0 135
+R2 src other 50
+T2 other 0 control 0 z0=50 td=5n
+R3 control 0 135
+.tran .08n 35n
+.save v(near) v(far) v(control) v(other)
+.end

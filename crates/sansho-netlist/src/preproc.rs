@@ -974,7 +974,12 @@ impl Flat<'_> {
                             .tokens
                             .get(2)
                             .is_some_and(|t| crate::xspice::code_model(&t.lower()));
-                        let deferred = !analog
+                        let kspice = line
+                            .tokens
+                            .get(2)
+                            .is_some_and(|t| matches!(t.lower().as_str(), "txl" | "cpl"));
+                        let deferred = !kspice
+                            && !analog
                             && line.tokens.get(3..).is_some_and(|tail| {
                                 tail.chunks(3).any(|kv| {
                                     kv.get(2).is_some_and(|v| !is_number_literal(&v.text))
@@ -997,6 +1002,8 @@ impl Flat<'_> {
                         }
                         let mut toks = if analog {
                             self.substitute(&crate::xspice::brackets(&line.tokens), scope)
+                        } else if kspice {
+                            self.substitute(&line.tokens, scope)
                         } else if substituted || deferred {
                             line.tokens.clone()
                         } else {
@@ -1170,7 +1177,7 @@ impl Flat<'_> {
                 }
                 'e' | 'g' if toks.get(4).is_some_and(Token::is_eq) => (1..3.min(n)).collect(),
                 's' | 'e' | 'g' | 't' | 'o' => (1..5.min(n)).collect(),
-                'n' => {
+                'n' | 'p' | 'y' => {
                     let end = (1..n)
                         .find(|&i| toks.get(i + 1).is_some_and(Token::is_eq))
                         .unwrap_or(n);
@@ -1229,7 +1236,10 @@ impl Flat<'_> {
                     t.text = ctx.element(&t.text);
                 }
                 // Model reference of D/Q/M: the first positional token after the nodes.
-                if matches!(letter, 's' | 'd' | 'q' | 'j' | 'z' | 'm' | 'n' | 'o' | 'u') {
+                if matches!(
+                    letter,
+                    's' | 'd' | 'q' | 'j' | 'z' | 'm' | 'n' | 'o' | 'u' | 'p' | 'y'
+                ) {
                     let at = node_slots.last().map_or(1, |&i| i + 1);
                     if let Some(t) = toks.get_mut(at)
                         && !t.is_eq()

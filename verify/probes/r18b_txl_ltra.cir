@@ -1,0 +1,18 @@
+Identically loaded TXL and LTRA at strong series loss
+* Provenance: original Sansho R18b circuit.
+* sweep: resistance 4 40 200
+* known-difference: 4 | v(a) v(b)
+* known-difference: 200 | v(a) v(x)
+.param probe=4
+Vin src 0 pulse(0 1 1n .1n .1n 45n 100n)
+Ra src a 50
+Rb src b 50
+Y1 a 0 x 0 wire
+O1 b 0 y 0 control
+.model wire txl length=1 r={probe} l=250n g=0 c=100p
+.model control ltra len=1 r={probe} l=250n g=0 c=100p lininterp
+Rx x 0 75
+Ry y 0 75
+.tran .1n 90n
+.save v(a) v(b) v(x) v(y)
+.end

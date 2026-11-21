@@ -1,0 +1,31 @@
+Balanced even and odd CPL drives with matched scalar TXL controls
+* Provenance: original Sansho R18b circuit.
+* sweep: loss 0.01 1 4
+* known-difference: 1 4 | v(x) v(y) v(w) v(z)
+.param probe=0.01
+Vin pos 0 pulse(0 1 1n .16n .16n 25n 60n)
+Einv neg 0 pos 0 -1
+.param ze={sqrt(365n/102p)} zo={sqrt(235n/128p)}
+Ra pos a {ze}
+Rb pos b {ze}
+Rc pos c {zo}
+Rd neg d {zo}
+P1 a b 0 x y 0 pair
+P2 c d 0 w z 0 pair
+.model pair cpl length=1 r={12*probe} 0 {12*probe}
++ l=300n 65n 300n g={.3m*probe} 0 {.3m*probe} c=115p -13p 115p
+Rx x 0 {ze}
+Ry y 0 {ze}
+Rw w 0 {zo}
+Rz z 0 {zo}
+Re pos e {ze}
+Ro pos o {zo}
+Ye e 0 even 0 common
+Yo o 0 odd 0 diff
+.model common txl length=1 r={12*probe} l=365n g={.3m*probe} c=102p
+.model diff txl length=1 r={12*probe} l=235n g={.3m*probe} c=128p
+Rle even 0 {ze}
+Rlo odd 0 {zo}
+.tran .025n 18n
+.save v(x) v(y) v(w) v(z) v(even) v(odd)
+.end

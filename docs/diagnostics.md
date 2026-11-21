@@ -9,6 +9,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 |---|---|---|
 | [`E-PARSE-COND`](#e-parse-cond) | error | Invalid conditional netlist block |
 | [`E-LINE-PARAM`](#e-line-param) | error | Invalid transmission line parameters |
+| [`E-LINE-MATRIX`](#e-line-matrix) | error | Invalid transmission line matrix |
 | [`E-POLY-ARITY`](#e-poly-arity) | error | Invalid polynomial dimension or controls |
 | [`E-COUPLING-K`](#e-coupling-k) | error | Invalid coupling coefficient |
 | [`E-COUPLING-L`](#e-coupling-l) | error | Undefined or invalid winding |
@@ -100,8 +101,15 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 **Invalid transmission line parameters.** The line parameters do not define a supported passive two-port or RC ladder.
 
+- For Y and P, supply a positive model LENGTH and a positive instance LEN when overriding it. Ground both TXL references.
 - For T, supply Z0 and either TD in seconds or F in hertz with optional NL in wavelengths.
 - For O, specify positive LEN and RLC, RC, LC or RG per-unit-length parameters. For U, specify positive L and K greater than one. An explicit N must be an integer from 1 through 4096.
+
+## E-LINE-MATRIX
+
+**Invalid transmission line matrix.** A per-unit-length line matrix has an incompatible size, a non-finite entry or an inadmissible eigenvalue.
+
+- Supply N(N+1)/2 upper-triangle entries in row order. R and G also accept N diagonal entries. L and C must be positive definite, R and G positive semidefinite.
 
 ## E-POLY-ARITY
 

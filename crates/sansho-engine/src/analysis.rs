@@ -566,6 +566,10 @@ pub(crate) fn ac_rhs(ckt: &Circuit) -> Vec<c64> {
 
 /// Coefficients of the nonlocal terms in each line's two wave equations.
 pub(crate) enum DelayedStamp {
+    Kspice {
+        constants: crate::kspice::Constants,
+        entries: Vec<(usize, usize, f64)>,
+    },
     Table {
         points: Vec<[f64; 3]>,
         entries: Vec<(usize, f64)>,
@@ -594,6 +598,15 @@ impl DelayedStamp {
             })
             .collect();
         for (group, state) in c.groups.iter().zip(&ws.state) {
+            if let Some(line) = crate::kspice::KLine::from_group(group.as_ref()) {
+                stamps.push(Self::Kspice {
+                    constants: line.constants.clone(),
+                    entries: line
+                        .entries()
+                        .filter_map(|(r, col, k, v)| Some((c.pattern.find(r?, col?)?, k, v)))
+                        .collect(),
+                });
+            }
             if let Some(line) = group.ltra().filter(|line| line.values.c > 0.) {
                 stamps.push(Self::Line {
                     constants: line.values,
@@ -648,6 +661,12 @@ impl DelayedStamp {
                 let change = c64::new(-2. * (phase * 0.5).sin().powi(2), -phase.sin());
                 for &(slot, coefficient) in entries {
                     values[slot] += change * (sign * coefficient);
+                }
+            }
+            Self::Kspice { constants, entries } => {
+                let coefficients = constants.coefficients(omega);
+                for &(slot, k, v) in entries {
+                    values[slot] += coefficients[k] * (sign * v);
                 }
             }
             Self::Line { constants, entries } => {
@@ -1118,6 +1137,24 @@ pub(crate) fn tran(
         })
         .collect();
     let mut hmax = lines.iter().fold(hmax, |h, l| h.min(l.line.delay));
+    let mut kspice: Vec<_> = ckt
+        .groups
+        .iter()
+        .enumerate()
+        .filter_map(|(i, g)| {
+            let line = crate::kspice::KLine::from_group(g.as_ref())?;
+            Some((i, crate::kspice::History::new(line, &x, uic, hmax)))
+        })
+        .collect();
+    hmax = kspice
+        .iter()
+        .fold(hmax, |h, (_, line)| h.min(line.step_limit()));
+    let mut modal_delays: Vec<_> = kspice.iter().flat_map(|(_, h)| h.line.delays()).collect();
+    modal_delays.sort_by(f64::total_cmp);
+    modal_delays.dedup();
+    for &delay in &modal_delays {
+        hmax = hmax.min(delay);
+    }
     let mut lossy: Vec<_> = ckt
         .groups
         .iter()
@@ -1152,6 +1189,12 @@ pub(crate) fn tran(
         g.exponential_step_limits(opts.reltol, &mut exponential_limits);
         g.step_limits(&tp, &mut step_limits);
     }
+    let mut source_corners = if modal_delays.is_empty() {
+        Vec::new()
+    } else {
+        bps.clone()
+    };
+    source_corners.sort_by(f64::total_cmp);
     for history in &mut lines {
         if let Some(&[v1, i1, v2, i2]) = ws.slots[history.group]
             .initial_conditions
@@ -1177,6 +1220,12 @@ pub(crate) fn tran(
             .filter(|(_, l, _)| l.step_limit)
             .map(|(_, l, _)| l.values.delay()),
     );
+    // Track reflection fronts along each mode independently.
+    let mut arrivals: Vec<_> = modal_delays
+        .iter()
+        .map(|&delay| std::collections::VecDeque::from([delay]))
+        .collect();
+    bps.extend_from_slice(&modal_delays);
     bps.push(tstop);
     bps.retain(|&t| t > eps && t <= tstop);
     bps.sort_by(f64::total_cmp);
@@ -1306,6 +1355,9 @@ pub(crate) fn tran(
                 "E-CONV-TRAN",
                 "timestep below floating-point time resolution",
             ));
+        }
+        for (i, history) in &kspice {
+            history.trial(ctx.time, &mut ws.slots[*i]);
         }
         for (i, line, samples) in &lossy {
             line.trial(ctx.time, samples, &mut ws.slots[*i]);
@@ -1517,6 +1569,31 @@ pub(crate) fn tran(
         if crossing.is_some() || dac_jump {
             hist.clear();
             grow = grow.min(1.);
+        }
+        for (_, history) in &mut kspice {
+            history.accept(t, &x_new);
+        }
+        if !arrivals.is_empty() && (hit_bp || crossing.is_some() || dac_jump) {
+            let corner = source_corners.partition_point(|&v| v < t - eps);
+            let launch = crossing.is_some()
+                || dac_jump
+                || next_bp != fixed_bp
+                || source_corners.get(corner).is_some_and(|&v| v <= t + eps);
+            for (&delay, queue) in modal_delays.iter().zip(&mut arrivals) {
+                let mut reflected = false;
+                while queue.front().is_some_and(|&v| v <= t + eps) {
+                    queue.pop_front();
+                    reflected = true;
+                }
+                let arrival = t + delay;
+                if (launch || reflected)
+                    && arrival <= tstop
+                    && queue.back().is_none_or(|&v| v < arrival - eps)
+                {
+                    queue.push_back(arrival);
+                    schedule_arrival(&mut bps, arrival, eps, tstop);
+                }
+            }
         }
         for (_, line, samples) in &mut lossy {
             samples.push((t, line.sample(&x_new)));

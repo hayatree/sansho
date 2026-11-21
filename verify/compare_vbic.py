@@ -1,4 +1,4 @@
-"""Compare VBIC, HICUM or BSIMSOI sweeps against cached ASCII raw files, offline.
+"""Compare model and distributed-line sweeps against cached ASCII raw files, offline.
 
 Provenance: original Sansho comparison of independently generated waveforms.
 Run cargo build --release -p sansho-cli --features jit before invoking.
@@ -141,12 +141,16 @@ def native_check(template, value, work, binary):
         return ("NATIVE-REJECT" if native_rejected(run, name) else "FAIL"), [run.stderr.strip()]
     if run.returncode:
         return "FAIL", [run.stderr.strip()]
+    return "NATIVE", [finite_plots(target), run.stderr.strip()]
+
+
+def finite_plots(target):
     waveforms = plots(target)
     for columns in waveforms.values():
         for signal, samples in columns.items():
-            if not samples or any(not (math.isfinite(z.real) and math.isfinite(z.imag)) for z in samples):
-                return "FAIL", [f"empty or nonfinite {signal}"]
-    return "NATIVE", [", ".join(waveforms), run.stderr.strip()]
+            if not samples or any(not math.isfinite(abs(z)) for z in samples):
+                raise ValueError(f"{target}: empty or nonfinite {signal}")
+    return ", ".join(waveforms)
 
 
 def check(deck, out, binary, expected, value):
@@ -186,6 +190,13 @@ def check(deck, out, binary, expected, value):
         return ("BOTH-REJECT" if rejected else "FAIL"), [f"unknown instance parameter {name}", run.stderr.strip()]
     if timed_out:
         return "FAIL", ["oracle setting timed out"]
+    for settings, diagnostic in re.findall(r"^\* reference-error: (.+) \| (.+)$", expected, re.MULTILINE):
+        if value in settings.split() and diagnostic in log.splitlines():
+            if run.returncode or "fatal error in ngspice, exit(1)" not in log:
+                return "FAIL", [diagnostic, run.stderr.strip()]
+            if raw.exists() and re.search(r"^No. Points:\s*[1-9]", raw.read_text(), re.MULTILINE):
+                return "FAIL", ["expected no reference waveform", diagnostic]
+            return "ORACLE-REJECTED", [diagnostic, finite_plots(target)]
     if not raw.exists() or not raw.stat().st_size:
         # Lack of a cached plot alone does not establish a parameter rejection.
         if re.search(r"^error[: ]", log, re.IGNORECASE | re.MULTILINE):
@@ -246,7 +257,7 @@ def main():
     parser.add_argument("--out", type=Path, help="directory for native comparison raws")
     args = parser.parse_args()
     round_name = args.pattern[:3]
-    out = args.out or (ROOT / "out" / round_name if round_name in {"r16", "r17"} else OUT)
+    out = args.out or (ROOT / "out" / round_name if round_name in {"r16", "r17", "r18"} else OUT)
     counts = Counter()
     templates = sorted((ROOT / "probes").glob(args.pattern + ".cir"))
     if not templates:

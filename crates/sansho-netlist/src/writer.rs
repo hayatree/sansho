@@ -396,16 +396,17 @@ pub fn write_model_with(m: &crate::ModelCard, num: impl Fn(f64) -> String) -> St
                 .collect();
             let _ = write!(l, " {k}=\"{table}\"");
         } else {
-            let _ = write!(
-                l,
-                " {k}=[{}]",
-                values
-                    .iter()
-                    .copied()
-                    .map(&num)
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            );
+            let vector = values
+                .iter()
+                .copied()
+                .map(&num)
+                .collect::<Vec<_>>()
+                .join(" ");
+            if m.kind == "cpl" {
+                let _ = write!(l, " {k}={vector}");
+            } else {
+                let _ = write!(l, " {k}=[{vector}]");
+            }
         }
     }
     l += ")";
@@ -432,7 +433,12 @@ pub fn write(nl: &Netlist) -> String {
                     .join(" ");
                 let _ = write!(l, "{name} {ports} {model}");
             }
-            ElementKind::Va {
+            ElementKind::Kspice {
+                ports: nodes,
+                model,
+                params: ps,
+            }
+            | ElementKind::Va {
                 nodes,
                 model,
                 params: ps,

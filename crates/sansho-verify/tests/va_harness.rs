@@ -124,3 +124,43 @@ fi
     assert!(log.contains("SKIP") && log.contains("load.lib"));
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn expected_reference_failure_requires_the_matching_diagnostic() {
+    let root = std::env::temp_dir().join(format!("sansho-verify-rejection-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let deck = root.join("bias.cir");
+    fs::write(&deck, "bias\n* sansho-verify: known-difference fixture rejection\n* sansho-verify: reference-error unsupported analysis\nV1 p 0 1\n.op\n.end\n").unwrap();
+    let runner = root.join("reference");
+    fs::write(
+        &runner,
+        "#!/bin/sh\necho 'unsupported analysis' >&2\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(&runner, fs::Permissions::from_mode(0o755)).unwrap();
+    let run = |cached| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_sansho-verify"));
+        cmd.arg("--reference")
+            .arg(&runner)
+            .arg("--out")
+            .arg(&root)
+            .arg(&deck);
+        if cached {
+            cmd.arg("--cached");
+        }
+        cmd.output().unwrap()
+    };
+    for cached in [false, true] {
+        let out = run(cached);
+        assert!(out.status.success() && String::from_utf8_lossy(&out.stdout).contains("1 known"));
+    }
+    fs::write(
+        root.join("bias.ref.error"),
+        "reference simulator exited with exit status: 1: wrong diagnostic",
+    )
+    .unwrap();
+    assert!(!run(true).status.success());
+    fs::remove_file(root.join("bias.ref.error")).unwrap();
+    assert!(!run(true).status.success());
+    fs::remove_dir_all(root).unwrap();
+}

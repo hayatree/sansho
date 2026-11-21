@@ -159,6 +159,7 @@ pub(crate) fn bind_models(
             | ElementKind::Jfet { model, params, .. }
             | ElementKind::Mesfet { model, params, .. }
             | ElementKind::Vdmos { model, params, .. }
+            | ElementKind::Kspice { model, params, .. }
             | ElementKind::Urc { model, params, .. }
             | ElementKind::Diode { model, params, .. } => (model, params),
             _ => continue,
@@ -314,6 +315,7 @@ impl ParameterPlan {
                 | ElementKind::Jfet { model: m, .. }
                 | ElementKind::Mesfet { model: m, .. }
                 | ElementKind::Vdmos { model: m, .. }
+                | ElementKind::Kspice { model: m, .. }
                 | ElementKind::Urc { model: m, .. }
                 | ElementKind::Ltra { model: m, .. }
                 | ElementKind::Diode { model: m, .. } => {

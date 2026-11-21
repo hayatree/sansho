@@ -1,0 +1,19 @@
+Three unequal lines driven on conductor one
+* Provenance: original Sansho R18 circuit.
+* sansho-verify: known-difference 44.2 far-end traces track the lossless three-mode control within 0.70 mV while the specified series losses attenuate the driven front. See docs/distributed-lines.md.
+Vin src 0 dc 0 ac 1 pulse(0 1 1n .16n .12n 20n 50n)
+Rs0 a src 50
+Rs1 b 0 50
+Rs2 c 0 50
+Rl0 x 0 75
+Rl1 y 0 80
+Rl2 z 0 85
+P1 a b c 0 x y z 0 wire
+.model wire cpl length=1
++ r=7 0 0 9 0 13
++ l=360n 64n 19n 390n 42n 320n
++ g=0 0 0 0 0 0
++ c=120p -16p -4p 135p -10p 100p
+.tran .06n 23n
+.save v(a) v(b) v(c) v(x) v(y) v(z) i(Vin)
+.end

@@ -1,0 +1,12 @@
+TXL step with matched terminations
+* Provenance: original Sansho R18 circuit.
+* sansho-verify: known-difference 44.2 fails TXL setup at R/L = G/C. The matched 5 ns ramp has exact gain 0.5 exp(-0.2).
+* sansho-verify: reference-error Error: Gaussian elimination fails during setup of TXL
+Vin src 0 dc 0 ac 1 pulse(0 1 1n .1n .1n 45n 100n)
+Rs src near 50
+Y1 near 0 far 0 wire
+.model wire txl(r=10 l=250n g=4m c=100p length=1)
+Rl far 0 50
+.tran .05n 36n
+.save v(near) v(far) i(Vin)
+.end

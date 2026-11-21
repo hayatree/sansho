@@ -1,0 +1,11 @@
+TXL loaded complex voltage and drive current
+* Provenance: original Sansho R18 circuit.
+* sansho-verify: known-difference Manual §6.4 limits TXL to transient. 44.2 returns a frequency-independent near voltage of 0.5 V and a far voltage below 2 pV. Sansho solves the loaded RLGC line.
+Vin src 0 dc 0 ac 1 pulse(0 1 1n .1n .1n 45n 100n)
+Rs src near 50
+Y1 near 0 far 0 wire len=1.5
+.model wire txl(r=16 l=250n g=.8m c=100p length=1)
+Rl far 0 80
+.ac dec 8 100k 2g
+.save v(near) v(far) i(Vin)
+.end

@@ -4,6 +4,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Add TXL (Y) and coupled CPL (P) lines with length overrides, exact matrix DC and AC, and transient propagation with scalar modal filters or coupled loss sections. The scalar filter preserves the wavefront and the onset of the dispersive tail. Seven acceptance decks and 48 cached probe settings quantify 44.2 compatibility. [Equations and verification](docs/distributed-lines.md#txl-and-cpl)
+
 - Add native silicon B4SOI 4.4 NMOS and PMOS at levels 10 and 58 with partial, unified and ideal full depletion, floating and contacted film, a back gate, self-heating, RF resistance networks and noise. R17c passes eleven of twelve ngspice 44.2 acceptance circuits and the 45 and 90 fF inverter probes. The original 80 ps inverter transient is a documented time-grid difference. [Model coverage and open choices](docs/bsimsoi.md)
 
 - Add native level-eight HICUM/L2 NPN and PNP devices targeting 2.4.0, with charge control, high-injection storage, substrate, NQS, electrothermal and noise analyses. Six of seven acceptance decks pass against cached ngspice 44.2 data. The isolated BC mirror establishes a PNP known difference. R16c passes 276 cached probe settings. [Model and measurement status](docs/hicum.md)

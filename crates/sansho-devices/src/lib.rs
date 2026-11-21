@@ -615,7 +615,7 @@ impl NoiseSource {
 pub type FrequencyStamp<'a> = (&'a [[f64; 3]], Node, [Node; 2]);
 
 /// All instances of one device type.
-pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
+pub trait DeviceGroup: std::any::Any + Send + Sync + std::fmt::Debug {
     /// Device type name, e.g. `resistor`.
     fn type_name(&self) -> &'static str;
 
