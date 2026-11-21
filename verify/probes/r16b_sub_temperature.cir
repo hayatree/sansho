@@ -1,0 +1,12 @@
+Lateral current temperature derivative at independently clamped forward BC bias
+* Provenance: original Sansho R16b black-box experiment.
+* sweep: sub_temperature 1 1.2 1.5
+.param probe=1
+Vc c 0 .12
+Vb b 0 .78
+Vs s 0 -.2
+Q1 c b 0 s n
+.model n npn(level=8 c10=0 ibeis=0 ibcis=0 itss=2e-16 msf={probe})
+.dc temp -30 120 10
+.save i(Vs) i(Vb) i(Vc)
+.end

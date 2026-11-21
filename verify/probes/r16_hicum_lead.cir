@@ -1,0 +1,11 @@
+Collector series voltage drop at high injection
+* Provenance: original Sansho R16 circuit.
+* sweep: lead 0 2 8
+.param probe=0
+Vc c 0 1
+Vb b 0 .79
+Q1 c b 0 0 dev
+.model dev npn(level=8 rcx={probe} re=.8)
+.dc Vc -.05 2 .025
+.save i(Vc) i(Vb)
+.end

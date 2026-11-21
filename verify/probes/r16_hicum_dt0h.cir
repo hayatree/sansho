@@ -1,0 +1,11 @@
+Low-current base width correction
+* Provenance: original Sansho R16 circuit.
+* sweep: dt0h -4p 0 4p
+.param probe=-4p
+Vc c 0 1
+Vb b 0 .76 ac 1
+Q1 c b 0 0 dev
+.model dev npn(level=8 dt0h={probe} t0=8p)
+.ac dec 4 1meg 100G
+.save i(Vc) i(Vb)
+.end

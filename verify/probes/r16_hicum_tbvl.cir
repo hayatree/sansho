@@ -1,0 +1,11 @@
+Collector-voltage dependence of drift time
+* Provenance: original Sansho R16 circuit.
+* sweep: tbvl 0 5p 20p
+.param probe=0
+Vc c 0 1
+Vb b 0 .76 ac 1
+Q1 c b 0 0 dev
+.model dev npn(level=8 tbvl={probe} t0=8p)
+.ac dec 4 1meg 100G
+.save i(Vc) i(Vb)
+.end

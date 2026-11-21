@@ -4,6 +4,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Add native level-eight HICUM/L2 NPN and PNP devices targeting 2.4.0, with charge control, high-injection storage, substrate, NQS, electrothermal and noise analyses. Six of seven acceptance decks pass against cached ngspice 44.2 data. The isolated BC mirror establishes a PNP known difference. R16c passes 276 cached probe settings. [Model and measurement status](docs/hicum.md)
+
 - Add native level-four VBIC NPN and PNP devices with substrate transport, quasi-saturation, excess phase, a junction-temperature port and noise. Seven acceptance decks and isolated parameter sweeps cover the initial 1.2 card mapping. All seven decks and 219 complete black-box probe settings pass against ngspice 44.2. [Equations and open choices](docs/vbic.md)
 
 - Add provisional JFET2, MOS9, BSIM1 and BSIM2 models with DC, charge, AC, temperature and noise. VDMOS accepts TEXP0 and TEXP1. Against ngspice 44.2 nine acceptance decks pass. The two inverter decks have quantified trapezoidal supply-current differences on coarse grids. [Equations, assumptions and probe index](docs/r14-models.md)

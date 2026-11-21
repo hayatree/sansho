@@ -1,0 +1,12 @@
+Lateral injection ideality with separate SC diode
+* Provenance: original Sansho R16 circuit.
+* sweep: msf 1 1.2 1.5
+.param probe=1
+Vc c 0 .15
+Vb b 0 .76
+Vs s 0 -.2
+Q1 c b 0 s dev
+.model dev npn(level=8 itss=2e-16 msf={probe} iscs=8e-16)
+.dc Vc .01 .5 .01
+.save i(Vs) i(Vb) i(Vc)
+.end

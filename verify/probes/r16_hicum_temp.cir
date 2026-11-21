@@ -1,0 +1,11 @@
+Instance temperature precedence over the circuit sweep
+* Provenance: original Sansho R16 circuit.
+* sweep: temp -20 27 70
+.param probe=-20
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev temp={probe}
+.model dev npn(level=8 t0=2p)
+.dc temp -30 120 10
+.save i(Vc) i(Vb)
+.end

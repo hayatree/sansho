@@ -366,7 +366,7 @@ pub enum ElementKind {
         e: String,
         /// Substrate (ground when omitted).
         s: Option<String>,
-        /// VBIC junction temperature rise (optional fifth terminal).
+        /// Compact bipolar junction temperature rise (optional fifth terminal).
         #[serde(skip_serializing_if = "Option::is_none")]
         tj: Option<String>,
         /// Model name (lower-cased).
@@ -442,13 +442,26 @@ pub struct ModelCard {
 impl ModelCard {
     /// True for a native level-four bipolar card, honoring the last LEVEL.
     pub fn is_vbic(&self) -> bool {
+        self.bipolar_level(4.)
+    }
+
+    /// Native HICUM/L2 card.
+    pub fn is_hicum(&self) -> bool {
+        self.bipolar_level(8.)
+    }
+
+    pub(crate) fn thermal_bipolar(&self) -> bool {
+        self.is_vbic() || self.is_hicum()
+    }
+
+    fn bipolar_level(&self, level: f64) -> bool {
         matches!(self.kind.as_str(), "npn" | "pnp")
             && self
                 .params
                 .iter()
                 .rev()
                 .find(|(k, _)| k == "level")
-                .is_some_and(|(_, v)| *v == 4.)
+                .is_some_and(|(_, v)| *v == level)
     }
 }
 

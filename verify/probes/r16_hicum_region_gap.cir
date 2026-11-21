@@ -1,0 +1,11 @@
+Regional emitter gap contribution to recombination
+* Provenance: original Sansho R16 circuit.
+* sweep: region_gap 1.0 1.17 1.3
+.param probe=1.0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 vge={probe} ireis=2e-14 mrei=2)
+.dc temp -30 120 10
+.save i(Vc) i(Vb)
+.end

@@ -1,0 +1,11 @@
+Emitter excess minority charge above critical current
+* Provenance: original Sansho R16 circuit.
+* sweep: tef0 0 10p 60p
+.param probe=0
+Vc c 0 1
+Vb b 0 .76 ac 1
+Q1 c b 0 0 dev
+.model dev npn(level=8 tef0={probe} gtfe=1.4 vlim=.12)
+.ac dec 4 1meg 100G
+.save i(Vc) i(Vb)
+.end

@@ -1,0 +1,11 @@
+Emitter crowding contribution to base spreading resistance
+* Provenance: original Sansho R16 circuit.
+* sweep: fcrbi 0 1 5
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 rbi0=700 fcrbi={probe} ibeis=8e-18)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

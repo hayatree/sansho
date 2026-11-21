@@ -1,0 +1,11 @@
+Separate SRH and ideal current slopes inside the base
+* Provenance: original Sansho R16 circuit.
+* sweep: recombination 0 2e-15 8e-15
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 ireis={probe} mrei=1.8)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

@@ -22,6 +22,12 @@ args=(--rm --network none -e SPICE_ASCIIRAWFILE=1 -u "$(id -u):$(id -g)"
 if [[ -n "${SANSHO_VERIFY_OUT:-}" && "$SANSHO_VERIFY_OUT" != "$root/"* ]]; then
   args+=(-v "$SANSHO_VERIFY_OUT:$SANSHO_VERIFY_OUT")
 fi
+if [[ -n "${SANSHO_PROBE_DOCKER_MARKER:-}" ]]; then
+  name="${SANSHO_PROBE_DOCKER_MARKER%/container}"
+  name="sansho-probe-${name##*/}"
+  printf '%s\n' "$name" > "$SANSHO_PROBE_DOCKER_MARKER"
+  args+=(--name "$name")
+fi
 if [[ "${1:-}" == --compile-va ]]; then
   shift
   exec docker run --pull=never "${args[@]}" --entrypoint /usr/local/bin/openvaf-r "$image" "$@"

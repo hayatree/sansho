@@ -1,0 +1,12 @@
+Thermal resistance temperature exponent at hot ambient
+* Provenance: original Sansho R16 circuit.
+* sweep: thermal_exponent 0 1 3
+.param probe=0
+Vc c 0 1.5
+Vb b 0 pulse(.58 .78 1u 100n 100n 20u 50u)
+.options temp=55
+Q1 c b 0 0 tj dev
+.model dev npn(level=8 flsh=2 zetarth={probe} rth=200 cth=10n re=1)
+.tran .25u 45u
+.save v(tj) i(Vc) i(Vb)
+.end

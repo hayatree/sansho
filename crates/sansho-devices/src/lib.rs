@@ -21,6 +21,7 @@ pub mod diode;
 pub mod distortion;
 pub mod dual;
 mod early_bsim;
+pub mod hicum;
 pub mod jfet;
 pub mod jfet2;
 pub mod junction;
@@ -799,6 +800,10 @@ pub trait DeviceGroup: Send + Sync + std::fmt::Debug {
 
     /// Append (activation time, maximum step) pairs for transient sampling.
     fn step_limits(&self, _tran: &TranParams, _out: &mut Vec<(f64, f64)>) {}
+
+    /// Register junctions whose exponential currents need time resolution even at zero storage.
+    /// The signed voltage increment bounds the midpoint interpolation error at RELTOL.
+    fn exponential_step_limits(&self, _reltol: f64, _out: &mut Vec<(Node, Node, f64)>) {}
 
     /// Append transient breakpoints in `[0, tstop]`.
     fn has_random_waveform(&self) -> bool {

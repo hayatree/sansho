@@ -1,0 +1,9 @@
+Short-circuit current gain including stored charge and excess phase
+* Provenance: original Sansho R16 circuit.
+Vc c 0 1
+Vb b 0 .76 ac 1
+Q1 c b 0 0 dev
+.model dev npn(level=8 t0=8p cjei0=45f cjci0=12f tef0=5p rbi0=25 flnqs=1)
+.ac dec 4 1meg 100G
+.save i(Vc) i(Vb)
+.end

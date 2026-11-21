@@ -1,0 +1,11 @@
+Capacitance shunting the intrinsic base resistance
+* Provenance: original Sansho R16 circuit.
+* sweep: fdqr0 0 .5 1
+.param probe=0
+Vc c 0 1
+Vb b 0 .76 ac 1
+Q1 c b 0 0 dev
+.model dev npn(level=8 rbi0=200 t0=200p fdqr0={probe})
+.ac dec 4 1meg 100G
+.save i(Vc) i(Vb)
+.end

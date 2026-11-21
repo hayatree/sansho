@@ -182,6 +182,60 @@ fn tran_steps(nl: &Netlist, out: &mut Vec<Diagnostic>) {
     }
 }
 
+// Manual §§11.5 and 11.5.3.2. Scan accepted electrical samples before public
+// projection so .save never changes the warning result. Inspect explicit
+// ratings only; the nominal ratings are effectively infinite.
+pub(crate) fn hicum_soa(
+    nl: &Netlist,
+    results: &sansho_output::SimResults,
+    maxwarns: usize,
+    out: &mut Vec<Diagnostic>,
+) {
+    use sansho_output::AnalysisKind::{Dc, Op, Tran};
+    let cards: std::collections::HashMap<_, _> = nl
+        .models
+        .iter()
+        .filter(|m| m.is_hicum())
+        .map(|m| (m.name.as_str(), sansho_devices::ModelParams::new(&m.params)))
+        .collect();
+    for dev in &nl.elements {
+        let ElementKind::Bjt { c, b, e, model, .. } = &dev.kind else {
+            continue;
+        };
+        let Some(card) = cards.get(model.as_str()) else {
+            continue;
+        };
+        for (key, p, n) in [
+            ("vbe_max", b.as_str(), e.as_str()),
+            ("vbc_max", b, c),
+            ("vce_max", c, e),
+        ] {
+            let Some(limit) = card.opt(&[key]) else {
+                continue;
+            };
+            let mut remaining = maxwarns;
+            for a in results
+                .analyses
+                .iter()
+                .filter(|a| matches!(a.kind, Op | Dc | Tran))
+            {
+                let vp = a.real(&format!("v({p})"));
+                let vn = a.real(&format!("v({n})"));
+                for i in 0..a.len() {
+                    if remaining == 0 {
+                        break;
+                    }
+                    let drop = vp.map_or(0., |v| v[i]) - vn.map_or(0., |v| v[i]);
+                    if drop.abs() > limit {
+                        out.push(Diagnostic::warning("W-HICUM-SOA",format!("{}: V({p},{n}) = {drop:e} V exceeds {key} = {limit:e} V in {:?} sample {i}",dev.name,a.kind)).with_span(dev.span));
+                        remaining -= 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::edit_distance;

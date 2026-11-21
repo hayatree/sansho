@@ -559,6 +559,9 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
             }
         }
     }
+    if opts.soa {
+        lint::hicum_soa(nl, &results, opts.maxwarns, &mut warnings);
+    }
     measure::print_tables(nl, &mut results, &mut warnings);
     results.measures = measure::evaluate(&nl.measures, &results);
     for m in &results.measures {

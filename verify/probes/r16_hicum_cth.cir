@@ -1,0 +1,11 @@
+Thermal pole after base turn-off
+* Provenance: original Sansho R16 circuit.
+* sweep: cth 5n 20n 60n
+.param probe=5n
+Vc c 0 1.5
+Vb b 0 pulse(.58 .78 1u 100n 100n 20u 50u)
+Q1 c b 0 0 tj dev
+.model dev npn(level=8 flsh=2 rth=200 cth={probe})
+.tran .25u 45u
+.save v(tj) i(Vc) i(Vb)
+.end

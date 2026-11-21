@@ -1145,8 +1145,10 @@ pub(crate) fn tran(
     let mut step_limits = Vec::new();
 
     let mut bps: Vec<f64> = Vec::new();
+    let mut exponential_limits = Vec::new();
     for g in &ckt.groups {
         g.breakpoints(&tp, &mut bps);
+        g.exponential_step_limits(opts.reltol, &mut exponential_limits);
         g.step_limits(&tp, &mut step_limits);
     }
     for history in &mut lines {
@@ -1391,6 +1393,21 @@ pub(crate) fn tran(
                     Confidence::Medium,
                 ));
             }
+            continue;
+        }
+        // A memoryless exponential can change sharply while satisfying every charge LTE.
+        // For a linear voltage ramp the relative midpoint error is cosh(ΔV/(2 nVT))−1.
+        let voltage_ratio = exponential_limits
+            .iter()
+            .fold(1_f64, |ratio, &(p, n, span)| {
+                let normalized = |state: &[f64]| {
+                    (sansho_devices::volt(state, p) - sansho_devices::volt(state, n)) / span
+                };
+                let (old, new) = (normalized(&x), normalized(&x_new));
+                ratio.max((new.max(0.) - old.max(0.)).abs())
+            });
+        if voltage_ratio > 1. + f64::EPSILON.sqrt() && h > hmin && proposed_h > hmin {
+            h = (h / voltage_ratio).max(hmin);
             continue;
         }
         let crossing = crossing_groups

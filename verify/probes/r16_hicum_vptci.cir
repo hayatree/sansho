@@ -1,0 +1,11 @@
+Reverse collector depletion at reach-through
+* Provenance: original Sansho R16 circuit.
+* sweep: vptci .3 1 10
+.param probe=.3
+Vc c 0 2.4
+Vb b 0 .76 ac 1
+Q1 c b 0 0 dev
+.model dev npn(level=8 cjci0=1p vptci={probe})
+.ac dec 4 1meg 100G
+.save i(Vc) i(Vb)
+.end

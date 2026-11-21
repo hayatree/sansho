@@ -1,0 +1,11 @@
+BE overlap partition across the base contact
+* Provenance: original Sansho R16 circuit.
+* sweep: fbepar 0 .5 1
+.param probe=0
+Vc c 0 1
+Vb b 0 .76 ac 1
+Q1 c b 0 0 dev
+.model dev npn(level=8 fbepar={probe} cbepar=2p rbx=80)
+.ac dec 4 1meg 100G
+.save i(Vc) i(Vb)
+.end

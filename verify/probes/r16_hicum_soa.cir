@@ -1,0 +1,12 @@
+Collector-substrate rating named in the manual and absent from showmod
+* Provenance: original Sansho R16 circuit.
+* sweep: soa .7 1.0 1.5
+.param probe=.7
+Vc c 0 1
+Vb b 0 .72
+.option warn=1 maxwarns=1
+Q1 c b 0 0 dev
+.model dev npn(level=8 vcs_max={probe})
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

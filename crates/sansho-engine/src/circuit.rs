@@ -12,6 +12,7 @@ use sansho_devices::bjt::BjtModel;
 use sansho_devices::bsim3::Bsim3s;
 use sansho_devices::bsim4::{Binding, Bsim4s, PreparedModel};
 use sansho_devices::diode::DiodeModel;
+use sansho_devices::hicum::{Hicums, Model as HicumModel};
 use sansho_devices::mos1::{Mos1Geometry, Mos1Model};
 use sansho_devices::vbic::{Model as VbicModel, Vbics};
 use sansho_devices::{
@@ -592,22 +593,24 @@ pub(crate) fn compile_cached(
     let mut node_names: Vec<String> = Vec::new();
     let mut touches = Vec::<usize>::new();
     let digital_ports = crate::digital::Ports::check(nl)?;
-    let vbic_thermal: HashMap<_, _> = nl
+    let bipolar_thermal: HashMap<_, _> = nl
         .models
         .iter()
-        .filter(|m| m.is_vbic())
+        .filter(|m| m.is_vbic() || m.is_hicum())
         .map(|m| {
             let p = ModelParams::new(&m.params);
-            (
-                m.name.as_str(),
-                p.get("selft", 0.) == 1. && p.get("rth", 0.) > 0.,
-            )
+            let enabled = if m.is_hicum() {
+                matches!(p.get("flsh", 0.), 1. | 2.)
+            } else {
+                p.get("selft", 0.) == 1.
+            };
+            (m.name.as_str(), enabled && p.get("rth", 0.) > 0.)
         })
         .collect();
     let mut grounded = digital_ports.grounded_dac;
     for e in &nl.elements {
         if let ElementKind::Bjt { model, s: None, .. } = &e.kind {
-            grounded |= vbic_thermal.contains_key(model.as_str());
+            grounded |= bipolar_thermal.contains_key(model.as_str());
         }
         for n in e.kind.nodes() {
             if digital_ports.digital.contains_key(n) {
@@ -796,7 +799,7 @@ pub(crate) fn compile_cached(
                 dc.union(p, n);
                 dc.union(n, b);
                 if let ElementKind::Bjt { s, tj, model, .. } = &e.kind
-                    && let Some(&heated) = vbic_thermal.get(model.as_str())
+                    && let Some(&heated) = bipolar_thermal.get(model.as_str())
                 {
                     dc.union(n, g_id(s.as_deref().and_then(&node)));
                     if heated && let Some(i) = tj.as_deref().and_then(&node) {
@@ -1412,7 +1415,12 @@ fn native_groups<'a>(
     let mut h_src = Chunked::<Ccvs>::new(CHUNK_LINEAR);
     let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
     let mut vbics = Chunked::<Vbics>::new(CHUNK_NONLINEAR);
-    let mut vbic_models = HashMap::new();
+    enum BipolarModel {
+        Vbic(Arc<VbicModel>),
+        Hicum(Arc<HicumModel>),
+    }
+    let mut hicums = Chunked::<Hicums>::new(CHUNK_NONLINEAR);
+    let mut bipolar_models = HashMap::new();
     let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
     let mut classic_mos = [1, 2, 3, 6, 9, 4, 5].map(|_| Chunked::<Mos1s>::new(CHUNK_NONLINEAR));
     let mut bsim3 = Chunked::<Bsim3s>::new(CHUNK_NONLINEAR);
@@ -2106,14 +2114,23 @@ fn native_groups<'a>(
                 off,
             } => {
                 let inst = ModelParams::new(params);
-                if let Some(card) = model_cache.card(model).filter(|c| c.is_vbic()) {
-                    let bound = vbic_models.entry(model.as_str()).or_insert_with(|| {
+                if let Some(card) = model_cache
+                    .card(model)
+                    .filter(|c| c.is_vbic() || c.is_hicum())
+                {
+                    let bound = bipolar_models.entry(model.as_str()).or_insert_with(|| {
                         let p = ModelParams::new(&card.params);
-                        let m =
-                            VbicModel::from_params(&p, if card.kind == "pnp" { -1. } else { 1. });
+                        let sign = if card.kind == "pnp" { -1. } else { 1. };
+                        let m = if card.is_hicum() {
+                            HicumModel::from_params(&p, sign, card.version.as_deref())
+                                .map(|v| BipolarModel::Hicum(Arc::new(v)))
+                        } else {
+                            VbicModel::from_params(&p, sign)
+                                .map(|v| BipolarModel::Vbic(Arc::new(v)))
+                        };
                         ModelCache::warn_ignored(card, &p.unused(), diags);
                         match m {
-                            Ok(m) => Some(Arc::new(m)),
+                            Ok(m) => Some(m),
                             Err(d) => {
                                 errors.push(d.with_span(card.span));
                                 None
@@ -2121,7 +2138,17 @@ fn native_groups<'a>(
                         }
                     });
                     let Some(m) = bound else { continue };
-                    let t = match vbic_temperature(&inst, opts, m.tnom) {
+                    let temperature = match m {
+                        BipolarModel::Hicum(_) if inst.opt(&["dtemp"]).is_some() => {
+                            Err(Diagnostic::error(
+                                "E-ELAB-PARAM",
+                                "HICUM/L2 does not accept instance DTEMP",
+                            ))
+                        }
+                        BipolarModel::Hicum(m) => instance_temperature(&inst, opts, m.tnom),
+                        BipolarModel::Vbic(m) => vbic_temperature(&inst, opts, m.tnom),
+                    };
+                    let t = match temperature {
                         Ok(t) => t,
                         Err(d) => {
                             errors.push(d.with_span(e.span));
@@ -2135,23 +2162,40 @@ fn native_groups<'a>(
                         errors.push(
                             Diagnostic::error(
                                 "E-ELAB-PARAM",
-                                format!("{}: VBIC AREA and M must be positive and finite", e.name),
+                                format!(
+                                    "{}: bipolar AREA and M must be positive and finite",
+                                    e.name
+                                ),
                             )
                             .with_span(e.span),
                         );
                         continue;
                     }
                     warn_instance(e, &inst, diags);
-                    vbics.cur().push(
-                        &e.name,
-                        [node(c), node(b), node(em), s.as_deref().and_then(&node)],
-                        tj.as_deref().map(&node),
-                        m.clone(),
-                        t,
-                        area,
-                        copies,
-                        *off,
-                    );
+                    let pins = [node(c), node(b), node(em), s.as_deref().and_then(&node)];
+                    let thermal = tj.as_deref().map(&node);
+                    match m {
+                        BipolarModel::Vbic(m) => vbics.cur().push(
+                            &e.name,
+                            pins,
+                            thermal,
+                            m.clone(),
+                            t,
+                            area,
+                            copies,
+                            *off,
+                        ),
+                        BipolarModel::Hicum(m) => hicums.cur().push(
+                            &e.name,
+                            pins,
+                            thermal,
+                            m.clone(),
+                            t,
+                            area,
+                            copies,
+                            *off,
+                        ),
+                    }
                     nonlinear_count += 1;
                     continue;
                 }
@@ -2372,6 +2416,7 @@ fn native_groups<'a>(
     h_src.into_groups(&mut groups);
     diodes.into_groups(&mut groups);
     vbics.into_groups(&mut groups);
+    hicums.into_groups(&mut groups);
     bjts.into_groups(&mut groups);
     for devices in classic_mos {
         devices.into_groups(&mut groups);

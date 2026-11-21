@@ -1,0 +1,11 @@
+GICCR transport numerator at fixed equilibrium hole charge
+* Provenance: original Sansho R16 circuit.
+* sweep: c10 1e-30 2e-30 8e-30
+.param probe=1e-30
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 c10={probe})
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

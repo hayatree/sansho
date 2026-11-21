@@ -62,7 +62,7 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
         kind,
         "mos1" | "mos2" | "mos3" | "mos6" | "mos9" | "bsim1" | "bsim2" | "bsim3" | "bsim4"
     );
-    let bipolar = matches!(kind, "bjt" | "vbic");
+    let bipolar = matches!(kind, "bjt" | "vbic" | "hicum");
     let bsim = matches!(kind, "bsim1" | "bsim2" | "bsim3" | "bsim4");
     Some(match p {
         "i" if matches!(
@@ -89,11 +89,22 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
         {
             Power
         }
-        "p" if kind == "vbic" => Power,
-        "vbe" | "vbc" if kind == "vbic" => Voltage,
+        "p" if matches!(kind, "vbic" | "hicum") => Power,
+        "vbe" | "vbc" if matches!(kind, "vbic" | "hicum") => Voltage,
+        "iavl" | "ick" | "ibei" | "ibci" if kind == "hicum" => Current,
+        "tf" if kind == "hicum" => Time,
+        "gmi" if kind == "hicum" => Admittance,
+        "vbiei" | "vbici" | "vciei" | "vce" | "vsc" | "vbbp" | "vbpbi" if kind == "hicum" => {
+            Voltage
+        }
         "ic" | "ie" if bipolar => Current,
         "ig" if mos || matches!(kind, "jfet" | "jfet2" | "mesfet" | "vdmos") => Current,
-        "is" if mos || matches!(kind, "vbic" | "bjt" | "jfet" | "jfet2" | "mesfet" | "vdmos") => {
+        "is" if mos
+            || matches!(
+                kind,
+                "vbic" | "hicum" | "bjt" | "jfet" | "jfet2" | "mesfet" | "vdmos"
+            ) =>
+        {
             Current
         }
         "ib" if mos || bipolar => Current,
@@ -104,7 +115,12 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
         "ibd" | "ibs" if mos => Current,
         "isub" if matches!(kind, "bsim3" | "bsim4") => Current,
         "igs" | "igd" | "igb" | "igcd" | "igcs" if kind == "bsim4" => Current,
-        "gm" if mos || matches!(kind, "vbic" | "bjt" | "jfet" | "jfet2" | "mesfet" | "vdmos") => {
+        "gm" if mos
+            || matches!(
+                kind,
+                "vbic" | "hicum" | "bjt" | "jfet" | "jfet2" | "mesfet" | "vdmos"
+            ) =>
+        {
             Admittance
         }
         "gds" if mos || matches!(kind, "jfet" | "jfet2" | "mesfet" | "vdmos") => Admittance,

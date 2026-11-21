@@ -1,0 +1,11 @@
+Capacitance through the substrate punch-through voltage at fixed temperature
+* Provenance: original Sansho R16b black-box experiment.
+* sweep: punch -.55 -.4 -.25
+.param probe=-.4
+Vc c 0 0 ac 1
+Vs s 0 {probe}
+Q1 c 0 0 s n
+.model n npn(level=8 c10=0 ibeis=0 ibcis=0 cscp0=1p vdsp=.6 zsp=.5 vptsp=1)
+.ac lin 1 1meg 1meg
+.save i(Vs) i(Vc)
+.end

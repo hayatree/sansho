@@ -1,0 +1,11 @@
+Reverse storage under forward collector junction bias
+* Provenance: original Sansho R16 circuit.
+* sweep: tr 0 20p 100p
+.param probe=0
+Vc c 0 .05
+Vb b 0 .76 ac 1
+Q1 c b 0 0 dev
+.model dev npn(level=8 tr={probe})
+.ac dec 4 1meg 100G
+.save i(Vc) i(Vb)
+.end

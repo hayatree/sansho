@@ -1,0 +1,11 @@
+Differential forward transit time with excess emitter storage
+* Provenance: original Sansho R16b black-box experiment.
+* sweep: charge_delay 0 5p 20p
+.param probe=0
+Vb b 0 .76 ac 1
+Vc c 0 1
+Q1 c b 0 0 n
+.model n npn(level=8 t0=8p tef0={probe} flnqs=1 alit=1 alqf=0 cjci0=0 cjcx0=0)
+.ac dec 8 10meg 100G
+.save i(Vc) i(Vb)
+.end

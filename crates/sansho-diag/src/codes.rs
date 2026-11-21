@@ -395,6 +395,7 @@ pub const CODES: &[CodeInfo] = &[
         "An instance parameter is out of range (e.g. a non-positive channel length).",
         &[
             "Fix the instance parameter.",
+            "For HICUM/L2, check the version, AREA, M, QP0, junction parameters and FLSH/FLNQS/TUNODE selectors. [Parameter domains](hicum.md)",
             "For VBIC, check AREA, M, nominal temperature, positive emission coefficients and built-in potentials, nonnegative resistances, the WBE and WSP partitions, and the SELFT and QBM selectors.",
             "BSIM1/2 require positive effective dimensions, TOX in micrometres, PHI and low-field mobility. For JFET2, check the junction potential, exponents, geometry, lead impedances and relaxation times.",
         ],
@@ -444,6 +445,14 @@ pub const CODES: &[CodeInfo] = &[
         "BSIM4 parameter check",
         "A selected model or instance falls outside the recommended BSIM4 parameter range.",
         &["Inspect the named parameter, its units and the effective geometry."],
+    ),
+    w(
+        "W-HICUM-SOA",
+        "HICUM terminal voltage exceeds its rated limit",
+        "With .option warn=1, an accepted OP, DC or transient sample exceeded a level-eight bipolar terminal voltage limit.",
+        &[
+            "Inspect the device, electrode pair, measured voltage and rating. The maxwarns option limits messages per device and rating.",
+        ],
     ),
     w(
         "W-MODEL-IGNORED",
@@ -541,6 +550,7 @@ pub const CODES: &[CodeInfo] = &[
             "Check the named source, output probe, transient duration and model parameters.",
             "For .sp, check port numbering, finite port conversions, and two-port forward gain when requesting noise. Invalid Z0 or a nonintegral port number is a parse error.",
             "For .disto, the diagnostic names the device or bipolar extension whose higher derivatives are unavailable. Analytic support covers the diode, MOS1 and the Gummel–Poon subset in the analysis notes.",
+            "HICUM/L2 requires a finite positive junction temperature. Its DISTO derivatives are unavailable.",
             "VBIC reports the instance when junction temperature becomes nonpositive or nonfinite. DISTO reports unavailable higher derivatives for the native level-four device.",
             "A self-heated VDMOS requires finite positive absolute junction temperature. Invalid RTHJC, RTHCA, CTHJ and channel parameters yield E-ELAB-PARAM.",
         ],

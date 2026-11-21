@@ -1,0 +1,12 @@
+Capacitance at fixed reverse bias across ambient temperature
+* Provenance: original Sansho R16 circuit.
+* sweep: junction_temp -30 27 110
+.param probe=-30
+Vc c 0 1
+Vb b 0 .76 ac 1
+.options temp={probe}
+Q1 c b 0 0 dev
+.model dev npn(level=8 c10=0 ibeis=0 ibcis=0 cjci0=2p vdci=.75 zci=.4)
+.ac dec 4 1meg 100G
+.save i(Vc) i(Vb)
+.end

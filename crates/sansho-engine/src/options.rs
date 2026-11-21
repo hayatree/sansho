@@ -55,6 +55,10 @@ pub struct SimOptions {
     pub maxord: usize,
     /// Include available terminal currents in exported plots.
     pub savecurrents: bool,
+    /// Enable level-eight bipolar safe operating area checks.
+    pub soa: bool,
+    /// Maximum warnings per device and voltage limit.
+    pub maxwarns: usize,
     /// Seed for independent stochastic transient sources.
     pub seed: u64,
     /// Maximum number of gmin-stepping solves before giving up.
@@ -99,6 +103,8 @@ impl Default for SimOptions {
             method: Method::Trap,
             maxord: 2,
             savecurrents: false,
+            soa: false,
+            maxwarns: 5,
             seed: 1,
             gmin_steps: 100,
             src_steps: 100,
@@ -208,6 +214,14 @@ impl SimOptions {
                 ("itl5", Some(v)) if v >= 0. && v.fract() == 0. => true,
                 ("seed", Some(v)) if (0. ..=9007199254740991.).contains(&v) && v.fract() == 0. => {
                     o.seed = v as u64;
+                    true
+                }
+                ("warn", Some(v @ (0. | 1.))) => {
+                    o.soa = v == 1.;
+                    true
+                }
+                ("maxwarns", Some(v)) if v >= 0. && v.fract() == 0. => {
+                    o.maxwarns = v as usize;
                     true
                 }
                 ("savecurrents", None) => {

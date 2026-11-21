@@ -1482,7 +1482,10 @@ impl Parser {
             }
             let card = |t: &Token| self.model_names.get(&t.lower()).map(|&i| &self.models[i]);
             let is_model = |t: &Token| card(t).is_some();
-            let five = tail.get(2).and_then(card).is_some_and(ModelCard::is_vbic);
+            let five = tail
+                .get(2)
+                .and_then(card)
+                .is_some_and(ModelCard::thermal_bipolar);
             let thermal = five.then(|| node_name(&tail[1]));
             let (sub, model, rest) = if five {
                 (Some(node_name(&tail[0])), &tail[2], &tail[3..])
@@ -2045,7 +2048,7 @@ impl Parser {
                 continue;
             }
             if k == "version"
-                && matches!(kind.as_str(), "nmos" | "pmos")
+                && matches!(kind.as_str(), "nmos" | "pmos" | "npn" | "pnp")
                 && dotted_version(&vt.text)
             {
                 version = Some(vt.text.clone());

@@ -1,0 +1,10 @@
+Scaled PNP Gummel currents including peripheral recombination
+* sansho-verify: known-difference 44.2 gives -53.89 uA on the isolated reverse-biased PNP BC sense source versus -0.4001 pA on the NPN mirror. See docs/hicum.md.
+* Provenance: original Sansho R16 circuit.
+Vc c 0 -1
+Vb b 0 -.72
+Q1 c b 0 dev area=1.5 m=2
+.model dev pnp(level=8 ibeps=2e-18 ireps=1e-15 t0=2p re=2)
+.dc Vb -.4 -.88 -.02
+.save i(Vc) i(Vb)
+.end

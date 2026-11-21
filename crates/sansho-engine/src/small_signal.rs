@@ -198,7 +198,7 @@ pub(super) fn noise(
     let device_indices: Vec<_> = generators.iter().map(|g| by_device[&g.device]).collect();
     let mut columns = vec![Vec::with_capacity(freq.len()); 2 + by_device.len()];
     let mut totals = vec![[0.; 2]; generators.len()];
-    let mut previous = totals.clone();
+    let mut previous = vec![0.; generators.len()];
     let mut lu = SerialLu::new(&c.pattern).map_err(solver)?;
     let delayed = DelayedStamp::collect(c, &ws);
     let mut matrix = vec![c64::default(); c.nnz()];
@@ -233,11 +233,12 @@ pub(super) fn noise(
             }
             powers[device_indices[j]] += psd;
             if k > 0 {
-                for (i, &value) in pair.iter().enumerate() {
-                    totals[j][i] += area(freq[k - 1], f, previous[j][i], value);
-                }
+                let output_power = area(freq[k - 1], f, previous[j], psd);
+                totals[j][0] += output_power;
+                // 44.2 refers each integrated interval through its upper endpoint gain.
+                totals[j][1] += output_power / gain;
             }
-            previous[j] = pair;
+            previous[j] = psd;
         }
         let sum = powers.iter().sum::<f64>();
         columns[0].push(sum.sqrt());

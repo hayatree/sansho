@@ -1,0 +1,14 @@
+Compare PNP source current with an independent base-resistor voltage drop
+* Provenance: original Sansho R16b black-box experiment.
+* sweep: pnp_load 1 100 1k
+* known-difference: 1 100 | v(b) i(vdrive) i(vc)
+.param probe=100
+Vdrive drive 0 -.4
+Rbase drive b {probe}
+Vc c 0 -1
+Q1 c b 0 0 p
+.model p pnp(level=8)
+.op
+.dc Vdrive -.4 -.88 -.02
+.save v(drive) v(b) i(Vdrive) i(Vc)
+.end

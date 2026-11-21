@@ -128,8 +128,9 @@ At each frequency the engine factors the complex AC matrix and solves its transp
 once for the output probe. The projection of each source onto that solution gives
 its complex output transfer. Independent contributions add in power. Within one
 generator the signed coefficients of all current, voltage and charge equations
-combine coherently. Each generator's output and input power are integrated over the
-actual frequency grid by fitting a power law between adjacent positive samples.
+combine coherently. The engine integrates each generator’s output power by fitting a power law
+between adjacent positive samples. It refers each interval to the input through
+the squared gain magnitude at the upper endpoint.
 Intervals adjoining a zero use a trapezoid. Square roots give `onoise_total`
 and `inoise_total` in V or A RMS. A single frequency has zero bandwidth.
 

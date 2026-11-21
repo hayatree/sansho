@@ -5,7 +5,7 @@ Each original deck runs at its printed setting with a single analysis card. From
 The R13c sweep lines name the parameter before its settings. The driver
 substitutes each numeric setting into `.param probe=`. Older decks list
 the settings alone. For decks ending in a control-block `quit`, the log
-contains the requested printed records.
+contains the requested printed records. Each setting has a 300-second timeout. Set `SANSHO_PROBE_TIMEOUT` to a positive integer in seconds to override it. On timeout the driver logs `PROBE-TIMEOUT`, kills the process group, forcibly removes the named container when using the repository wrapper, and continues. The final summary lists failed settings and the sweep exits with failure.
 
 ```sh
 verify/probes/sweep.sh
@@ -698,3 +698,69 @@ The ten templates contain 34 settings. R15c passes all 32 completed references, 
 | [XRB](r15b_vbic_xrb.cir) | Isolates access, intrinsic and pocket resistance exponents on a single temperature sweep. |
 | [External heating](r15b_vbic_external_heat.cir) | Provides a DC path outside the fifth pin to measure power injection at zero RTH. |
 | [Zero HRCF](r15b_vbic_hrcf_zero.cir) | Measures the zero-selector branch at finite VO with strong reverse current. |
+
+## R16 native HICUM/L2
+
+Each `r16_hicum_*.cir` template varies one setting through its `* sweep:` line and `.param probe=` assignment. DC and AC probes save source currents so the oracle comparison uses external measurements. The thermal probes also record junction rise. The noise probes use a current-controlled voltage source to read the driving-source current. R16 uses the supplied 44.2 parameter listing for the nominal card. All 251 settings from 85 templates completed on Sansho. Five sweeps gave identical waveforms across their settings. Three exercise ignored card fields (FLCOMP, FLCONO, ZETACX), one changes an SOA warning threshold, and one varies RTH with the thermal pin omitted. The R16b results below use the subsequently supplied 44.2 waveforms.
+
+Run the native matrix from the repository root. Each setting must return a nonempty, finite raw plot. Temporary per-setting decks and raws are removed after the run.
+
+```sh
+cargo build --offline --release -p sansho-cli --features jit
+python3 verify/compare_vbic.py --native-only --pattern 'r16_hicum_*'
+```
+
+The maintainer collected the follow-up oracle plots with the sweep script. The comparison driver replays the matching expanded circuit, scores each real or complex signal, interpolates transient samples onto reference times, and reports missing and partial references separately from full passes.
+
+```sh
+NGSPICE=tools/ngspice/ngspice.sh verify/probes/sweep.sh verify/probes/r16_hicum_*.cir
+python3 verify/compare_vbic.py --pattern 'r16_hicum_*'
+```
+
+| Measurement | Probe stems after `r16_hicum_` |
+|---|---|
+| Low-injection scale, common hole charge, heterojunction weighting and high-drive compression | c10, qp0, ich, mcf, depleted_width, hjei, hjci, ahjei, hf0, hfe, hfc |
+| Internal, peripheral and external diodes, reverse emitter field, avalanche | recombination, peripheral, ibcx, tunode, abet, qavl, kavl, alfav |
+| Base modulation, crowding, parallel base charge, leads and electrical scaling | rbi0, fcrbi, fqi, fdqr0, lead, area, m, gmin |
+| Lateral substrate injection, SC diode, substrate storage and terminal impedance | itss, msf, sub_reverse, tsf, csu, vptsp |
+| Forward capacitance ceiling, collector punch-through and overlap partition | ajei, forward_bc_cap, vptci, fbcpar, fbepar |
+| Bias-dependent transit, emitter charge, collector storage and lateral spreading | tbvl, dt0h, tef0, thcs, fthc, latb, tbhrec, tr |
+| Critical current, low-field smoothing, reach-through and barrier suppression | vlim, vces, aick, delck, vpt, barrier, hot_knee |
+| Time-domain NQS response and separate current/charge phase shifts | flnqs, alit, alqf |
+| Heat sources, thermal port activation, time constant and area dependence | flsh, cth, thermal_omitted, external_heat, thermal_area, alrth, thermal_exponent |
+| Temperature precedence, gap law, gain, access resistance, transit time and unresolved card controls | temp, gap, region_gap, junction_temp, f1vg, alb, zetare, alt0, zetacx, flcomp |
+| White and flicker spectra, placement, equilibrium and reverse injection, geometry and copies | shot, substrate_shot, transport_shot, avalanche_noise, thermal_noise, kf, cfbe, kfre, noise_area, noise_m, flcono |
+| Acceptance of the collector-substrate SOA rating and warning threshold | soa |
+
+All seven acceptance decks now have 44.2 references. [R16 equations and evidence](../../docs/hicum.md)
+
+## R16b black-box fit
+
+The original cache comparison passed 1/7 acceptance decks and 68/251 probe settings. Before the follow-up oracle runs, R16b passed **6/7 acceptance decks** and **241 probe settings**. Of the other settings, three had completed matching reference decks (VPTSP=1 and the two nonzero avalanche-noise gains), six cached decks predated the template repair, and one new QAVL setting lacked a reference. All 251 revised R16 settings and the 36 follow-up settings run on Sansho. The cached PNP acceptance current follows a reverse-BC tangent across the sweep. The PNP probes below distinguish that observation from a general polarity convention. [Equations and measured limits](../../docs/hicum.md)
+
+The original `temp` logs reject instance DTEMP. The revised circuit varies TEMP alone. All three original `kavl` settings and `qavl=0` have zero completed rows and an operating-point failure at 0.7 V. The repaired KAVL sweep specifies a finite 10 fC avalanche onset charge and 10 fF collector capacitance. QAVL now uses 3, 10 and 30 fC. All nine repaired KAVL, QAVL and TEMP settings now have passing 44.2 comparisons. The comparison driver reports stale expanded circuits independently of waveform failures.
+
+| R16b probe | Measurement |
+|---|---|
+| `r16b_pnp_pins` | Independently read currents in three-, four- and five-terminal PNPs at the same biases. |
+| `r16b_pnp_bc` | Isolate the BC diode, including a zero-injection control and mirrored NPN drive. |
+| `r16b_pnp_transport` | Disable BE and BC diodes and vary emitter resistance to distinguish reverse transport from junction current. |
+| `r16b_pnp_load` | A passive base resistor gives an independent current from two saved voltages. Compare it with the source current at OP and during a sweep. |
+| `r16b_gm_tangent` | Compare 1 Hz collector admittance with the centered 2 µV DC difference from two independently biased copies. |
+| `r16b_sub_temperature` | Measure the lateral saturation derivative away from nominal temperature at three MSF settings. |
+| `r16b_charge_delay` | Isolate differential transit time by varying TEF0 at fixed low-injection time. |
+| `r16b_rbi_partition` | Reconstruct the internal base drop as a function of drive at three FDQR0 settings. |
+| `r16b_heterojunction` | Test the depletion-width mapping independently of AHJEI by changing RHJEI. |
+| `r16b_punch` | Measure both sides and the center of the substrate punch-through join. |
+| `r16b_knee_temperature` | Save Ick and Tf alongside collector current to separate velocity limiting and emitter storage. |
+| `r16b_avalanche_gain` | Isolate the avalanche part of base admittance by subtracting a matched zero-FAVL device. |
+
+## R16c cached results
+
+The combined comparison passes 276 of 287 settings. Ten completed PNP settings show the polarity difference documented with the isolated BC mirror. Their templates list the affected settings and signals on a `* known-difference:` line. Independent signals and the zero-injection control retain their ordinary tolerances. The 1 kΩ load is an oracle non-termination with an incomplete raw header. The driver still checks the native operating point and sweep for this setting. The seven acceptance decks give six passes and one known difference. [Model equations and quantitative PNP evidence](../../docs/hicum.md)
+
+```sh
+cargo build --offline --release -p sansho-cli --features jit
+python3 verify/compare_vbic.py --pattern 'r16*'
+cargo run --offline --release -q -p sansho-verify --features jit -- --cached verify/decks/r16_*.cir
+```

@@ -1,0 +1,12 @@
+Isolate forward and reverse transport with finite emitter resistance
+* Provenance: original Sansho R16b black-box experiment.
+* sweep: pnp_transport 0 1 2
+* known-difference: 0 1 2 | i(vc)
+.param probe=0
+Vc c 0 -1
+Vb b 0 -.72
+Qp c b 0 0 p
+.model p pnp(level=8 ibeis=0 ibcis=0 re={probe})
+.dc Vb -.4 -.88 -.01
+.save i(Vc) i(Vb)
+.end

@@ -1,0 +1,11 @@
+Collector storage contribution to the hole charge
+* Provenance: original Sansho R16 circuit.
+* sweep: hfc 0 .5 2
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 hfc={probe} thcs=80p vlim=.15)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

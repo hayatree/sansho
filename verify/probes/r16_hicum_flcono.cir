@@ -1,0 +1,12 @@
+Noise correlation selector on a finite base impedance
+* Provenance: original Sansho R16 circuit.
+* sweep: flcono 0 1
+.param probe=0
+Vc c 0 1
+Vb b 0 .76 ac 1
+Hread out 0 Vb 1k
+Rload out 0 1k
+Q1 c b 0 0 dev
+.model dev npn(level=8 flcono={probe} rbi0=100 t0=20p)
+.noise v(out) Vb dec 4 1 100meg
+.end
