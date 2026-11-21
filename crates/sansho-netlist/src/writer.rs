@@ -360,6 +360,13 @@ pub fn write_model(m: &crate::ModelCard) -> String {
 
 /// Write a model listing using the caller's numeric display precision.
 pub fn write_model_with(m: &crate::ModelCard, num: impl Fn(f64) -> String) -> String {
+    if matches!(m.kind.as_str(), "numd" | "nbjt") {
+        let mut line = format!(".model {} {} level=1", m.name, m.kind);
+        for card in &m.cider {
+            let _ = write!(line, "\n+ {}", card.join(" "));
+        }
+        return line;
+    }
     let mut l = format!(".model {} {} (", m.name, m.kind);
     let ps: Vec<String> = m
         .params

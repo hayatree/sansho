@@ -1,0 +1,40 @@
+Dielectric displacement of a neutral silicon slab
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: permittivity 8.854e-13 1.036e-12 1.2e-12
+* Use Im(Y)/omega = epsilon A/L at each frequency; no depletion approximation.
+.param probe=8.854e-13
+Vdrive drive 0 0 ac 1
+Vref drive node_ref 0
+Dref node_ref 0 mref
+.model mref numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform n.type conc=1e13
++ doping uniform p.type conc=1e13
++ mobility material=1 electron majority mumax=1000
++ mobility material=1 electron minority mumax=1000
++ mobility material=1 hole majority mumax=500
++ mobility material=1 hole minority mumax=500
++ end
+Vtest drive node_test 0
+Dtest node_test 0 mtest
+.model mtest numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon permittivity={probe}
++ doping uniform n.type conc=1e13
++ doping uniform p.type conc=1e13
++ mobility material=1 electron majority mumax=1000
++ mobility material=1 electron minority mumax=1000
++ mobility material=1 hole majority mumax=500
++ mobility material=1 hole minority mumax=500
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.ac dec 2 10k 1gig
+.save i(vref) i(vtest)
+.end

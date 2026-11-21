@@ -1,0 +1,23 @@
+NBJT length ac dependence
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: length 0.175 0.35 0.7 1.4
+* Hold the physical profile and emitter area fixed; compare both base and collector currents.
+.param probe=0.175
+Vc c 0 0.65
+Vb b 0 dc 0.48 ac 1
+Qvertical c b 0 crystal
+.model crystal nbjt level=1
++ options defa=1e-10 bipolar base.depth=1.2 base.length={probe}
++ x.mesh location=0 number=1
++ x.mesh location=2.4 number=62
++ domain number=1 material=1
++ material number=1 silicon tn=2n tp=3n
++ doping uniform n.type conc=1e+16
++ doping uniform p.type conc=8e16 x.low=1.0 x.high=1.4
++ doping uniform n.type conc=2e18 x.low=1.4
++ models srh concmob
++ end
+.options itl1=150 itl2=100
+.ac dec 5 1k 10gig
+.save i(vb) i(vc)
+.end

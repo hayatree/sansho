@@ -1,0 +1,32 @@
+Absolute node number and incremental mesh width
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: nodes 31 32 61 62 121 122
+* Compare loc=n with width=n-1 on adjacent settings, and compare the odd/even junction positions.
+.param probe=31
+Vdrive drive 0 -0.2 ac 1
+Vloc drive node_loc 0
+Dloc node_loc 0 mloc
+.model mloc numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n={probe}
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc=1e16 x.high=1.2
++ doping uniform n.type conc=1e16 x.low=1.2
++ end
+Vwidth drive node_width 0
+Dwidth node_width 0 mwidth
+.model mwidth numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh width=2.4 n={probe}
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc=1e16 x.high=1.2
++ doping uniform n.type conc=1e16 x.low=1.2
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.ac dec 2 10k 1gig
+.save i(vloc) i(vwidth)
+.end

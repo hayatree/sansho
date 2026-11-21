@@ -76,7 +76,13 @@ for deck in "$@"; do
     for value in "${values[@]}"; do
         base="$out/${stem}_$value"
         failed=0
-        sed -e "s/^\.param probe=.*/.param probe=$value/" \
+        # CIDER continuation cards have their own input grammar. Give both
+        # simulators the same literal values, including integer mesh indices.
+        literal=()
+        if [[ $stem == r20b_* ]]; then
+            literal=(-e "s/{probe}/$value/g")
+        fi
+        sed "${literal[@]}" -e "s/^\.param probe=.*/.param probe=$value/" \
             -e "s/^set numdgt=.*/set numdgt=$value/" \
             -e "s/^\.temp .*/.temp $value/" "$deck" > "$base.cir"
         if [[ $stem == r14_control_numdgt ]]; then

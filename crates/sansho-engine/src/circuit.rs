@@ -1527,6 +1527,67 @@ fn native_groups<'a>(
         }
     }
     for e in elements {
+        if matches!(e.kind, ElementKind::Diode { .. } | ElementKind::Bjt { .. })
+            && let Some(card) = e.kind.model().and_then(|name| model_cache.card(name))
+            && matches!(card.kind.as_str(), "numd" | "nbjt")
+        {
+            let (pins, params) = match &e.kind {
+                ElementKind::Diode { p, n, params, .. } => (vec![node(p), node(n)], params),
+                ElementKind::Bjt {
+                    c,
+                    b,
+                    e,
+                    s: None,
+                    tj: None,
+                    params,
+                    ..
+                } => (vec![node(c), node(b), node(e)], params),
+                _ => {
+                    errors.push(
+                        Diagnostic::error(
+                            "E-ELAB-MODEL",
+                            "incompatible numerical device terminals",
+                        )
+                        .with_span(e.span),
+                    );
+                    continue;
+                }
+            };
+            let instance = ModelParams::new(params);
+            match sansho_devices::cider::Numerical::new(
+                e, &pins, card, &instance, opts.temp, opts.tnom, diags,
+            ) {
+                Ok(device) => {
+                    controlled.push(Box::new(device));
+                    nonlinear_count += 1;
+                }
+                Err(d) => errors.push(d.with_span(card.span)),
+            }
+            let unused = instance.unused();
+            if !unused.is_empty() {
+                diags.push(
+                    Diagnostic::warning(
+                        "W-MODEL-IGNORED",
+                        format!(
+                            "{}: ignored numerical instance parameters {}",
+                            e.name,
+                            unused.join(", ")
+                        ),
+                    )
+                    .with_span(e.span),
+                );
+            }
+            if !e.ic.is_empty() {
+                diags.push(
+                    Diagnostic::warning(
+                        "W-MODEL-IGNORED",
+                        format!("{}: numerical initial bias IC ignored", e.name),
+                    )
+                    .with_span(e.span),
+                );
+            }
+            continue;
+        }
         match &e.kind {
             ElementKind::CodeModel { ports, model } => {
                 let Some(card) = model_cache.card(model) else {

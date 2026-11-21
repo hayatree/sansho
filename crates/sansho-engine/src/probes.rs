@@ -2,7 +2,11 @@
 //! Provenance: ngspice user manual, device outputs and .options savecurrents.
 //! Transient capacitor currents use the integrator's device-local charge history.
 
-use crate::{circuit::Circuit, solve::Workspace};
+use crate::{
+    cider_outputs::{self, PortSolve},
+    circuit::Circuit,
+    solve::Workspace,
+};
 use sansho_devices::{EvalCtx, Slots, StateRef};
 use sansho_diag::Diagnostic;
 use sansho_netlist::Netlist;
@@ -10,13 +14,20 @@ use sansho_output::{Quantity, Variable};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn currents(nl: &Netlist) -> impl Iterator<Item = String> + '_ {
-    nl.elements.iter().flat_map(|e| {
+    let nbjt: BTreeSet<_> = nl
+        .models
+        .iter()
+        .filter(|m| m.kind == "nbjt")
+        .map(|m| m.name.as_str())
+        .collect();
+    nl.elements.iter().flat_map(move |e| {
         let names: &[&str] = match e.name.as_bytes().first() {
             Some(b'r' | b'c' | b'l' | b'b' | b'e' | b'g' | b'f' | b'h' | b's' | b'w' | b'v') => {
                 &["i"]
             }
             Some(b'i') => &["current"],
             Some(b'd') => &["id"],
+            Some(b'q') if e.kind.model().is_some_and(|m| nbjt.contains(m)) => &["ic", "ib", "ie"],
             Some(b'q') => &["ic", "ib", "ie", "is"],
             Some(b'j' | b'z') => &["id", "ig", "is"],
             Some(b'm') if matches!(e.kind, sansho_netlist::ElementKind::Vdmos { .. }) => {
@@ -30,6 +41,8 @@ pub(crate) fn currents(nl: &Netlist) -> impl Iterator<Item = String> + '_ {
 }
 
 struct Group {
+    ports: Option<PortSolve>,
+    measurement_frequency: f64,
     index: usize,
     slots: Slots,
     state: Vec<f64>,
@@ -37,6 +50,7 @@ struct Group {
 }
 
 struct Field {
+    matrix: Option<(u8, usize, usize)>,
     instance: usize,
     parameter: String,
     variable: Variable,
@@ -139,6 +153,8 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
         "vgs" | "vgd" if matches!(kind, "mesfet" | "jfet2") => Voltage,
         "i1" | "i2" if matches!(kind, "urc" | "ltra" | "tline") => Current,
         "v1" | "v2" if matches!(kind, "ltra" | "tline") => Voltage,
+        "id" if kind == "numd" => Current,
+        "ic" | "ib" | "ie" if kind == "nbjt" => Current,
         "capcur" if kind == "diode" => Current,
         "gd" if kind == "diode" => Admittance,
         "go" | "gpi" | "gmu" if bipolar => Admittance,
@@ -157,6 +173,13 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
             if bsim =>
         {
             Capacitance
+        }
+        p if let Some((k, _, _)) = cider_outputs::element(kind, p) => {
+            if k == b'c' {
+                Capacitance
+            } else {
+                Admittance
+            }
         }
         _ => return None,
     })
@@ -240,6 +263,7 @@ impl Probes {
                 })
                 .collect::<Result<_, _>>()?;
             grouped.entry(k).or_default().push(Field {
+                matrix: cider_outputs::element(kind, p),
                 instance: i,
                 parameter: p.into(),
                 variable: Variable { name, quantity },
@@ -252,14 +276,18 @@ impl Probes {
             .map(|(index, fields)| {
                 let mut slots = Slots::for_layout(&ckt.layouts[index]);
                 slots.outputs.resize(ckt.groups[index].len(), Vec::new());
-                Group {
+                let numerical = (&*ckt.groups[index] as &dyn std::any::Any)
+                    .downcast_ref::<sansho_devices::cider::Numerical>();
+                Ok(Group {
+                    ports: numerical.map(PortSolve::new).transpose()?,
+                    measurement_frequency: numerical.map_or(1., |d| d.measurement_frequency),
                     index,
                     fields,
                     slots,
                     state: vec![0.; ckt.state_len[index]],
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, Diagnostic>>()?;
         Ok(Self { groups })
     }
 
@@ -295,7 +323,19 @@ impl Probes {
             if let Some(error) = group.slots.error.take() {
                 return Err(error);
             }
+            let admittance = group
+                .ports
+                .as_mut()
+                .filter(|_| group.fields.iter().any(|field| field.matrix.is_some()))
+                .map(|p| p.matrix(&group.slots, group.measurement_frequency))
+                .transpose()?;
             for field in &mut group.fields {
+                if let (Some(matrix), Some((kind, i, j))) = (&admittance, field.matrix) {
+                    field.values.push(
+                        cider_outputs::component(matrix[i][j], kind, group.measurement_frequency).0,
+                    );
+                    continue;
+                }
                 let v = group.slots.outputs[field.instance]
                     .iter()
                     .find(|(p, _)| *p == field.parameter)
@@ -319,7 +359,37 @@ impl Probes {
         vars: &mut Vec<Variable>,
         cols: &mut Vec<Vec<(f64, f64)>>,
     ) -> Result<(), Diagnostic> {
-        for group in self.groups {
+        for mut group in self.groups {
+            if let Some(ports) = &mut group.ports {
+                let mut columns = vec![Vec::with_capacity(freqs.len()); group.fields.len()];
+                let extract = group.fields.iter().any(|field| field.matrix.is_some());
+                for (k, &f) in freqs.iter().enumerate() {
+                    let matrix = if extract {
+                        Some(ports.matrix(&group.slots, f)?)
+                    } else {
+                        None
+                    };
+                    for (col, field) in columns.iter_mut().zip(&group.fields) {
+                        let value = if let (Some(matrix), Some((kind, i, j))) =
+                            (&matrix, field.matrix)
+                        {
+                            cider_outputs::component(matrix[i][j], kind, f)
+                        } else {
+                            let row = match field.parameter.as_str() {
+                                "id" | "ic" => 0,
+                                "ib" => 1,
+                                "ie" => 2,
+                                _ => return Err(diagnostic(&field.parameter)),
+                            };
+                            ports.current(row, &group.slots, &ckt.layouts[group.index], cols, k, f)
+                        };
+                        col.push(value);
+                    }
+                }
+                vars.extend(group.fields.into_iter().map(|field| field.variable));
+                cols.extend(columns);
+                continue;
+            }
             let device = &ckt.groups[group.index];
             for field in group.fields {
                 let column = if matches!(field.parameter.as_str(), "i" | "current") {

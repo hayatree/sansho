@@ -17,6 +17,7 @@ pub mod bsim3;
 pub mod bsim4;
 mod bsim_body;
 pub mod bsimsoi;
+pub mod cider;
 pub mod controlled;
 pub mod diode;
 pub mod distortion;

@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod analysis;
+mod cider_outputs;
 mod circuit;
 mod fourier;
 pub use fourier::fourier;

@@ -1,0 +1,55 @@
+Majority mobility on an uncompensated p-type slab
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: density 1e14 1e16 1e17 3e17 1e18 1e19
+* Compare G L/(q N A) across the default, AR and CT concentration presets.
+.param probe=1e14
+Vdrive drive 0 0
+Voff drive node_off 0
+Doff node_off 0 moff
+.model moff numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc={probe}
++ end
+Vdefault drive node_default 0
+Ddefault node_default 0 mdefault
+.model mdefault numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc={probe}
++ models concmob
++ end
+Var drive node_ar 0
+Dar node_ar 0 mar
+.model mar numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc={probe}
++ mobility material=1 hole majority concmodel=ar init
++ models concmob
++ end
+Vct drive node_ct 0
+Dct node_ct 0 mct
+.model mct numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc={probe}
++ mobility material=1 hole majority concmodel=ct init
++ models concmob
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.dc Vdrive -0.01 0.01 0.005
+.save i(voff) i(vdefault) i(var) i(vct)
+.end

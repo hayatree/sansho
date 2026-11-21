@@ -4,6 +4,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Add one-dimensional numerical silicon diodes and bipolar transistors with CIDER input cards, DC, frequency-dependent terminal admittance, carrier-storage transient and temperature. R20c resolves the silicon densities of states, transport and recombination parameters, and the bias-dependent NBJT base access. All six R20 acceptance decks pass against ngspice 44.2. [Equations and measured mesh convergence](docs/cider.md)
+
 - Add shooting-Newton periodic steady state for autonomous oscillators and fixed-frequency driven circuits. The CLI, batch controls, session API and MCP expose one cycle and its harmonic spectrum. Six analytic decks cover RC, RLC, diode rectification, a sustained LC tank, a CMOS ring and a Van der Pol oscillator. [Algorithm and limits](docs/analyses.md#periodic-steady-state)
 
 - Add TXL (Y) and coupled CPL (P) lines with length overrides, exact matrix DC and AC, and transient propagation with scalar modal filters or coupled loss sections. The scalar filter preserves the wavefront and the onset of the dispersive tail. Seven acceptance decks and 48 cached probe settings quantify 44.2 compatibility. [Equations and verification](docs/distributed-lines.md#txl-and-cpl)

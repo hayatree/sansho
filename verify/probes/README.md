@@ -884,3 +884,79 @@ The R18b follow-ups add six waveform passes, fourteen known waveform differences
 | `r18b_cpl_settling` | Sweep the undriven conductor's R through 12/24/60 Ω with G = 0. At 100 ns the driven far end should approach 75/137 V and the near and far victim voltages should approach zero. Compare these values as well as the first crosstalk pulse. |
 | `r18b_cpl_coincident` | Sweep mutual C through −19/−20/−21 pF with nonzero mutual L. At −20 pF the LC product is scalar and both flights are √24 ns. Check for rejection exactly at coincidence and record the two separated controls. |
 | `r18b_cpl_uncoupled` | Keep all mutual entries zero and vary L22 through 225/250/275 nH. Only the middle setting has coincident velocities. Taken with the preceding probe, this separates sensitivity to zero mutual storage from sensitivity to a repeated delay. |
+
+## R20 numerical silicon devices
+
+Each `r20_*.cir` probe is self-contained. The eight switch probes compare two copies of the same junction on a shared bias sweep. The sources Vref and Vtest sense the reference and enabled currents in the same direction. The sweep-driver setting runs each complete fixture once. The TempMob fixture uses 85 °C. With a CIDER-enabled 44.2 executable and the Sparse solver, the existing driver accepts `verify/probes/r20_*.cir`. All thirteen R20 reference raws are available. Six comparisons pass after R20b. The original comparison log rejected the sweep declarations before comparing samples.
+
+| Probe suffix | Measurement |
+|---|---|
+| `bgn`, `auger`, `concmob` | Forward transport on a 3 × 10¹⁷ cm⁻³ junction with each effect individually enabled. |
+| `srh`, `conctau` | Forward recombination. The ConcTau pair keeps SRH enabled in both devices. |
+| `fieldmob`, `tempmob` | Forward current with the field or mobility-temperature correction enabled. |
+| `avalanche` | Reverse multiplication from −2 to −0.1 V. Compare the enabled/reference ratio. |
+| `doping_uniform`, `doping_gaussian`, `doping_erfc` | Forward/reverse current for abrupt and graded acceptor profiles on a uniform donor background. |
+| `temperature` | Current at 0.45 V from 0 to 100 °C, including intrinsic density, lifetime-dependent recombination and mobility. |
+| `mesh` | Three independently meshed copies at −0.2 V, each driven by a 1 V small-signal source at 100 kHz. |
+
+For the mesh probe use C = −Im(I(Vk))/(2πf). The abrupt junction lies halfway between the two center vertices on each grid. The reference changes by 0.168 fF on the first refinement and 0.038 fF on the second.
+
+| Vertices | Spacing (µm) | R20 (fF) | 44.2 (fF) | R20b (fF) |
+|---:|---:|---:|---:|---:|
+| 32 | 0.07742 | 21.9722 | 22.2332 | 22.2333 |
+| 62 | 0.03934 | 21.7842 | 22.0650 | 22.0651 |
+| 122 | 0.01983 | 21.7472 | 22.0265 | 22.0266 |
+
+The six `verify/decks/r20_*.cir` circuits measure diode forward/reverse current, capacitance at three biases, reverse recovery, NBJT Gummel and output characteristics, and NBJT AC base/collector currents. The circuit outputs use source branch currents for cross-simulator comparison. [Device equations and parameter choices](../../docs/cider.md)
+
+## R20b isolating probes
+
+There are 41 original decks with 167 settings. Each has one sweep declaration, one `.param probe=` and one analysis. The driver writes literal settings into CIDER cards before launching 44.2. Keep the expanded circuits, raw files **and logs**. The `material` probe asks the oracle to print silicon material properties to its log. It also measures the intrinsic conductivity of a compensated slab with both mobilities specified. This is the first probe to inspect when deciding which effective parameters can be replaced by individually identified defaults.
+
+Run from the checkout with the CIDER-enabled ngspice 44.2 executable and Sparse solver used in R20.
+
+```sh
+verify/probes/sweep.sh verify/probes/r20b_*.cir
+```
+
+Each name below is the suffix of `verify/probes/r20b_<suffix>.cir`. The settings are also in the individual deck headers. Positive terminal current for the paired diodes is the current through the corresponding zero-volt sense source.
+
+| Probe suffixes | Values on the sweep line | Measurement |
+|---|---|---|
+| `material` | 0, 27, 55, 85, 110 °C | Inspect the unmodified silicon material report. For the second slab, G L/[q A (μn + μp)] gives nᵢ directly. |
+| `dos_nc`, `dos_nv`, `dos_eg` | Nc = 1, 2.8, 5 × 10¹⁹ cm⁻³. Nv = 0.8, 1.04, 3 × 10¹⁹ cm⁻³. Eg = 1.08, 1.12, 1.16 eV | Compare the overridden slab with its omitted-value twin. G² scales with each density of states. The slope of ln(G) with Eg is −1/(2U). The intersection with the twin identifies the omitted value. |
+| `vt`, `temp_fixed` | 0, 27, 55, 85 °C and 0, 20, 50, 80, 100 °C respectively | Diffusion slope with both mobilities specified. The second deck reproduces the original 0.45 V temperature-sweep fixture in independent fresh processes. |
+| `permittivity` | 8.854 × 10⁻¹³, 1.036 × 10⁻¹², 1.2 × 10⁻¹² F/cm | Uniform slab displacement gives ε from Im(Y)L/(ωA). |
+| `area`, `defa` | Instance factors 0.25, 1, 4. Mask areas 2.5 × 10⁻¹¹, 10⁻¹⁰, 4 × 10⁻¹⁰ m² | Check linear scaling of both G and C. The mask experiment also includes an omitted DefA branch. |
+| `mob_n`, `mob_p` | 10¹⁴, 10¹⁶, 10¹⁷, 3 × 10¹⁷, 10¹⁸, 10¹⁹ cm⁻³ | Use G L/(qAN) to measure the majority mobility directly. Compare scattering off, universal defaults, initialized AR and initialized CT. |
+| `minority_n`, `minority_p` | 10¹⁵, 10¹⁶, 7 × 10¹⁶, 3 × 10¹⁷, 10¹⁸ cm⁻³ | One-sided junctions with scattering off/on isolate minority transport in the lightly doped side. |
+| `tempmob_n`, `tempmob_p` | 0, 27, 55, 85, 110 °C | Conductance ratios in uniform donor and acceptor slabs separate carrier temperature exponents. |
+| `field_n`, `field_p` | vsat = 5 × 10⁶, 10⁷, 2 × 10⁷ cm/s | Direct carrier speed I/(qNA) versus E = V/L. Off, default and explicit-vsat branches share the same field. |
+| `srh_n`, `srh_p` | 1 ns, 100 ns, 1 µs, 10 µs | Asymmetric long diodes separate the minority lifetimes. Each includes SRH off, omitted lifetime and explicit lifetime. |
+| `conctau_n`, `conctau_p` | SRH reference densities of 3 × 10¹⁶, 10¹⁷, 3 × 10¹⁷, 10¹⁸ cm⁻³ | Compare SRH alone, default ConcTau and one electron or hole reference override on the same asymmetric junction. |
+| `auger_n`, `auger_p` | Cn or Cp = 0, 10⁻³¹, 3 × 10⁻³¹, 10⁻³⁰ cm⁶/s | Compare omitted and explicit coefficients with SRH both off and on. Long explicit SRH lifetimes reduce the competing generation/recombination term. |
+| `bgn`, `bgn_n`, `bgn_p` | Symmetric N = 10¹⁶, 10¹⁷, 3 × 10¹⁷, 10¹⁸, 3 × 10¹⁸ cm⁻³. Asymmetric runs use the first four | Compare U ln(Ion/Ioff) against ln N. The two one-sided series resolve donor and acceptor contributions. |
+| `compensation` | Added donor/acceptor pairs of 10¹², 10¹⁶, 10¹⁷, 3 × 10¹⁷, 10¹⁸ cm⁻³ each | Net doping stays fixed. Independent branches test narrowing, impurity scattering and concentration-dependent lifetime against total doping. |
+| `avalanche` | 10¹⁶, 3 × 10¹⁶, 10¹⁷ cm⁻³ | Measure reverse multiplication with a finite SRH seed current, at matched voltage and area. |
+| `contact` | Right endpoint 2, 4, 8, 16 µm | Hold the junction fixed. Finite minority diffusion to an ohmic end depends on neutral length. |
+| `mesh`, `mesh_grade` | n = 31, 32, 61, 62, 121, 122. Grading ratios 1.10, 1.20, 1.35, 1.6 | Cross-match absolute and incremental counts in adjacent settings. The graded probe includes an independent fine uniform grid. |
+| `profile_gaussian`, `profile_erfc` | Characteristic lengths 0.10, 0.25, 0.50, 1.0 µm | Measure same-polarity slab resistance with fixed mobility and a uniform background. Compare the spatial integral of resistivity for each tail. |
+| `base_orientation`, `base_instance_area` | VCE = 0.2, 0.45, 0.65 V. Instance area = 0.25, 1, 4 | The orientation deck compares the same mesh with collector and emitter interchanged. The area deck scales both terminal admittances. |
+| `base_length_ac`, `base_length_gummel` | 0.175, 0.35, 0.7, 1.4 µm | Sweep lateral access length. A series resistance primarily changes Re(1/Ybb) at high frequency. |
+| `base_area_ac`, `base_area_gummel` | Relative base areas 0.5, 1, 2, 4 | Check the inverse-area resistance and base-current trend at fixed emitter area. |
+| `base_depth_ac`, `base_depth_gummel` | 1.08, 1.18, 1.22, 1.32 µm | Compare different physical base vertices. The middle two depths straddle the center of an even mesh. |
+
+The offline commands use only the native binary and cached data. The material-report request emits the native I-CIDER-MATERIAL diagnostic. Its 44.2 log is part of the measurement. The comparison script reports diagnostic differences as well as waveform scores.
+
+```sh
+cargo build --offline --release -p sansho-cli
+python3 -B verify/cider_extract.py
+python3 -B verify/compare_vbic.py --pattern 'r20_*' --out verify/out/r20b/native
+python3 -B verify/compare_vbic.py --pattern 'r20b_*' --native-only
+# After collecting the 44.2 settings
+python3 -B verify/compare_vbic.py --pattern 'r20b_*' --out verify/out/r20b/native
+```
+
+[Effective parameter extraction, switch ratios and deck scores](../../docs/cider.md#r20b-measurements-against-ngspice-442)
+
+R20c replays all 180 settings and adds no probe. The measured laws, bounds and ten remaining differences are recorded in the [R20c results](../../docs/cider.md#r20c-measurements-against-ngspice-442).

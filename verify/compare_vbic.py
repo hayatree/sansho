@@ -113,10 +113,22 @@ def simulate(deck, target, binary):
 
 
 def expand(template, value):
+    source = template.read_text()
+    # Original R20 switch pairs run once as written. Only the hot pair
+    # uses sweep.sh's direct .temp substitution.
+    if template.stem.startswith("r20_"):
+        if "* sweep: nominal 1" in source and value == "1":
+            return source
+        if "* sweep: temperature " in source:
+            body, changes = re.subn(r"^\.temp .*$", ".temp " + value, source, flags=re.MULTILINE)
+            if changes == 1:
+                return body
     body, changes = re.subn(r"^\.param probe=.*$", ".param probe=" + value,
-                            template.read_text(), flags=re.MULTILINE)
+                            source, flags=re.MULTILINE)
     if changes != 1:
         raise ValueError(f"{template}: expected one probe assignment")
+    if template.stem.startswith("r20b_"):
+        body = body.replace("{probe}", value)
     return body
 
 

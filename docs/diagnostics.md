@@ -7,6 +7,8 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 | Code | Severity | Summary |
 |---|---|---|
+| [`I-CIDER-MATERIAL`](#i-cider-material) | info | Silicon material report |
+| [`E-CIDER-MODEL`](#e-cider-model) | error | Invalid numerical semiconductor structure |
 | [`E-PARSE-COND`](#e-parse-cond) | error | Invalid conditional netlist block |
 | [`E-LINE-PARAM`](#e-line-param) | error | Invalid transmission line parameters |
 | [`E-LINE-MATRIX`](#e-line-matrix) | error | Invalid transmission line matrix |
@@ -92,6 +94,18 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-API-UNKNOWN-ID`](#e-api-unknown-id) | error | Unknown circuit or job |
 | [`E-API-UNKNOWN-SIGNAL`](#e-api-unknown-signal) | error | Unknown signal |
 | [`E-API-ALTER`](#e-api-alter) | error | Cannot alter parameter |
+
+## I-CIDER-MATERIAL
+
+**Silicon material report.** The numerical device requested its operating-temperature silicon properties with output material.
+
+
+## E-CIDER-MODEL
+
+**Invalid numerical semiconductor structure.** A level-one numerical model has an invalid mesh, spatial region, dopant profile, material constant or contact.
+
+- Use increasing x.mesh positions and positive spacing, area and temperature. Cover the complete mesh with silicon domains.
+- For NBJT, place the base contact in the opposite-doped region between like-doped end contacts.
 
 ## E-PARSE-COND
 
@@ -433,6 +447,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Unsupported device or external code model.** The selected device equation or analysis mode is unavailable, or the deck requests an external XSPICE process or shared library.
 
 - See docs/bsim3.md and docs/bsim4.md for the available MOS selectors.
+- Use level-one NUMD or NBJT for one-dimensional silicon. Level two and NUMOS are reserved for two-dimensional numerical devices. See docs/cider.md.
 - Use a built-in model in place of d_process, d_cosim or a library loaded with codemodel. See docs/xspice.md.
 
 ## W-BSIM3-PARAM

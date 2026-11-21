@@ -431,6 +431,9 @@ impl ElementKind {
 /// A `.model name type (params)` card.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ModelCard {
+    /// Ordered physical continuation cards of a numerical semiconductor model.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cider: Vec<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<SourceTable>,
     /// Ordered numeric arrays on code-model and CPL cards.

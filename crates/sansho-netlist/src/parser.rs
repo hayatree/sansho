@@ -1279,6 +1279,14 @@ impl Parser {
                     );
                     return None;
                 };
+                if k == "ic.file" {
+                    self.err(
+                        "E-UNSUPPORTED",
+                        "external numerical device restart files are unsupported",
+                        vt.span,
+                    );
+                    return None;
+                }
                 let v = self.number(vt, &k)?;
                 f.params.push((k, v));
                 i += 3;
@@ -1874,8 +1882,8 @@ impl Parser {
                 ElementKind::Ltra { .. } => &["ltra"],
                 ElementKind::Mesfet { .. } => &["nmf", "pmf"],
                 ElementKind::Vdmos { .. } => &["vdmos"],
-                ElementKind::Diode { .. } => &["d"],
-                ElementKind::Bjt { .. } => &["npn", "pnp"],
+                ElementKind::Diode { .. } => &["d", "numd"],
+                ElementKind::Bjt { .. } => &["npn", "pnp", "nbjt"],
                 ElementKind::Va { .. } | ElementKind::CodeModel { .. } => &[],
                 _ => &["nmos", "pmos"],
             };
@@ -1988,6 +1996,7 @@ impl Parser {
             let params = self.models[index].params.clone();
             let version = self.models[index].version.clone();
             self.models.push(ModelCard {
+                cider: self.models[index].cider.clone(),
                 table,
                 arrays,
                 name,
@@ -2015,7 +2024,54 @@ impl Parser {
         let mut arrays = Vec::new();
         let mut params = Vec::new();
         let mut version = None;
+        let mut cider: Vec<Vec<String>> = Vec::new();
         let mut i = 3;
+        if matches!(kind.as_str(), "numd" | "nbjt" | "numos") {
+            let mut level = 1.;
+            let header = t.partition_point(|v| v.span.line == t[0].span.line);
+            if header > 3 {
+                let tail = &t[3..header];
+                let value = match tail {
+                    [v] => Some(v),
+                    [k, eq, v] if k.text.eq_ignore_ascii_case("level") && eq.is_eq() => Some(v),
+                    _ => None,
+                };
+                let Some(l) = value.and_then(|v| parse_number(&v.text)) else {
+                    self.err("E-PARSE-VALUE", "expected numerical model LEVEL", t[3].span);
+                    return;
+                };
+                level = l;
+            }
+            if level != 1. || kind == "numos" {
+                self.err(
+                    "E-UNSUPPORTED",
+                    format!("unsupported numerical device {kind} level {level}"),
+                    t[2].span,
+                );
+                return;
+            }
+            params.push(("level".into(), level));
+            i = header;
+            while i < t.len() {
+                let end = i + t[i..].partition_point(|v| v.span.line == t[i].span.line);
+                let mut words = t[i..end].iter().map(Token::lower);
+                if t[i].text == "+" {
+                    words.next();
+                    let Some(card) = cider.last_mut() else {
+                        self.err(
+                            "E-PARSE-UNEXPECTED",
+                            "orphan CIDER card continuation",
+                            t[i].span,
+                        );
+                        return;
+                    };
+                    card.extend(words);
+                } else {
+                    cider.push(words.collect());
+                }
+                i = end;
+            }
+        }
         while i < t.len() {
             let k = t[i].lower();
             if !t.get(i + 1).is_some_and(Token::is_eq) {
@@ -2153,6 +2209,7 @@ impl Parser {
             i += 3;
         }
         self.models.push(ModelCard {
+            cider,
             table,
             arrays,
             name,

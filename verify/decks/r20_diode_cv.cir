@@ -1,0 +1,22 @@
+Reverse-bias capacitance at three biases
+* Provenance: original Sansho numerical-device fixture.
+V1 a1 0 dc 0 ac 1
+D1 a1 0 crystal
+V2 a2 0 dc -0.2 ac 1
+D2 a2 0 crystal
+V3 a3 0 dc -0.5 ac 1
+D3 a3 0 crystal
+.model crystal numd level=1
++ options defa=1e-10 diode
++ x.mesh location=0 number=1
++ x.mesh location=2.4 number=62
++ domain number=1 material=1
++ material number=1 silicon tn=2n tp=3n
++ doping uniform n.type conc=1e+16
++ doping uniform p.type conc=2e+16 x.high=1.2
++ models srh concmob
++ end
+.options itl1=150 itl2=100
+.ac dec 3 1k 10meg
+.save i(v1) i(v2) i(v3)
+.end

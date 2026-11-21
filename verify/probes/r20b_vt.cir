@@ -1,0 +1,26 @@
+Diffusion slope at fixed temperature and specified mobilities
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: temperature 0 27 55 85
+* Calculate adjacent dV/dlog(I) and account for finite neutral length on the same mesh.
+.param probe=0
+Vdrive drive 0 0
+.temp {probe}
+Vtest drive node_test 0
+Dtest node_test 0 mtest
+.model mtest numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc=3e17 x.high=1.2
++ doping uniform n.type conc=3e17 x.low=1.2
++ mobility material=1 electron majority mumax=1000
++ mobility material=1 electron minority mumax=1000
++ mobility material=1 hole majority mumax=500
++ mobility material=1 hole minority mumax=500
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.dc Vdrive 0.36 0.54 0.01
+.save i(vtest)
+.end

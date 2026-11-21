@@ -1,0 +1,161 @@
+# One-dimensional numerical silicon devices
+
+A level-one `NUMD` connects the two ends of a silicon mesh to a D instance. A level-one `NBJT` connects a Q instance in collector, base, emitter order. The DC, AC and transient solvers include the two carrier populations throughout the device. Operating temperature can come from the instance, circuit or a DC temperature sweep. All six R20 acceptance decks pass against ngspice 44.2. The 180 probe settings include ten remaining differences, detailed in the R20c results below.
+
+## Equations and circuit coupling
+
+Distances inside the solver are in cm, densities in cm⁻³ and potentials in V. Let ψ denote the electrostatic potential, Fₙ and Fₚ the electron and hole quasi-Fermi potentials, U the thermal voltage kT/q, D the signed ionized dopant density and nᵢ the local effective intrinsic density. Boltzmann statistics give n = nᵢ exp((ψ − Fₙ)/U) and p = nᵢ exp((Fₚ − ψ)/U). With conventional current positive along increasing x, the equations are
+
+```text
+−div(ε grad ψ) = q(p − n + D)
+ div Jn − q(R − G) − q ∂n/∂t = 0
+ div Jp + q(R − G) + q ∂p/∂t = 0
+```
+
+An edge of length h joins vertices L and R. Define B(z) = z/expm1(z), with B(0) = 1. With Δψ = ψR − ψL and δ = log(nᵢR/nᵢL), the Scharfetter–Gummel face currents per unit area are
+
+```text
+zn =  Δψ/U + δ                 Jn = q μn U/h [nR B(zn) − nL B(−zn)]
+zp = −Δψ/U + δ                 Jp = q μp U/h [pL B(−zp) − pR B(zp)]
+```
+
+The implementation factors each difference using the quasi-Fermi drop and `expm1`. This gives zero transport at constant quasi-Fermi potential, including across a heavily doped junction. B uses a Taylor expansion near zero and a decaying exponential for large positive arguments. Opposite faces receive equal and opposite flux. A vertex owns half of each adjoining interval. Space charge, carrier storage and recombination use this volume. Edge and vertex assembly use separate routines, so a future mesh can supply other adjacency and face measures. The equilibrium initializer currently uses the tridiagonal structure of a line.
+
+Both end contacts impose charge neutrality and Fₙ = Fₚ = terminal voltage. The electrostatic contact potential includes the equilibrium built-in offset. Terminal current includes the two carrier currents and the time derivative of the outward electrode displacement charge, εA(ψcontact − ψadjacent)/h. For NBJT, increasing mesh coordinate runs from emitter to collector. External currents and intrinsic matrix indices follow circuit order C, B, E. The base supplies majority carriers at the mesh point nearest `base.depth`. Its lateral access current is q μ c A (base.area / base.length) (Vbase − F), with majority-carrier quasi-Fermi potential F and local **biased mobile density** c at that vertex. The Jacobian includes the dependence of c on both ψ and F. An exact depth midpoint selects the vertex at larger x. Minority transport continues between emitter and collector through that point. The default depth is halfway between the first and last opposite-doped base vertices. Both NPN and PNP follow the same signed equations.
+
+### Initialization, scaling and time integration
+
+Elaboration starts with the neutral estimate U asinh(D/(2nᵢ)) and solves the nonlinear equilibrium Poisson equation with a tridiagonal Newton step. The largest potential update is limited to 4U. Convergence requires a maximum unscaled update below 1 pV within 160 iterations. This equilibrium profile supplies the offset for each electrostatic unknown. The other two unknowns are quasi-Fermi voltages. The zero vector then represents thermal equilibrium.
+
+The global Newton matrix contains three private unknowns per interior mesh vertex. Poisson rows are divided by εA/ℓ and carrier rows by qAμn₀/ℓ or qAμp₀/ℓ, using the local equilibrium densities and control-volume length ℓ. This keeps circuit terminal rows in physical units and gives the three internal equations comparable voltage scales. During circuit Newton, the evaluation point moves by at most 3U per potential and iteration. Current and charge residuals include the linear correction back to the actual trial point. The existing source and conductance stepping can recover a failed operating point. Device evaluation visits vertices and edges in a fixed order.
+
+The local automatic derivatives stamp G = ∂f/∂x and C = ∂q/∂x. AC solves the full G + jωC system about the bias point. The circuit integrator applies its trapezoidal, backward Euler or Gear history to the interior carrier charges and contact displacement charges. It owns timestep rejection and history rollback. Recombination, generation and field mobility derivatives participate in all three analyses.
+
+## Cards and physical parameters
+
+The input syntax follows the ngspice 44 manual, chapter 26, especially §§26.1, 26.5–26.6, 26.9–26.14 and 26.16–26.18. A physical continuation starts a card. A second plus continues the preceding card. Names are case-insensitive and supported names accept unique prefixes. A caret clears a flag. `end` finishes a numerical model. Card order determines the sequence within the mesh, profiles and overrides.
+
+| Card | Implemented input |
+|---|---|
+| `x.mesh` | Positions and widths in µm. `number` or `node` gives an absolute one-based index with location and an interval count with width. For grading, `h.start`, `h.end`, `h.max` and `ratio` set an envelope for the spacings. The fewest intervals filling the length are rescaled to hit the endpoint. The mesh supports 3–4096 vertices. |
+| `domain` / `region` | Numbered domains of one silicon material. Physical or one-based index bounds select the region. Later bounds override earlier ones at shared mesh points. |
+| `material` | Silicon permittivity, Nc, Nv, Eg, dEg.dT, Eg.Tref, narrowing coefficients and reference concentrations, SRH lifetimes and references, and Auger coefficients. |
+| `doping` | Additive uniform, Gaussian, erfc, exponential and linear profiles with donor/acceptor or species flags, peak concentration, x bounds, location and characteristic length. Concentration is constant inside the specified box. Outside it the profile uses distance from the nearest box edge. Lengths default to 1 µm. A domain selector restricts a profile. |
+| `models` | BGN, SRH, ConcTau, Auger, Avalanche, TempMob, ConcMob and FieldMob. All default to off, as specified in §26.12. |
+| `mobility` | Material, electron/hole and majority/minority selectors. MuMin, MuMax, NtRef and NtExp govern low-field mobility. Vsat and the field law come from the majority card for each carrier. CT and AR select concentration fits. CT, AR and SG select field interpolation. Init resets selected classes to model defaults before overrides. |
+| `options` | Diode, resistor or bipolar structure, DefA in m², TNom in °C, Base.Area relative to emitter, Base.Length and Base.Depth in µm. The 1-D area defaults to 1 m². Supply an explicit DefA for a physical layout. Base.Area and Base.Length default to 1 and 1 µm. |
+| `method` | Direct AC solution, measurement Frequency in Hz (default 1). The fully coupled Newton solve uses the circuit iteration and tolerance options. Other method requests produce a warning. |
+| `output` | The circuit raw file carries requested terminal observables. `output material` reports the bulk silicon properties at operating temperature through `I-CIDER-MATERIAL`. Requests for auxiliary spatial files, debug traces and statistics produce a warning. |
+| Instance | Area multiplies DefA, Temp specifies °C and Off starts a fresh Newton solve at equilibrium. W has no width dimension in a 1-D device and warns. External IC.File restarts give an error. |
+
+A command such as `.save i(vdrive) @d1[c11] @d1[y11]` can measure the source current and intrinsic capacitance and admittance together. For an intrinsic matrix, Sansho holds each electrode in turn at unit AC voltage, grounds the other electrodes, solves the interior response, and collects each electrode current. Grounded or externally shorted electrodes keep separate indices. In an AC sweep, Gᵢⱼ is Re(Yᵢⱼ) and Cᵢⱼ is Im(Yᵢⱼ)/ω at each frequency. Real OP, DC and transient output evaluates these at the method frequency and reports the real component of Y. The `id` or `ic`, `ib`, `ie` observables report entering currents including displacement in transient and AC.
+
+### Silicon constants and model choices
+
+Chapter 26 describes material overrides, model switches and units. The distinction between a physical law, a measured effective parameter and a provisional input default matters for these devices.
+
+| Quantity | Value or law | Basis |
+|---|---|---|
+| Charge, thermal voltage, permittivity | q = 1.602176634 × 10⁻¹⁹ C, U/T = 8.617087 × 10⁻⁵ V/K, ε = 11.7 × 8.8541878128 × 10⁻¹⁴ F/cm | Physical charge units and bulk silicon electrostatics (Selberherr). The R20 ideal-branch slope resolves the historical k/q ratio. C–V resolves ε conditional on mask area and doping. Neither measurement resolves k and q separately. |
+| Intrinsic density and gap | nᵢ = √(Nc Nv) exp(−Eg/2U). At 300.15 K, Nc = 3.22603 × 10¹⁹, Nv = 3.05625 × 10¹⁹ cm⁻³ and Eg = 1.1245 eV. Eg(T) changes by −Δ[4.73 × 10⁻⁴ T²/(T + 636)] from nominal. Bulk DOS scales with (m* T)³ᐟ². An explicit nominal DOS uses its specified effective mass. | Silicon band statistics in Selberherr (1984) and the chapter 26 material model. Independent nominal overrides and five material reports fix the split and constrain the temperature dependence. |
+| Band-gap narrowing | ΔEg = a [z + √(z² + ½)], z = ln(abs(D)/N₀). For donors (a, N₀) = (0.012 eV, 10¹⁸ cm⁻³), for acceptors (0.0097 eV, 10¹⁷ cm⁻³). At zero net doping ΔEg = 0. Multiply nᵢ by exp(ΔEg/2U). | Slotboom and de Graaff (1976) functional form, with polarity-specific coefficients from the material report. The compensated, symmetric and one-sided junction probes distinguish net doping from total impurities. |
+| SRH and ConcTau | Midgap R = (np − nᵢ²)/[τp(n + nᵢ) + τn(p + nᵢ)]. Nominal τn/τp = 30/10 µs. Multiply both by √(Tnom/T) exp[0.1 eV × (1/U − 1/Unom)] and, with ConcTau, divide each by 1 + (Nd + Na)/Nref. Both reference densities default to 10¹⁷ cm⁻³. | Shockley–Read and Hall (1952), capture and impurity-dependent lifetimes in Selberherr. The material temperature series resolves the activation energy. Separate lifetime and reference-density sweeps check both carrier assignments. |
+| Auger | With SRH and Auger enabled, add (Cn n + Cp p)(np − nᵢ²). Cn = 1.8 × 10⁻³¹ (T/Tnom)⁰·¹⁴ and Cp = 8.3 × 10⁻³² (T/Tnom)⁰·¹⁸ cm⁶/s. | Silicon three-carrier recombination as in Dziewior and Schmid (1977). The numerical coefficients, temperature ratios and switch interaction come from the reports and long-diode measurements. |
+| Low-field mobility | μ = μmin + (μmax − μmin)/[1 + ((Nd + Na)/Nref)ᵅ]. In 1-D the electron transport uses the electron majority set and holes use the hole minority set across both polarities. In order (μmin, μmax, Nref, α) the active defaults are (88, 1340, 1.26 × 10¹⁷, 0.88) and (130, 500, 8 × 10¹⁷, 1.25). The initialized CT electron majority set is (92, 1360, 1.3 × 10¹⁷, 0.91). Without ConcMob the denominator is one. | Caughey and Thomas (1967), Arora, Hauser and Roulston (1982). The slab and minority-injection measurements below select the parameter sets. Mobility is in cm²/(V·s) and density in cm⁻³. |
+| TempMob | For t = T/(300 K), the minimum scales as t⁻⁰·⁵⁷, the excess as t⁻²·³³ for electrons and t⁻²·²³ for holes, Nref as t²·⁴ and α as t⁻⁰·¹⁴⁶. | Arora temperature dependence. The on/off ratios for both slab polarities distinguish the 300 K reference from the 300.15 K circuit nominal temperature. |
+| FieldMob | For u = μ₀ E/vsat, the default electron mobility is μ₀/√(1 + u²) and the hole mobility is μ₀/(1 + abs(u)). Default electron/hole speeds are 1.38 × 10⁷ and 9 × 10⁶ cm/s. An explicit SG field model uses 2μ₀/(1 + √(1 + 4u²)). | Caughey–Thomas velocity saturation and Scharfetter–Gummel (1969) field transport. Uniform-field sweeps with three explicit speeds per carrier independently test the default field functions. |
+| Avalanche | Each edge generates pairs at (αn abs(Jn) + αp abs(Jp))/q. The Chynoweth coefficients are α = A exp(−B/abs(E)), with electron (A, B) = (7.03 × 10⁵ cm⁻¹, 1.231 × 10⁶ V/cm) and hole (1.582 × 10⁶, 2.036 × 10⁶). | Van Overstraeten and De Man (1970), low-field silicon coefficient set. This round uses one branch per carrier. |
+
+The discretization follows D. L. Scharfetter and H. K. Gummel, *Large-signal analysis of a silicon Read diode oscillator* (1969), and S. Selberherr, *Analysis and Simulation of Semiconductor Devices* (1984). D. A. Gates, *Design-oriented mixed-level circuit and device simulation* (1993), and K. Mayaram's CODECS thesis provide the mixed-level context. The stamp layout, contact approximation, graded grid and numerical implementation are original to Sansho.
+
+## Verification and limits
+
+The graded 400 µm long-diode test at 0.5 V gives 11.28 nA. The low-injection Shockley diffusion formula gives 10.93 nA with the same area, bulk densities, mobilities and 200 ns lifetimes. The numerical solution also includes SRH recombination in the depletion region. The reverse-bias mesh probe converges to about 22.03 fF at −0.2 V, compared with 21.38 fF from the symmetric abrupt depletion approximation. Tests also compare the NBJT intrinsic admittance with driven circuit currents, check terminal current conservation, and compare the binary Gear recovery waveform across worker counts. [Probe settings and measured convergence](../verify/probes/README.md#r20-numerical-silicon-devices)
+
+R20 covers isothermal, nondegenerate bulk silicon with fully ionized dopants and ohmic contacts. The open comparisons include steep mesh grading, high-injection reverse-oriented NBJT transport, stepped temperature and the high-field range of avalanche generation. Two-dimensional models, NUMOS, heterojunctions, insulator interfaces, surface mobility, imported doping and restart data are outside this stage. Unsupported structural or physics inputs produce diagnostics. A large reverse bias, extreme temperature or heavy injection can exceed the convergence range of the Boltzmann formulation.
+
+## R20c measurements against ngspice 44.2
+
+The four previously annotated decks now pass at their original tolerances. The worst scores are 0.359 for diode DC, 0.804 for NBJT Gummel, 0.255 for NBJT output and 0.0031 for NBJT AC. Diode C–V and recovery also pass. The original 13 probe settings improved from 6 to 12 passes. The 167 R20b settings improved from 60 to 158 passes. The comparison includes waveform and diagnostic checks. Run `python3 verify/compare_vbic.py --pattern 'r20*'` against a current release CLI to reproduce it. [Probe definitions and collection settings](../verify/probes/README.md#r20b-isolating-probes)
+
+### Identifying bulk silicon independently of the junctions
+
+For the intrinsic slab G = q A nᵢ (μn + μp)/L. At fixed gap the ratio (Gtest/Gref)² equals the ratio of the overridden DOS to its default. Each of the three separate Nc overrides returns Nc = 3.22603 × 10¹⁹ cm⁻³. All three Nv overrides return Nv = 3.05625 × 10¹⁹ cm⁻³. For a gap override, Eg,default = Eg,test + 2U ln(Gtest/Gref) gives 1.12450 eV at each setting. These values agree with the printed 27 °C material properties and predict nᵢ = 1.1376 × 10¹⁰ cm⁻³. The five reported gaps follow the nominally anchored temperature law above.
+
+The reports also give separate DOS masses in units of m₀. From 0 to 110 °C the electron mass rises from 1.1712 to 1.2147 and the hole mass from 1.1159 to 1.2045. Sansho linearly interpolates the **reported masses** at 0, 27, 55, 85 and 110 °C before applying the DOS law. Between report temperatures the independent fresh diode runs at 20, 50, 80 and 100 °C pass. Beyond the measured interval Sansho holds the endpoint masses fixed. Their analytic continuation is open. [Material report and intrinsic slab](../verify/probes/r20b_material.cir) · [Single-DOS override](../verify/probes/r20b_dos_nv.cir)
+
+In the BGN compensation sweep the 0.54 V narrowed current stays at 68.49 nA as the added neutral donor/acceptor pair goes from 10¹² to 10¹⁸ cm⁻³. Over the same sweep the ConcMob current falls from 16.06 to 6.875 nA. The symmetric junction at 3 × 10¹⁷ cm⁻³ gives U ln(Ion/Ioff) = 19.08 meV. This terminal quantity contains transport through both polarities. The reported polarity-specific Slotboom parameters predict the separate one-sided series and all five compensation settings. [Matched compensation branches](../verify/probes/r20b_compensation.cir)
+
+A uniform resistor directly measures μ from G L/(q N A). At N = 10¹⁷ cm⁻³ the n slab gives 777.439 with default or initialized AR and 801.327 with initialized CT. The p slab gives 474.402 with each of the three majority-card selections. Across all six p concentrations, (500 − μ)/(μ − 130) = [N/(8 × 10¹⁷ cm⁻³)]¹·²⁵. This also predicts minority-hole diffusion into the n side. At 85 °C TempMob alone gives electron/hole mobilities 908.11/366.75. At 5.01 V across 2.4 µm the default field models give electron/hole branch currents 1.98285/0.77431 A. Explicit vsat = 10⁷ cm/s gives 1.50868/0.81824 A. [Concentration presets](../verify/probes/r20b_mob_p.cir) · [Explicit saturation speed](../verify/probes/r20b_field_n.cir)
+
+At 85 °C the material report gives τn = 14.683 µs and τp = 4.8943 µs. Multiplying either lifetime ratio by √(T/Tnom) before taking its logarithm yields the 0.1 eV activation energy in the table. At 0.54 V in the electron lifetime sweep the currents are 21.125 nA with SRH off, 21.246 nA at the omitted lifetime and 146.35 nA with τn = 1 ns. The hole sweep gives 8.063, 8.395 and 55.441 nA. The separate ConcTau sweeps reproduce both omitted references at 10¹⁷ cm⁻³. In the n Auger sweep at 0.72 V, all four explicit Cn settings give 49.5753 nA with SRH off. With 1 s SRH lifetimes and Auger enabled the omitted coefficients give 88.8415 nA. Zeroing Cn leaves 72.5277 nA from the remaining mechanisms. [Lifetime overrides](../verify/probes/r20b_srh_n.cir) · [Six-branch Auger measurement](../verify/probes/r20b_auger_n.cir)
+
+### Base access and AC
+
+In the mixed-level formulation of Gates (1993) and Mayaram, the lateral drift current follows the gradient of the majority quasi-Fermi potential. Approximating that gradient by the base access drop divided by its length gives the contact stamp above. Doubling relative base area produces the same complex currents as halving access length. At 10 GHz the slope of Re(1/Ybb) with length is 19.167 Ω/µm at the central contact. The measured mobility and mask area give a local hole density of 6.82 × 10¹⁶ cm⁻³. Moving the contact into the collector-side depletion region changes Re(1/Ybb) from 23.423 Ω to 56.403 kΩ. The mobile-density stamp gives 23.424 Ω and 56.421 kΩ. The logged depths select nodes 31 and 32 at 1.18 and 1.22 µm, respectively. The central 1.20 µm run selects node 32. [Length sweep](../verify/probes/r20b_base_length_ac.cir) · [Contact-depth sweep](../verify/probes/r20b_base_depth_ac.cir)
+
+The same derivatives enter the coupled DC Jacobian and the complex small-signal solve. At the central contact the largest 1 kHz–10 GHz difference is 49.5 nA/V at the base and 25.4 nA/V at the collector. All 12 area, length and depth AC settings and all three instance-area AC settings pass. The intrinsic Y matrix and driven electrode tests also check current conservation. [Terminal matrix test](../crates/sansho-engine/tests/r20_cider.rs)
+
+### Ten remaining settings
+
+| Settings | Observed limit |
+|---|---|
+| `r20_temperature_1` | At 0.45 V the stepped and independently initialized 44.2 runs both give 2.273 nA at 0 °C. At 20, 50, 80 and 100 °C the stepped magnitudes are 3.255, 5.460, 8.823 and 11.768 nA. The fresh runs give 20.015 nA, 0.3614 µA, 4.309 µA and 17.525 µA. Sansho rebinds the material at each temperature and gives 17.521 µA at 100 °C. The data establish a sweep-specific discrepancy. A single stepped junction current cannot identify which material or interior state the oracle retains. |
+| `r20b_base_orientation` at all three collector biases | The reverse-connected collector at the high end of the Gummel sweep differs by 12.9–14.2 nA, with scores 1.09–1.26. The normal collector, both base senses and the independent access sweeps pass. A tighter native Newton tolerance leaves the residual. Even the reference diode DC sweeps give forward currents differing by 7 nA at the same final bias when approached with different voltage increments. The reverse orientation residual has no independently established correction. |
+| `r20b_mesh` at 31, 32, 61 and 62 | The affected branch places an abrupt shared dopant bound exactly on a vertex. Assigning that vertex to a single side reproduces the measured capacitance, with the inferred side depending on the mesh count. Sansho includes both profiles at their common bound. The acceptance meshes place the junction between vertices. |
+| `r20b_mesh_grade` at 1.35 and 1.6 | The graded-branch scores are 1.505 and 21.01. Terminal admittance does not uniquely determine the sequence of interval lengths. |
+
+The existing probes supply every R20c comparison. The next section records the earlier R20b inferences for comparison with these measurements.
+
+## R20b measurements against ngspice 44.2
+
+The scores below are the largest signal score in each deck with its original tolerances. The comparison still runs every annotated deck and reports each signal. The thirteen failures in the supplied probe comparison were template-expansion errors before simulation. Replaying the saved circuits gives six passing and seven failing probe comparisons after R20b.
+
+| Acceptance deck | R20 | R20b | Limiting measurement |
+|---|---:|---:|---|
+| Diode C–V | 6.283 | 0.010 | 41.9 pA complex-current difference at 10 MHz and zero bias |
+| Diode DC | 271.046 | 6.902 | At 0.6 V the forward current is 9.369 µA versus 9.507 µA |
+| Diode recovery | 3.294 | 0.428 | Peak current difference 1.90 µA at 1.097 ns |
+| NBJT Gummel | 464.211 | 20.948 | At 0.62 V, base current 7.964 versus 8.334 µA. Collector score 0.397 |
+| NBJT output | 219.233 | 9.061 | Maximum base-current difference 18.0 nA. Collector score 0.242 |
+| NBJT AC | 313.491 | 18.065 | Collector current differs by 169 µA/V at 10 GHz. Base score 16.764 |
+
+### Extracting the material parameters
+
+At 1 kHz, −Im I/(2πf) in the three diode branches gives **25.22188, 22.06497 and 18.97642 fF** at 0, −0.2 and −0.5 V. For equal net doping N on each side, the slope of 1/C² against reverse voltage is 4/(q ε N A²). The outer pair gives εᵣ = 11.69997 with N = 10¹⁶ cm⁻³ and A = 10⁻⁶ cm². The extrapolated voltage intercept is 0.65227 V. Mobile charge near the depletion edges shifts this intercept from the physical built-in potential. Inverting the finite-volume equilibrium and differential response at the same two biases gives εᵣ = 11.69986 and nᵢ = 1.1376 × 10¹⁰ cm⁻³. Those values predict the middle capacitance within 1 ppm. The corresponding built-in potential 2U ln(N/nᵢ) is 0.70799 V. All R20 fixtures use one explicit mask area. The slope measures εA² at fixed N and cannot establish a separate area multiplier.
+
+In the finite, neutral sections of a low-injection diode with ideal contacts the saturation-current contribution from each minority carrier is qA nᵢ² D coth(w/L)/(N L), with L = √(Dτ), D = μU and neutral width w. With recombination off this tends to qA nᵢ² D/(Nw). For the high-doping control at 0.44 V, I = 0.687 nA gives an apparent saturation current of 2.81 × 10⁻¹⁷ A. The R20 intrinsic density of 7.421 × 10⁹ cm⁻³ accounted for a factor of 2.35 in the squared density. Depletion width and high injection also change across the DC sweep.
+
+The inverse calculation replays the same meshes with explicit material overrides. It varies the thermal voltage and a nuisance density against the unswitched currents at 0.48 and 0.56 V. This removes the finite-width contribution to the slope and gives k/q = 8.617086 × 10⁻⁵ V/K. Shifting the pair along the high-current branch gives 8.617083–8.617087 × 10⁻⁵ V/K. The raw apparent slope of the heavier junction near 0.4 V is 25.88 mV. The resulting physical U at 27 °C is 25.8642 mV. Only the numerical silicon model uses this historical ratio.
+
+At the independently measured nᵢ, the unswitched symmetric diode constrains the sum of the two mobilities. The second copy has different electron and hole lifetimes of 2 and 3 ns. Its response separates the two contributions. Inverting the pair at 0.68 V gives **1339.97 and 500.04 cm²/(V·s)**. Sansho uses 1340 and 500 as the initial bulk maxima. The explicit model initialization presets remain separately selectable. The 85 °C control with TempMob off gives nᵢ = 6.7347 × 10¹¹ cm⁻³ at 0.48 V. Repeating at 0.68 V changes the inferred density by less than 0.002%.
+
+For the temperature law let S(T) = aT²/(T + b) and Eg(T) = E₀ − S(T). Boltzmann statistics give ln(nᵢ/T³ᐟ²) = constant − Eg(T)/(2U). Subtraction at the two measured temperatures eliminates the density-of-states prefactor. Conditional on the existing a = 7.02 × 10⁻⁴ eV/K and b = 1108 K, the two densities give **E₀ = 1.1784 eV** and √(Nc Nv) = 3.736 × 10¹⁹ cm⁻³ at 300.15 K. This is an effective gap under the assumed curvature. Two temperatures cannot also identify a and b. To support single-parameter material cards Sansho retains the bulk reference Nc of 2.8 × 10¹⁹ cm⁻³. The implied Nv of 4.984 × 10¹⁹ cm⁻³ is conditional on that choice. The absolute intrinsic slab, material report and separate Eg, Nc and Nv overrides directly test this ambiguity. No acceptance current or capacitance has an output scale correction. [Reproducible inverse measurements](../verify/cider_extract.py)
+
+### What the switch pairs resolve
+
+The table uses the sensed test current divided by the control in the same run. Ratios are at 0.44 V unless indicated. These comparisons remove area and much of the intrinsic-density dependence.
+
+| Enabled effect | 44.2 | R20b | Interpretation |
+|---|---:|---:|---|
+| SRH | 1.45241 | 1.45138 | The explicit 2/3 ns lifetimes and the midgap SRH denominator reproduce the forward increment. Neither omitted lifetime occurs in these fixtures. |
+| ConcTau, with SRH, at 0.68 V | 1.47508 | 1.47509 | The lifetime law τ/(1 + N/Nref) with **total** ionized impurities and Nref = 10¹⁷ cm⁻³ matches the combined correction. Using only net doping in the compensated half reduces the predicted enabled current by about 17%. Separate electron/hole references require asymmetric junctions. |
+| Auger alone | 1.000000 | 1.000003 | Both 44.2 columns coincide to file precision over all 13 points. This cannot distinguish zero default coefficients from a switch interaction. The Dziewior–Schmid coefficients remain provisional. |
+| BGN | 2.09102 | 4.11597 | U ln(Ion/Ioff) is 19.08 meV in the reference. It is a transport-weighted shift across the two sides. Using only net doping in the current narrowing law still overpredicts enabled current by about 10%. A single concentration pair cannot determine both narrowing coefficients and thresholds. |
+| ConcMob | 0.37637 | 0.28795 | The net doping magnitude is 3 × 10¹⁷ cm⁻³ on both sides. Total impurities are 9 and 3 × 10¹⁷. The reference gives an effective minority mobility sum of about 693 cm²/(V·s), compared with the unswitched 1840. Net doping in the AR interpolation overpredicts enabled current by about 7%. |
+| FieldMob | 0.99290 | 0.99058 | The forward junction samples a range of fields. Uniform slabs measure each velocity–field curve directly. |
+| TempMob at 85 °C | 0.69286 | 0.68411 | The 44.2 ratio is constant across the sweep to the shown precision. It constrains a weighted mobility change. The off branch scores 0.003 and the enabled branch scores 6.307. |
+| Avalanche at −2 V | 1.04183 | 1.07734 | Reference currents are only about 30 aA and the enabled/control ratio falls below one at −1 V. These data give little leverage on absolute ionization coefficients. |
+
+The original temperature sweep at 0.45 V rises from 2.273 to 11.768 nA between 0 and 100 °C. The revised native 100 °C result is 14.91 µA. The fixed 85 °C unswitched voltage sweep independently constrains hot diffusion. The fresh fixed-temperature copies of the original 0.45 V fixture test whether initialization during a DC temperature sweep contributes to the discrepancy.
+
+### Geometry, contacts and access
+
+- **Mesh.** With location 2.4 µm and final node number 32, 62 or 122, the spacing is 2.4/(n − 1) µm. At −0.2 V the 44.2 capacitances are 22.23315, 22.06497 and 22.02650 fF. Sansho gives 22.23329, 22.06509 and 22.02662 fF. The uniform, mid-cell mesh semantics account for the measured refinement. Grading and bounds exactly on a vertex are separate experiments.
+- **Doping profile.** At 0.6 V the reference uniform, Gaussian and erfc currents are 9.514, 6.097 and 6.024 µA. R20b gives 9.369, 5.938 and 5.883 µA. For distance d from the constant box, Sansho uses z = (d − location)/char.length, with Gaussian exp(−z²) and complementary-error-function erfc(z) tails. The Gaussian/erfc ratio is 1.0121 in 44.2 and 1.0095 in Sansho. Each fixture includes SRH and ConcMob. The same-polarity resistor probes remove minority injection and the mobility switch when checking the tails.
+- **NUMD contacts.** Neutral ohmic ends with both quasi-Fermi potentials fixed to terminal voltage reproduce the unswitched finite-length diffusion branch. Junction C–V also measures loss from the neutral regions. At 10 MHz, [Re Y(f) − Re Y(1 kHz)]/(Im Y(f))² gives 177.5, 172.3 and 165.5 Ω in 44.2, compared with 193.9, 188.2 and 180.7 Ω in Sansho. This constrains series transport even though the capacitive currents pass. One slab length cannot separate bulk resistance and a contact contribution.
+- **NBJT orientation.** The physical stack in these decks has a lightly doped low-x end and a heavily doped high-x end. The 44.2 base/collector current ratio at 0.62 V is 1.383. The R20 ratio was 0.057. After mapping low x to emitter, the ratio is 1.320. Both DC collector curves pass with the new material calibration. The same end assignment applies to DC currents, displacement charges and intrinsic matrix rows and columns.
+- **Base access.** At 1 and 10 GHz the real part of the short-circuit base input impedance is 26.67 and 23.42 Ω in 44.2. Sansho gives 30.70 and 27.54 Ω. At 10 GHz the collector/base admittance ratio is −0.56974 − j0.03938 versus −0.56970 − j0.03788. The common series component is about 4 Ω at high frequency. These data contain one depth, area and access length. They cannot establish a constant resistance correction. Varying each geometry independently also tests which base vertex is contacted.
+- **Area.** All six decks specify DefA = 10⁻¹⁰ m² and unity instance area. C–V and absolute current are consistent with the conversion to 10⁻⁶ cm². Separate mask and instance sweeps check the area exponent and omitted mask default. Scaling the NBJT instance at fixed relative base area tests base-current scaling as well.
+
+The new fixtures and collection commands are indexed alongside the original probes. [R20b probe settings](../verify/probes/README.md#r20b-isolating-probes)

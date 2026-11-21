@@ -1,0 +1,19 @@
+Junction formed by a erfc acceptor profile
+* Provenance: original Sansho numerical-device fixture.
+* sweep: nominal 1
+Vdrive a 0 0
+Djunction a 0 crystal
+.model crystal numd level=1
++ options defa=1e-10 diode
++ x.mesh location=0 number=1
++ x.mesh location=2.4 number=62
++ domain number=1 material=1
++ material number=1 silicon tn=2n tp=3n
++ doping uniform n.type conc=1e+16
++ doping erfc p.type conc=4e+16 x.low=0 x.high=0.8 char.length=0.35
++ models srh concmob
++ end
+.options itl1=150 itl2=100
+.dc Vdrive -0.2 0.6 0.04
+.save i(vdrive)
+.end

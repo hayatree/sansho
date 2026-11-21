@@ -1,0 +1,41 @@
+Narrowing on the p side of an asymmetric junction
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: density 1e16 1e17 3e17 1e18
+* Use both polarities and the off pair to separate the donor and acceptor narrowing terms.
+.param probe=1e16
+Vdrive drive 0 0
+Voff drive node_off 0
+Doff node_off 0 moff
+.model moff numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc={probe} x.high=1.2
++ doping uniform n.type conc=3e19 x.low=1.2
++ mobility material=1 electron majority mumax=1000
++ mobility material=1 electron minority mumax=1000
++ mobility material=1 hole majority mumax=500
++ mobility material=1 hole minority mumax=500
++ end
+Von drive node_on 0
+Don node_on 0 mon
+.model mon numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc={probe} x.high=1.2
++ doping uniform n.type conc=3e19 x.low=1.2
++ mobility material=1 electron majority mumax=1000
++ mobility material=1 electron minority mumax=1000
++ mobility material=1 hole majority mumax=500
++ mobility material=1 hole minority mumax=500
++ models bgn
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.dc Vdrive 0.30 0.54 0.03
+.save i(voff) i(von)
+.end

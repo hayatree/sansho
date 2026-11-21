@@ -27,7 +27,7 @@
 
 - GUI / schematic editor (use Xschem etc.)
 - fast-SPICE approximations that trade accuracy (table models, partitioned approximations)
-- Full XSPICE library compatibility and numerical device simulation (CIDER equivalent)
+- Full XSPICE library compatibility and two-dimensional numerical device simulation
 
 ---
 
@@ -648,7 +648,7 @@ propagation in transient. [Line equations and compatibility](distributed-lines.m
 ### Not yet supported
 
 T-line IC tuples, pole-zero extraction for distributed delays, JFET level two,
-full MOS2/MOS3 short-channel corrections, interactive Nutmeg, CIDER and an OSDI
+full MOS2/MOS3 short-channel corrections, interactive Nutmeg, 2-D CIDER and an OSDI
 loader remain outside the current implementation. [Compatibility and numerical differences](compatibility.md)
 
 ---

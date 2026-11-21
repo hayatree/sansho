@@ -978,7 +978,11 @@ impl Flat<'_> {
                             .tokens
                             .get(2)
                             .is_some_and(|t| matches!(t.lower().as_str(), "txl" | "cpl"));
-                        let deferred = !kspice
+                        let cider = line.tokens.get(2).is_some_and(|t| {
+                            matches!(t.lower().as_str(), "numd" | "nbjt" | "numos")
+                        });
+                        let deferred = !cider
+                            && !kspice
                             && !analog
                             && line.tokens.get(3..).is_some_and(|tail| {
                                 tail.chunks(3).any(|kv| {
@@ -1002,7 +1006,7 @@ impl Flat<'_> {
                         }
                         let mut toks = if analog {
                             self.substitute(&crate::xspice::brackets(&line.tokens), scope)
-                        } else if kspice {
+                        } else if cider || kspice {
                             self.substitute(&line.tokens, scope)
                         } else if substituted || deferred {
                             line.tokens.clone()
