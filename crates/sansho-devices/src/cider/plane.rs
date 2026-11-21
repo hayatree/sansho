@@ -2,7 +2,7 @@
 //! Provenance: Selberherr (1984), box integration; ngspice 44 manual §§26.2–26.7, 26.16–26.19.
 
 use super::{Fields, bounds, id, invalid};
-use crate::cider::EPS_SI;
+use crate::{CHARGE, cider::EPS_SI};
 use sansho_diag::Diagnostic;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -42,10 +42,12 @@ pub(in crate::cider) struct SurfaceTrap {
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::cider) struct Surface {
-    // Interface doping determines the default depth. The field stencil is local
-    // to the transport edge and uses the nearest silicon neighbors.
+    // Each tagged rectangular cell supplies one half of its transverse width.
     pub interface: [usize; 2],
-    pub normal_weights: [f64; 2],
+    pub normal_inverse: f64,
+    pub normal_offset: f64,
+    pub cell: usize,
+    pub width: f64,
     pub stencil: [usize; 4],
     pub depth: f64,
     pub layer: f64,
@@ -370,91 +372,102 @@ impl Mesh<'_> {
                 let start = if tangent_x { i } else { j };
                 let normal = if tangent_x { ym } else { xm };
                 let midpoint = 0.5 * (axis[start] + axis[start + 1]);
+                // A paired Si/oxide face has the measured sheet 2 q Qf.
+                // Exterior boundaries keep the chapter 26 areal-charge input.
+                let charge_units = if neighbor.is_some() { 2. * CHARGE } else { 1. };
+                let mut charge = 0.;
                 for (vertex, lo, hi) in [(l, axis[start], midpoint), (r, midpoint, axis[start + 1])]
                 {
-                    integrate_boundary(
+                    charge += integrate_boundary(
                         &mut vertices[vertex],
                         lo,
                         hi,
                         tangent_x,
                         normal,
-                        matching.clone().map(|(_, r)| r),
+                        matching.clone().map(|(_, r)| (r, r.domain == c.id)),
+                        charge_units,
                     );
                 }
-                let rule = matching.clone().find(|(_, r)| {
-                    r.bounds.contains(xm, ym) && r.fields.values.contains_key("layer.width")
-                });
-                if neighbor.is_some()
-                    && (rule.is_some()
-                        || !matching
-                            .clone()
-                            .any(|(_, r)| r.fields.values.contains_key("layer.width")))
+                if let Some(oxide) = neighbor
+                    && ends.iter().all(|&k| vertices[k].port.is_none())
+                    && let Some((order, rule)) = matching.clone().find(|(_, r)| {
+                        r.domain == c.id
+                            && r.fields.values.contains_key("layer.width")
+                            && r.bounds.contains(xm, ym)
+                    })
                 {
-                    let step = -di - dj * nx as isize;
-                    let layer = rule.map_or(0., |(_, r)| r.fields.get("layer.width", 0.)) * 1e-4;
                     strips.push((
-                        rule.map_or(usize::MAX, |r| r.0),
+                        order,
                         ends,
-                        (i, j, di, dj, step),
-                        layer,
+                        (i, j, di, dj),
+                        rule.fields.get("layer.width", 0.),
+                        oxide.eps / c.eps,
+                        -charge / ((axis[start + 1] - axis[start]) * 1e-4 * c.eps),
                     ));
                 }
             }
         }
         strips.sort_by_key(|s| s.0);
-        for (_, ends, (mut i, mut j, di, dj, step), layer) in strips {
+        for (_, ends, (mut i, mut j, di, dj), layer, ratio, offset) in strips {
+            let step = -di - dj * nx as isize;
+            let outside = ends.map(|k| k.saturating_add_signed(-step));
+            let distance = |u: usize, v: usize| {
+                ((x[u % nx] - x[v % nx]).abs() + (y[u / nx] - y[v / nx]).abs()) * 1e-4
+            };
+            let oxide_inverse = 0.5 * ratio / distance(ends[0], outside[0]);
+            let mut previous = None;
             let mut here = ends;
             let mut depth = 0.;
-            let mut previous: Option<([usize; 2], f64)> = None;
-            while cells[i + nc * j].is_some_and(|c| c.silicon) {
-                let spacing = if di == 0 {
-                    y[j + 1] - y[j]
-                } else {
-                    x[i + 1] - x[i]
-                } * 1e-4;
-                let inner = here.map(|k| k.saturating_add_signed(step));
-                if layer > 0. && depth > layer {
+            loop {
+                if layer > 0. && depth >= layer {
                     break;
                 }
-                // Derivative of the quadratic interpolant on unequal intervals.
-                let (outer, normal_weights) = if let Some((outer, h)) = previous {
-                    (
-                        outer,
-                        [
-                            -spacing / (h * (spacing + h)),
-                            h / (spacing * (spacing + h)),
-                        ],
-                    )
+                let dx = (x[i + 1] - x[i]) * 1e-4;
+                let dy = (y[j + 1] - y[j]) * 1e-4;
+                let (spacing, tangent) = if di == 0 { (dy, dx) } else { (dx, dy) };
+                let inner = here.map(|k| k.saturating_add_signed(step));
+                let next = i
+                    .checked_add_signed(-di)
+                    .zip(j.checked_add_signed(-dj))
+                    .filter(|&(u, v)| {
+                        u < nc && v < ny - 1 && cells[u + v * nc].is_some_and(|c| c.silicon)
+                    });
+                let deeper = next.map(|_| inner.map(|k| k.saturating_add_signed(step)));
+                // Tangential flux samples the normal potential derivative at its row.
+                // At the interface use Gauss's jump condition on the oxide displacement.
+                let outer = previous.unwrap_or(outside);
+                let top = if here == ends {
+                    (outside, ends, oxide_inverse, offset)
                 } else {
-                    (here, [0., 1. / spacing])
+                    (outer, inner, 0.5 / distance(outer[0], inner[0]), 0.)
                 };
-                let surface = Surface {
-                    interface: ends,
-                    normal_weights,
-                    stencil: [outer[0], outer[1], inner[0], inner[1]],
-                    depth,
-                    layer,
-                };
-                if let Some(face) = faces.get_mut(&here) {
-                    face.layers.push(surface);
-                }
-                let outer_edge = here;
-                previous = Some((here, spacing));
-                here = inner;
-                depth += spacing;
-                let next = i.checked_add_signed(-di).zip(j.checked_add_signed(-dj));
-                let Some((u, v)) = next.filter(|&(u, v)| {
-                    u < nc && v < ny - 1 && cells[u + nc * v].is_some_and(|c| c.silicon)
-                }) else {
-                    // One-sided silicon derivative on the far boundary.
-                    if let Some(face) = faces.get_mut(&inner) {
+                let far = deeper.unwrap_or(inner);
+                let bottom = (here, far, 0.5 / distance(here[0], far[0]), 0.);
+                let middle = (here, inner, 0.5 / spacing, 0.);
+                for (mut edge, width, (outer, far, inv, normal_offset)) in [
+                    (here, spacing, top),
+                    (inner, spacing, bottom),
+                    ([here[0], inner[0]], tangent, middle),
+                    ([here[1], inner[1]], tangent, middle),
+                ] {
+                    edge.sort();
+                    if let Some(face) = faces.get_mut(&edge) {
                         face.layers.push(Surface {
-                            normal_weights: [-1. / spacing, 0.],
-                            stencil: [outer_edge[0], outer_edge[1], inner[0], inner[1]],
+                            interface: ends,
+                            cell: i + nc * j,
+                            normal_inverse: inv,
+                            normal_offset,
+                            stencil: [outer[0], outer[1], far[0], far[1]],
+                            width: width * 0.5,
                             depth,
-                            ..surface
+                            layer,
                         });
                     }
+                }
+                previous = Some(here);
+                here = inner;
+                depth += spacing;
+                let Some((u, v)) = next else {
                     break;
                 };
                 (i, j) = (u, v);
@@ -511,10 +524,12 @@ fn integrate_boundary<'a>(
     hi: f64,
     tangent_x: bool,
     normal: f64,
-    rules: impl Iterator<Item = &'a Interface<'a>> + Clone,
-) {
+    rules: impl Iterator<Item = (&'a Interface<'a>, bool)> + Clone,
+    charge_units: f64,
+) -> f64 {
+    let mut charge = 0.;
     let mut cuts = vec![lo, hi];
-    for rule in rules.clone() {
+    for (rule, _) in rules.clone() {
         let (start, end) = if tangent_x {
             rule.bounds.x
         } else {
@@ -536,18 +551,21 @@ fn integrate_boundary<'a>(
         } else {
             (normal, mid)
         };
-        let mut params = [0.; 3];
-        for rule in rules.clone().filter(|r| r.bounds.contains(x, y)) {
-            for (v, key) in params.iter_mut().zip(["qf", "sn", "sp"]) {
-                *v = rule.fields.get(key, *v);
+        let (mut qf, mut sn, mut sp) = (0., 0., 0.);
+        for (rule, silicon_side) in rules.clone().filter(|(r, _)| r.bounds.contains(x, y)) {
+            if silicon_side {
+                qf = rule.fields.get("qf", qf);
             }
+            sn = rule.fields.get("sn", sn);
+            sp = rule.fields.get("sp", sp);
         }
-        let [qf, sn, sp] = params;
-        p.fixed += length * qf;
+        charge += length * (charge_units * qf);
         if sn > 0. && sp > 0. {
             p.traps.push(SurfaceTrap { length, sn, sp });
         }
     }
+    p.fixed += charge;
+    charge
 }
 
 fn port(number: f64, count: usize) -> Result<usize, Diagnostic> {

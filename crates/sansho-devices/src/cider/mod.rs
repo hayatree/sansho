@@ -213,7 +213,7 @@ impl Numerical {
                 0.
             };
             let ni = ni * (narrowing / (2. * vt)).exp();
-            let mu = mobility(&s, net, dop, temp / 300.)?;
+            let mu = mobility(&s, dop, temp / 300.)?;
             let tau = if s.enabled("conctau") {
                 std::array::from_fn(|k| {
                     lifetimes[k] / (1. + dop / s.material(["srh.nref", "srh.pref"][k], 1e17))
@@ -288,26 +288,50 @@ impl Numerical {
         }
         if let Some(plane) = &s.plane {
             for f in &plane.faces {
-                let surface = f.layers.iter().copied().find(|sf| {
-                    let density = sf
-                        .interface
-                        .map(|i| points[i].net.abs())
-                        .into_iter()
-                        .fold(ni, f64::max);
-                    let layer = if sf.layer > 0. {
-                        sf.layer
-                    } else {
-                        (eps * vt / (CHARGE * density)).sqrt()
-                    };
-                    s.enabled("surfmob") && sf.depth <= layer
-                });
-                edges.push(Edge {
-                    ends: f.ends,
-                    length: f.length,
-                    dielectric: f.dielectric,
-                    conducting: f.conducting,
-                    surface,
-                });
+                let mut remaining = f.conducting;
+                let mut dielectric = f.dielectric;
+                // Two cells can contribute different mobilities to one control face.
+                // Stamp its full displacement once and each conducting width once.
+                let mut assigned = Vec::new();
+                if s.enabled("surfmob") {
+                    for &sf in &f.layers {
+                        if assigned.contains(&sf.cell) {
+                            continue;
+                        }
+                        let density = sf
+                            .interface
+                            .map(|i| points[i].net.abs())
+                            .into_iter()
+                            .fold(ni, f64::max);
+                        let layer = if sf.layer > 0. {
+                            sf.layer
+                        } else {
+                            (eps * vt / (CHARGE * density)).sqrt()
+                        };
+                        if sf.depth >= layer * (1. - 16. * f64::EPSILON) {
+                            continue;
+                        }
+                        assigned.push(sf.cell);
+                        edges.push(Edge {
+                            ends: f.ends,
+                            length: f.length,
+                            dielectric,
+                            conducting: sf.width,
+                            surface: Some(sf),
+                        });
+                        dielectric = 0.;
+                        remaining -= sf.width;
+                    }
+                }
+                if remaining > f.conducting * f64::EPSILON || dielectric > 0. {
+                    edges.push(Edge {
+                        ends: f.ends,
+                        length: f.length,
+                        dielectric,
+                        conducting: remaining.max(0.),
+                        surface: None,
+                    });
+                }
             }
             equilibrium::planar(&mut points, &edges, vt)?;
         } else {
@@ -599,11 +623,8 @@ impl Numerical {
         let v = std::array::from_fn(|k| Dual::var(lin[k], k));
         let normal = if let Some(sf) = e.surface {
             let [a, b, c, d] = sf.stencil.map(|i| self.points[i].psi0);
-            let [l, r] = e.ends.map(|i| self.points[i].psi0);
-            let center = v[0] + v[3] + (l + r);
-            ((v[6] + v[7] + (a + b) - center) * sf.normal_weights[0]
-                + (v[8] + v[9] + (c + d) - center) * sf.normal_weights[1])
-                * 0.5
+            ((v[8] - v[6] + (c - a)) + (v[9] - v[7] + (d - b))) * sf.normal_inverse
+                + sf.normal_offset
         } else {
             Dual::cst(0.)
         };
@@ -676,16 +697,12 @@ fn bernoulli<const N: usize>(x: Dual<N>) -> Dual<N> {
     }
 }
 
-fn mobility(s: &Structure, net: f64, dop: f64, t: f64) -> Result<[f64; 2], Diagnostic> {
+fn mobility(s: &Structure, dop: f64, t: f64) -> Result<[f64; 2], Diagnostic> {
     let t = if s.enabled("tempmob") { t } else { 1. };
     let mut result = [0.; 2];
     for (k, mu) in result.iter_mut().enumerate() {
-        let class = if s.plane.is_some() {
-            usize::from(if k == 0 { net < 0. } else { net >= 0. })
-        } else {
-            k
-        };
-        let p = &s.mobility[k][class];
+        // Both line and planar slabs select electron majority and hole minority.
+        let p = &s.mobility[k][k];
         let min = p.get("mumin", 0.);
         let max = p.get("mumax", 0.);
         let reference = p.get("ntref", 0.);

@@ -994,7 +994,7 @@ python3 -B verify/compare_vbic.py --pattern 'r21_*' --out verify/out/r21/native
 
 ## R21b follow-up experiments
 
-The eleven templates below contain 40 settings. Each setting runs natively. New 44.2 reference raws are needed for comparison. Use a CIDER-enabled 44.2 executable with Sparse and retain both components of AC source currents. [Measured laws and outstanding differences](../../docs/cider.md#r21b-measurements-against-ngspice-442)
+The eleven templates below contain 40 settings. All settings run natively. R21c passes 28 of the 38 settings with reference waveforms. The two recessed gate-end runs produced empty logs and raws. Use a CIDER-enabled 44.2 executable with Sparse and retain both components of AC source currents. [Measured laws and outstanding differences](../../docs/cider.md#r21c-measurements-against-ngspice-442)
 
 | Template | Sweep | What to compare |
 |---|---|---|
@@ -1010,7 +1010,7 @@ The eleven templates below contain 40 settings. Each setting runs natively. New 
 | `r21b_bulk_class` | Uniform concentration 10¹⁵, 10¹⁶, 10¹⁷ cm⁻³ | Extract μ from the real low-frequency slab admittance. Each polarity has an omitted, majority-override and minority-override branch. |
 | `r21b_lateral_shape` | Ratio.Lat = 0.25, 0.5, 1 | Compare the omitted lateral implant against rotation and all five separable profiles. A displaced exponential primary breaks the zero-offset Gaussian degeneracy. |
 
-The native recessed-contact control gives 18.39744 fF for both footprints at zero recess. At 2 nm recess the full and inset values are 21.71061 and 18.39744 fF. At lateral ratio 0.5 the explicit rotate, uniform, linear, Gaussian, erfc and exponential branches give 245.131, 144.290, 164.721, 188.552, 183.058 and 213.005 µS. These predictions give distinct comparisons from a single oracle run. For the charge-number test the clean, positive-sheet-equivalent and negative-sheet-equivalent controls give 12.25658, 10.33017 and 15.23812 fF at 1 MHz.
+Before collection, the R21b native recessed-contact control gave 18.39744 fF for both footprints at zero recess. At 2 nm recess the full and inset values were 21.71061 and 18.39744 fF. At lateral ratio 0.5 its explicit rotate, uniform, linear, Gaussian, erfc and exponential branches gave 245.131, 144.290, 164.721, 188.552, 183.058 and 213.005 µS. These predictions give distinct comparisons from a single oracle run. For the charge-number test the clean, positive-sheet-equivalent and negative-sheet-equivalent controls give 12.25658, 10.33017 and 15.23812 fF at 1 MHz.
 
 Collect the oracle settings on the reference host and replay with a current release build from the repository root.
 

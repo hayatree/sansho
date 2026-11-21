@@ -457,13 +457,8 @@ impl Structure {
             None if planar => Fields::default(),
             None => return Err(invalid("undefined silicon material")),
         };
-        let mut mobility: [[Fields; 2]; 2] = std::array::from_fn(|k| {
-            std::array::from_fn(|class| {
-                // R21b planar junctions and the inversion channel reproduce the
-                // R20 active pair. Explicit planar classes remain independent.
-                Fields::bulk(k, if planar { k } else { class }, None)
-            })
-        });
+        let mut mobility: [[Fields; 2]; 2] =
+            std::array::from_fn(|k| std::array::from_fn(|class| Fields::bulk(k, class, None)));
         // [MUS, theta_A, theta_B] from the 300.15 K silicon material report.
         let mut surface_params = [[991., 2.67e-6, 4.18e-14], [240., 3.07e-6, 0.]];
         for f in mobility_cards {
@@ -480,7 +475,8 @@ impl Structure {
                 surface_params[k][0] = f.positive("mus", surface_params[k][0])?;
                 for (i, key) in [(1, "ec.a"), (2, "ec.b")] {
                     if f.values.contains_key(key) {
-                        surface_params[k][i] = 1. / f.positive(key, 0.)?;
+                        let inverse = 1. / f.positive(key, 0.)?;
+                        surface_params[k][i] = if i == 2 { inverse * inverse } else { inverse };
                     }
                 }
                 for (minority, params) in classes.iter_mut().enumerate() {
@@ -535,7 +531,9 @@ impl Structure {
             let mut lateral = ["rotate", "unif", "lin", "gauss", "erfc", "exp"]
                 .into_iter()
                 .filter(|k| f.flag(&format!("lat.{k}")));
-            let lat = lateral.next().unwrap_or("rotate");
+            let lat = lateral
+                .next()
+                .unwrap_or(if planar { shape } else { "rotate" });
             if lateral.next().is_some() {
                 return Err(invalid("conflicting lateral doping profiles"));
             }
@@ -566,7 +564,14 @@ impl Structure {
                 let c = if lat == "rotate" {
                     profile(shape, d.hypot(l), peak, len)
                 } else {
-                    profile(shape, d, peak, len) * profile(lat, l, peak, len)
+                    let lateral_factor = match lat {
+                        _ if !planar => profile(lat, l, peak, len),
+                        "uniform" | "unif" => f64::from(l <= peak),
+                        "linear" | "lin" => 1.,
+                        "erfc" => erfc(((l - peak) / len).abs()),
+                        _ => profile(lat, l, peak, len),
+                    };
+                    profile(shape, d, peak, len) * lateral_factor
                 } * conc
                     * weight;
                 impurities[i] += c;

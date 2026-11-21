@@ -195,19 +195,24 @@ fn invalid_planar_geometry_is_diagnosed_before_solve() {
 #[test]
 fn split_gate_and_sheet_charge_shift_flatband() {
     let base = CAP.replace("{probe}", "4.8");
-    // A positive uniform sheet lowers the flatband voltage by Qf/Cox.
-    let sheet = 1.8e-8;
+    // The measured physical sheet on a Si-first face is twice q times the input.
+    let sheet = 1e11;
     let charged = base.replace(
         "+ end",
         &format!("+ interface dom=1 neigh=2 qf={sheet}\n+ end"),
     );
     let shifted = base
-        .replace("workf=4.8", &format!("workf={}", 4.8 - sheet / COX))
+        .replace(
+            "workf=4.8",
+            &format!("workf={}", 4.8 - 2. * sansho_devices::CHARGE * sheet / COX),
+        )
         .replace(
             "num=1 iy.h=1",
             "num=1 iy.h=1 ix.h=2\n+ electrode num=1 iy.h=1 ix.l=2",
         );
     let capacitance = |deck| run(deck, 1).complex("i(vgate)").unwrap()[0].1;
+    let reversed = charged.replace("dom=1 neigh=2", "dom=2 neigh=1");
+    assert_eq!(capacitance(&reversed), capacitance(&base));
     assert!((capacitance(&charged) / capacitance(&shifted) - 1.).abs() < 1e-7);
 }
 
@@ -250,6 +255,20 @@ fn inverter_gate_displacement_and_drain_current() {
     }
     let v = result.real("v(d)").unwrap();
     assert!(v[0] > 0.28 && v.iter().any(|&x| x < 0.05) && v.last().unwrap() > &0.24);
+}
+
+#[test]
+fn full_depth_surface_strip_has_two_bulk_contact_columns_in_series() {
+    let deck =
+        include_str!("../../../verify/probes/r21b_surface_depth.cir").replace("{probe}", "0.002");
+    let ac = run(&deck, 1);
+    let conductance = |name| -ac.complex(name).unwrap()[0].0;
+    let bulk = conductance("i(vbulk)");
+    assert_eq!(conductance("i(vautomatic)"), bulk);
+    assert_eq!(conductance("i(vox)"), bulk);
+    // Four equal columns. The two middle columns have MUS = 300.
+    let ratio = 2. / (1. + 1340. / 300.);
+    assert!((conductance("i(vsi)") / bulk - ratio).abs() < 1e-8);
 }
 
 #[test]
