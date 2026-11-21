@@ -1355,9 +1355,9 @@ impl Parser {
     }
 
     fn bjt(&mut self, line: &Line) -> Option<ElementKind> {
-        let usage = "Qname nc nb ne [ns] model [area] [off]";
+        let usage = "Qname nc nb ne [ns [tj]] model [area] [off]";
         let f = self.device_fields(line)?;
-        if f.positional.len() < 4 || f.positional.len() > 6 {
+        if f.positional.len() < 4 || f.positional.len() > 7 {
             return self.arity(line, usage);
         }
         let p = &f.positional;
@@ -1368,6 +1368,7 @@ impl Parser {
             b: node_name(&p[1]),
             e: node_name(&p[2]),
             s: None,
+            tj: None,
             model: String::new(),
             params: f.params,
             off: f.off,
@@ -1479,8 +1480,13 @@ impl Parser {
                 };
                 continue;
             }
-            let is_model = |t: &Token| self.models.iter().any(|m| m.name == t.lower());
-            let (sub, model, rest) = if is_model(&tail[0]) || tail.len() == 1 {
+            let card = |t: &Token| self.model_names.get(&t.lower()).map(|&i| &self.models[i]);
+            let is_model = |t: &Token| card(t).is_some();
+            let five = tail.get(2).and_then(card).is_some_and(ModelCard::is_vbic);
+            let thermal = five.then(|| node_name(&tail[1]));
+            let (sub, model, rest) = if five {
+                (Some(node_name(&tail[0])), &tail[2], &tail[3..])
+            } else if is_model(&tail[0]) || tail.len() == 1 {
                 (None, &tail[0], &tail[1..])
             } else if tail.len() >= 2
                 && (is_model(&tail[1]) || parse_number(&tail[1].text).is_none())
@@ -1489,6 +1495,7 @@ impl Parser {
             } else {
                 (None, &tail[0], &tail[1..])
             };
+            let vbic = card(model).is_some_and(ModelCard::is_vbic);
             let model = model.lower();
             let mut area = Vec::new();
             match rest {
@@ -1511,14 +1518,29 @@ impl Parser {
                 kind:
                     ElementKind::Bjt {
                         s,
+                        tj,
                         model: m,
                         params,
                         ..
                     },
+                ic,
                 ..
             }) = self.elements.get_mut(idx)
             {
                 *s = sub;
+                *tj = thermal;
+                if vbic {
+                    params.retain(|(key, value)| {
+                        let slot = match key.as_str() {
+                            "icvbe" => 0,
+                            "icvce" => 1,
+                            _ => return true,
+                        };
+                        ic.resize(2, 0.);
+                        ic[slot] = *value;
+                        false
+                    });
+                }
                 *m = model;
                 for a in area.into_iter().rev() {
                     params.insert(0, a);

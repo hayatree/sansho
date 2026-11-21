@@ -1,0 +1,12 @@
+External thermal shunt with zero and finite model RTH
+* Provenance: original Sansho R15b circuit.
+* sweep: rth 0 100 500
+.param probe=0
+Vc c 0 2
+Vb b 0 .7
+Rcase tj 0 200
+Q1 c b 0 0 tj dev
+.model dev npn(level=4 selft=1 re=4 rth={probe})
+.dc Vb .6 .75 .01
+.save v(tj) i(Vc)
+.end

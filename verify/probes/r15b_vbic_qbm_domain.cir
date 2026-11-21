@@ -1,0 +1,11 @@
+QBM selector domain and branch threshold at high injection
+* Provenance: original Sansho R15b circuit.
+* sweep: qbm -1 0 .49 .51 1 2
+.param probe=0
+Vc c 0 .1
+Vb b 0 .75
+Q1 c b 0 dev
+.model dev npn(level=4 vef=2 ver=3 ikf=1m ikr=1m nkf=.7 qbm={probe})
+.dc Vb .65 .8 .025
+.save i(Vc) i(Vb)
+.end

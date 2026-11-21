@@ -1,0 +1,14 @@
+Epitaxial resistance domain against the omitted default
+* Provenance: original Sansho R15b circuit.
+* sweep: rci -1 0 .1 1
+.param probe=0
+Vc c 0 2
+Vref cr 0 2
+Vb b 0 .1 ac 1
+Q1 c b 0 dev
+Qr cr b 0 ref
+.model dev npn(level=4 cjc=5p rci={probe})
+.model ref npn(level=4 cjc=5p)
+.ac dec 4 100meg 10G
+.save i(Vc) i(Vref)
+.end

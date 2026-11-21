@@ -1,0 +1,11 @@
+Normalized base charge and VEF
+* Provenance: original Sansho R15 circuit.
+* sweep: vef 0 10 100
+.param probe=0
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=1e-18 ikf=3m ikr=1m ver=10 vef={probe})
+.dc Vc -.1 2 .05 Vb .65 .8 .05
+.save i(Vc) i(Vb)
+.end

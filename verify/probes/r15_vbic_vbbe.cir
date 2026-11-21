@@ -1,0 +1,11 @@
+Emitter breakdown near the reverse knee
+* Provenance: original Sansho R15 circuit.
+* sweep: vbbe 3.5 4 4.5
+.param probe=3.5
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 nbbe=1.5 ibbe=1u vbbe={probe})
+.dc Vb -4.2 -2.5 .025
+.save i(Vb)
+.end

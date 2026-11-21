@@ -36,6 +36,7 @@ mod sources;
 pub mod temperature;
 pub mod urc;
 pub mod va;
+pub mod vbic;
 pub mod vdmos;
 pub mod waveform;
 pub mod xspice;

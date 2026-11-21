@@ -1,0 +1,11 @@
+Temperature mapping of EA
+* Provenance: original Sansho R15 circuit.
+* sweep: ea .95 1.05 1.15
+.param probe=.95
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=2e-18 iben=2e-13 nen=2 tnom=20 ea={probe})
+.dc temp -20 100 10
+.save i(Vc) i(Vb)
+.end

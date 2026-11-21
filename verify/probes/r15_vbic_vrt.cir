@@ -1,0 +1,11 @@
+Reverse collector depletion reach-through
+* Provenance: original Sansho R15 circuit.
+* sweep: vrt 0 .5 2
+.param probe=0
+Vc c 0 2
+Vb b 0 .70 ac 1
+Q1 c b 0 dev
+.model dev npn(level=4 cjc=8p pc=.75 mc=.4 art=.04 vrt={probe})
+.ac dec 8 100k 10G
+.save i(Vc) i(Vb)
+.end

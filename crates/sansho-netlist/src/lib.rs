@@ -356,7 +356,7 @@ pub enum ElementKind {
         /// `off` flag (initial guess hint for the operating point).
         off: bool,
     },
-    /// `Qxxx nc nb ne [ns] model [area] [off] [key=value ...]`
+    /// `Qxxx nc nb ne [ns [tj]] model [area] [off] [key=value ...]`
     Bjt {
         /// Collector.
         c: String,
@@ -366,6 +366,9 @@ pub enum ElementKind {
         e: String,
         /// Substrate (ground when omitted).
         s: Option<String>,
+        /// VBIC junction temperature rise (optional fifth terminal).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tj: Option<String>,
         /// Model name (lower-cased).
         model: String,
         /// Instance parameters.
@@ -436,6 +439,19 @@ pub struct ModelCard {
     pub span: Span,
 }
 
+impl ModelCard {
+    /// True for a native level-four bipolar card, honoring the last LEVEL.
+    pub fn is_vbic(&self) -> bool {
+        matches!(self.kind.as_str(), "npn" | "pnp")
+            && self
+                .params
+                .iter()
+                .rev()
+                .find(|(k, _)| k == "level")
+                .is_some_and(|(_, v)| *v == 4.)
+    }
+}
+
 impl ElementKind {
     /// Terminal nodes of the element (output and controlling nodes).
     pub fn nodes(&self) -> Vec<&str> {
@@ -490,11 +506,12 @@ impl ElementKind {
                 vec![p, n, cp, cn]
             }
             Self::Diode { p, n, .. } => vec![p, n],
-            Self::Bjt { c, b, e, s, .. } => {
+            Self::Bjt { c, b, e, s, tj, .. } => {
                 let mut v: Vec<&str> = vec![c, b, e];
                 if let Some(s) = s {
                     v.push(s);
                 }
+                v.extend(tj.as_deref());
                 v
             }
             Self::Mosfet { d, g, s, b, .. } => vec![d, g, s, b],

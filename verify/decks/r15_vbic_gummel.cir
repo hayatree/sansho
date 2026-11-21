@@ -1,0 +1,10 @@
+Vertical NPN forward Gummel characteristics
+* Provenance: original Sansho R15 circuit.
+* verify: rtol=1e-8 atol_i=1p
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 is=2e-16 ibei=1e-18 iben=2e-15 nen=1.9 ikf=25m vef=75)
+.dc Vb .35 .82 .01
+.save i(Vc) i(Vb)
+.end

@@ -13,6 +13,7 @@ use sansho_devices::bsim3::Bsim3s;
 use sansho_devices::bsim4::{Binding, Bsim4s, PreparedModel};
 use sansho_devices::diode::DiodeModel;
 use sansho_devices::mos1::{Mos1Geometry, Mos1Model};
+use sansho_devices::vbic::{Model as VbicModel, Vbics};
 use sansho_devices::{
     Bjts, Capacitors, Cccs, Ccvs, CurrentSources, DeviceGroup, Diodes, Inductors, ModelParams,
     Mos1s, Node, Resistors, Slots, StampBuilder, StampLayout, Unknowns, Vccs, Vcvs, VoltageSources,
@@ -591,8 +592,23 @@ pub(crate) fn compile_cached(
     let mut node_names: Vec<String> = Vec::new();
     let mut touches = Vec::<usize>::new();
     let digital_ports = crate::digital::Ports::check(nl)?;
+    let vbic_thermal: HashMap<_, _> = nl
+        .models
+        .iter()
+        .filter(|m| m.is_vbic())
+        .map(|m| {
+            let p = ModelParams::new(&m.params);
+            (
+                m.name.as_str(),
+                p.get("selft", 0.) == 1. && p.get("rth", 0.) > 0.,
+            )
+        })
+        .collect();
     let mut grounded = digital_ports.grounded_dac;
     for e in &nl.elements {
+        if let ElementKind::Bjt { model, s: None, .. } = &e.kind {
+            grounded |= vbic_thermal.contains_key(model.as_str());
+        }
         for n in e.kind.nodes() {
             if digital_ports.digital.contains_key(n) {
                 continue;
@@ -779,6 +795,16 @@ pub(crate) fn compile_cached(
                 let b = g_id(node(e.kind.nodes()[2]));
                 dc.union(p, n);
                 dc.union(n, b);
+                if let ElementKind::Bjt { s, tj, model, .. } = &e.kind
+                    && let Some(&heated) = vbic_thermal.get(model.as_str())
+                {
+                    dc.union(n, g_id(s.as_deref().and_then(&node)));
+                    if heated && let Some(i) = tj.as_deref().and_then(&node) {
+                        dc.union(i, nn);
+                        // The internal thermal shunt and power source terminate here.
+                        touches[i] += 1;
+                    }
+                }
             }
             ElementKind::Vdmos {
                 d, s, thermal_pins, ..
@@ -1307,7 +1333,23 @@ fn instance_temperature(
     nominal: Option<f64>,
 ) -> Result<sansho_devices::temperature::Temperature, Diagnostic> {
     let kelvin = inst.get("temp", opts.temp + inst.get("dtemp", 0.)) + 273.15;
-    let nominal = nominal.unwrap_or(opts.tnom) + 273.15;
+    device_temperature(kelvin, nominal.unwrap_or(opts.tnom))
+}
+
+fn vbic_temperature(
+    inst: &ModelParams,
+    opts: &SimOptions,
+    nominal: Option<f64>,
+) -> Result<sansho_devices::temperature::Temperature, Diagnostic> {
+    let kelvin = inst.get("temp", opts.temp) + inst.get("dtemp", 0.) + 273.15;
+    device_temperature(kelvin, nominal.unwrap_or(opts.tnom))
+}
+
+fn device_temperature(
+    kelvin: f64,
+    nominal_c: f64,
+) -> Result<sansho_devices::temperature::Temperature, Diagnostic> {
+    let nominal = nominal_c + 273.15;
     if ![kelvin, nominal].iter().all(|v| v.is_finite() && *v > 0.) {
         return Err(Diagnostic::error(
             "E-ELAB-PARAM",
@@ -1369,6 +1411,8 @@ fn native_groups<'a>(
     let mut f_src = Chunked::<Cccs>::new(CHUNK_LINEAR);
     let mut h_src = Chunked::<Ccvs>::new(CHUNK_LINEAR);
     let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
+    let mut vbics = Chunked::<Vbics>::new(CHUNK_NONLINEAR);
+    let mut vbic_models = HashMap::new();
     let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
     let mut classic_mos = [1, 2, 3, 6, 9, 4, 5].map(|_| Chunked::<Mos1s>::new(CHUNK_NONLINEAR));
     let mut bsim3 = Chunked::<Bsim3s>::new(CHUNK_NONLINEAR);
@@ -2056,14 +2100,64 @@ fn native_groups<'a>(
                 b,
                 e: em,
                 s,
+                tj,
                 model,
                 params,
                 off,
             } => {
+                let inst = ModelParams::new(params);
+                if let Some(card) = model_cache.card(model).filter(|c| c.is_vbic()) {
+                    let bound = vbic_models.entry(model.as_str()).or_insert_with(|| {
+                        let p = ModelParams::new(&card.params);
+                        let m =
+                            VbicModel::from_params(&p, if card.kind == "pnp" { -1. } else { 1. });
+                        ModelCache::warn_ignored(card, &p.unused(), diags);
+                        match m {
+                            Ok(m) => Some(Arc::new(m)),
+                            Err(d) => {
+                                errors.push(d.with_span(card.span));
+                                None
+                            }
+                        }
+                    });
+                    let Some(m) = bound else { continue };
+                    let t = match vbic_temperature(&inst, opts, m.tnom) {
+                        Ok(t) => t,
+                        Err(d) => {
+                            errors.push(d.with_span(e.span));
+                            continue;
+                        }
+                    };
+                    let area = inst.get("area", 1.);
+                    let copies = inst.opt(&["m", "mult"]).unwrap_or(1.);
+                    let scale = area * copies;
+                    if area <= 0. || copies <= 0. || scale <= 0. || !scale.is_finite() {
+                        errors.push(
+                            Diagnostic::error(
+                                "E-ELAB-PARAM",
+                                format!("{}: VBIC AREA and M must be positive and finite", e.name),
+                            )
+                            .with_span(e.span),
+                        );
+                        continue;
+                    }
+                    warn_instance(e, &inst, diags);
+                    vbics.cur().push(
+                        &e.name,
+                        [node(c), node(b), node(em), s.as_deref().and_then(&node)],
+                        tj.as_deref().map(&node),
+                        m.clone(),
+                        t,
+                        area,
+                        copies,
+                        *off,
+                    );
+                    nonlinear_count += 1;
+                    continue;
+                }
                 let Some(mut m) = model_cache.bjt(model, diags, &mut errors) else {
                     continue;
                 };
-                let inst = ModelParams::new(params);
                 match instance_temperature(&inst, opts, m.tnom) {
                     Ok(t) => m.at_temperature(t),
                     Err(d) => {
@@ -2277,6 +2371,7 @@ fn native_groups<'a>(
     f_src.into_groups(&mut groups);
     h_src.into_groups(&mut groups);
     diodes.into_groups(&mut groups);
+    vbics.into_groups(&mut groups);
     bjts.into_groups(&mut groups);
     for devices in classic_mos {
         devices.into_groups(&mut groups);

@@ -1,0 +1,11 @@
+Temperature translation of emitter breakdown
+* Provenance: original Sansho R15 circuit.
+* sweep: tvbbe1 -.001 0 .001
+.param probe=-.001
+Vc c 0 2
+Vb b 0 -3.95
+Q1 c b 0 dev
+.model dev npn(level=4 vbbe=4 nbbe=1.4 ibbe=1u tnom=27 tvbbe1={probe})
+.dc temp -20 100 10
+.save i(Vc) i(Vb)
+.end

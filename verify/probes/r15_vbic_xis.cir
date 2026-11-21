@@ -1,0 +1,11 @@
+Temperature mapping of XIS
+* Provenance: original Sansho R15 circuit.
+* sweep: xis 1 3 5
+.param probe=1
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=2e-18 iben=2e-13 nen=2 tnom=20 xis={probe})
+.dc temp -20 100 10
+.save i(Vc) i(Vb)
+.end

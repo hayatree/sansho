@@ -1,0 +1,10 @@
+PNP Gummel currents with parallel area scaling
+* Provenance: original Sansho R15 circuit.
+* verify: rtol=1e-8 atol_i=1p
+Vc c 0 -2
+Vb b 0 -.7
+Q1 c b 0 dev area=1.5 m=2
+.model dev pnp(level=4 is=2e-16 ibei=2e-18 iben=4e-15 vef=60 ikf=20m)
+.dc Vb -.35 -.82 -.01
+.save i(Vc) i(Vb)
+.end

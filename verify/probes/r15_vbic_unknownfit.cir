@@ -1,0 +1,11 @@
+Model-input recognition control
+* Provenance: original Sansho R15 circuit.
+* sweep: unknownfit 0 1
+.param probe=0
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 unknownfit={probe})
+.dc Vb .35 .82 .01
+.save i(Vc) i(Vb)
+.end

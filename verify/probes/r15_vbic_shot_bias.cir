@@ -1,0 +1,12 @@
+White base-shot noise at several injection currents
+* Provenance: original Sansho R15 circuit.
+* sweep: shot_bias .6 .66 .72
+.param probe=.6
+Vc c 0 2
+Vb b 0 {probe} ac 1
+Hread out 0 Vb 1k
+Rload out 0 1k
+Q1 c b 0 dev
+.model dev npn(level=4 ibei=1e-18 iben=1e-14 kfn=0)
+.noise v(out) Vb dec 2 1 1meg
+.end

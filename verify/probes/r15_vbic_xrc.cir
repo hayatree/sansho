@@ -1,0 +1,11 @@
+Temperature mapping of XRC
+* Provenance: original Sansho R15 circuit.
+* sweep: xrc 0 1 2
+.param probe=0
+Vc c 0 .23
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=2e-18 iben=2e-13 nen=2 tnom=20 re=6 rbi=800 rci=80 rcx=60 xrc={probe})
+.dc temp -20 100 10
+.save i(Vc) i(Vb)
+.end

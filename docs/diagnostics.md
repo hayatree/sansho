@@ -389,6 +389,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Invalid instance parameter.** An instance parameter is out of range (e.g. a non-positive channel length).
 
 - Fix the instance parameter.
+- For VBIC, check AREA, M, nominal temperature, positive emission coefficients and built-in potentials, nonnegative resistances, the WBE and WSP partitions, and the SELFT and QBM selectors.
 - BSIM1/2 require positive effective dimensions, TOX in micrometres, PHI and low-field mobility. For JFET2, check the junction potential, exponents, geometry, lead impedances and relaxation times.
 
 ## W-ELAB-DANGLING
@@ -440,6 +441,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 - Check the model documentation for the supported parameters.
 - JFET2 ignores AFAC, CDSS, LD, LG, LS, NFING and RG. MOS9 rejects XD, ALPHA and INPUT_DELTA. BSIM1/2 ignore WDF and DELL. VDMOS accepts TEXP0 and TEXP1.
+- VBIC reports unconsumed card keys. It accepts EBBE as an explicit dimensionless emitter-breakdown offset. [Native VBIC](vbic.md)
 - For a diode, TBV1 and TBV2 are unrecognized. Use TCV (V/K) to subtract TCV × (T − TNOM) from BV.
 
 ## W-MODEL-TEMP
@@ -511,6 +513,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 - Check the named source, output probe, transient duration and model parameters.
 - For .sp, check port numbering, finite port conversions, and two-port forward gain when requesting noise. Invalid Z0 or a nonintegral port number is a parse error.
 - For .disto, the diagnostic names the device or bipolar extension whose higher derivatives are unavailable. Analytic support covers the diode, MOS1 and the Gummel–Poon subset in the analysis notes.
+- VBIC reports the instance when junction temperature becomes nonpositive or nonfinite. DISTO reports unavailable higher derivatives for the native level-four device.
 - A self-heated VDMOS requires finite positive absolute junction temperature. Invalid RTHJC, RTHCA, CTHJ and channel parameters yield E-ELAB-PARAM.
 
 ## E-DC-SOURCE

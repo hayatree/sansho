@@ -1,0 +1,12 @@
+Shot noise across the weak-avalanche base-current reversal
+* Provenance: original Sansho R15 circuit.
+* sweep: avalanche_noise 0 .02 .1
+.param probe=0
+Vc c 0 5
+Vb b 0 .70 ac 1
+Hread out 0 Vb 1k
+Rload out 0 1k
+Q1 c b 0 dev
+.model dev npn(level=4 avc2=3 avc1={probe})
+.noise v(out) Vb dec 2 1 1meg
+.end

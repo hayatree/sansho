@@ -1,0 +1,12 @@
+Electrothermal scaling of M
+* Provenance: original Sansho R15 circuit.
+* sweep: m 1 2 4
+.param probe=1
+Vc c 0 2
+Vb drv 0 pulse(.55 .76 1u 100n 100n 35u 80u)
+Rb drv b 100
+Q1 c b 0 0 tj dev m={probe}
+.model dev npn(level=4 is=1e-16 ibei=1e-18 re=4 selft=1 rth=200 cth=60n)
+.tran .4u 80u
+.save v(tj) i(Vc) i(Vb)
+.end

@@ -1,0 +1,11 @@
+Self-heating with the temperature pin omitted
+* Provenance: original Sansho R15 circuit.
+* sweep: implicit_rth 0 200 500
+.param probe=0
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 selft=1 rth={probe} re=4)
+.dc Vb .35 .82 .01
+.save i(Vc) i(Vb)
+.end

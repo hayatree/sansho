@@ -651,6 +651,7 @@ pub fn write(nl: &Netlist) -> String {
                 b,
                 e: em,
                 s,
+                tj,
                 model,
                 params: ps,
                 off,
@@ -658,6 +659,9 @@ pub fn write(nl: &Netlist) -> String {
                 let _ = write!(l, "{name} {c} {b} {em}");
                 if let Some(s) = s {
                     let _ = write!(l, " {s}");
+                }
+                if let Some(tj) = tj {
+                    let _ = write!(l, " {tj}");
                 }
                 let _ = write!(l, " {model}");
                 params(&mut l, ps);

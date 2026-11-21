@@ -1,0 +1,11 @@
+Instance offset under an explicit operating temperature
+* Provenance: original Sansho R15 circuit.
+* sweep: temp_precedence -10 0 30
+.param probe=-10
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev temp=50 dtemp={probe}
+.model dev npn(level=4 tnom=20 dtemp=8)
+.dc Vb .35 .82 .01
+.save i(Vc) i(Vb)
+.end

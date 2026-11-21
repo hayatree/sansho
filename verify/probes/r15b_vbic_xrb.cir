@@ -1,0 +1,18 @@
+Shared base exponent on isolated access, intrinsic and pocket resistances
+* Provenance: original Sansho R15b circuit.
+* sweep: xrb 0 1 2
+.param probe=0
+Vb b 0 .74
+Vc1 c1 0 1
+Vc2 c2 0 1
+Vc3 c3 0 .07
+Vs s 0 -.15
+Q1 c1 b 0 extrinsic
+Q2 c2 b 0 intrinsic
+Q3 c3 b 0 s pocket
+.model extrinsic npn(level=4 ibei=1e-16 rbx=500 rbi=0 xrb={probe})
+.model intrinsic npn(level=4 ibei=1e-16 rbi=500 rbx=0 xrb={probe})
+.model pocket npn(level=4 isp=1e-14 rbp=250 xrb={probe})
+.dc temp 27 87 10
+.save i(Vc1) i(Vc2) i(Vs)
+.end

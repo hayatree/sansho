@@ -1,0 +1,12 @@
+Base current noise with variable KFN
+* Provenance: original Sansho R15 circuit.
+* sweep: kfn 0 1e-16 1e-12
+.param probe=0
+Vc c 0 2
+Vb b 0 .70 ac 1
+Hread out 0 Vb 1k
+Rload out 0 1k
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=1e-18 afn=1 bfn=1 kfn={probe})
+.noise v(out) Vb dec 4 1 10meg
+.end

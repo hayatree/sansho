@@ -1,0 +1,11 @@
+Normalized base charge and NKF
+* Provenance: original Sansho R15 circuit.
+* sweep: nkf .35 .5 .75
+.param probe=.35
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=1e-18 ikf=3m ikr=1m vef=8 ver=10 nkf={probe})
+.dc Vc -.1 2 .05 Vb .65 .8 .05
+.save i(Vc) i(Vb)
+.end

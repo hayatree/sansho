@@ -1,0 +1,11 @@
+Overlap and depletion charge partition across the base lead
+* Provenance: original Sansho R15 circuit.
+* sweep: cap_partition 0 .5 1
+.param probe=0
+Vc c 0 2
+Vb b 0 .70 ac 1
+Q1 c b 0 dev
+.model dev npn(level=4 rbi=100 cje=5p cbeo=1p wbe={probe})
+.ac dec 8 100k 10G
+.save i(Vc) i(Vb)
+.end

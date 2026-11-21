@@ -1,0 +1,12 @@
+Lateral collection with variable IKP
+* Provenance: original Sansho R15 circuit.
+* sweep: ikp 0 1u 10u
+.param probe=0
+Vc c 0 .12
+Vb b 0 .69
+Vs s 0 -.2
+Q1 c b 0 s dev
+.model dev npn(level=4 is=1e-16 ibei=1e-18 isp=8e-16 wsp=.7 ibeip=3e-17 ibcip=2e-17 rs=15 rbp=40 rbx=12 rci=8 ikp={probe})
+.dc Vc .02 .55 .01
+.save i(Vs) i(Vb) i(Vc)
+.end

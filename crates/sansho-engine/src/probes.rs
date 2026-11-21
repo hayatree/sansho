@@ -62,6 +62,7 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
         kind,
         "mos1" | "mos2" | "mos3" | "mos6" | "mos9" | "bsim1" | "bsim2" | "bsim3" | "bsim4"
     );
+    let bipolar = matches!(kind, "bjt" | "vbic");
     let bsim = matches!(kind, "bsim1" | "bsim2" | "bsim3" | "bsim4");
     Some(match p {
         "i" if matches!(
@@ -88,10 +89,14 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
         {
             Power
         }
-        "ic" | "ie" if kind == "bjt" => Current,
+        "p" if kind == "vbic" => Power,
+        "vbe" | "vbc" if kind == "vbic" => Voltage,
+        "ic" | "ie" if bipolar => Current,
         "ig" if mos || matches!(kind, "jfet" | "jfet2" | "mesfet" | "vdmos") => Current,
-        "is" if mos || matches!(kind, "bjt" | "jfet" | "jfet2" | "mesfet" | "vdmos") => Current,
-        "ib" if mos || kind == "bjt" => Current,
+        "is" if mos || matches!(kind, "vbic" | "bjt" | "jfet" | "jfet2" | "mesfet" | "vdmos") => {
+            Current
+        }
+        "ib" if mos || bipolar => Current,
         "id" if mos || matches!(kind, "diode" | "jfet" | "jfet2" | "mesfet" | "vdmos") => Current,
         "ibd" if kind == "vdmos" => Current,
         "vgs" | "vds" if kind == "vdmos" => Voltage,
@@ -99,7 +104,9 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
         "ibd" | "ibs" if mos => Current,
         "isub" if matches!(kind, "bsim3" | "bsim4") => Current,
         "igs" | "igd" | "igb" | "igcd" | "igcs" if kind == "bsim4" => Current,
-        "gm" if mos || matches!(kind, "bjt" | "jfet" | "jfet2" | "mesfet" | "vdmos") => Admittance,
+        "gm" if mos || matches!(kind, "vbic" | "bjt" | "jfet" | "jfet2" | "mesfet" | "vdmos") => {
+            Admittance
+        }
         "gds" if mos || matches!(kind, "jfet" | "jfet2" | "mesfet" | "vdmos") => Admittance,
         "qgs" | "qgd" if matches!(kind, "mesfet" | "jfet2") => Charge,
         "vgs" | "vgd" if matches!(kind, "mesfet" | "jfet2") => Voltage,
@@ -107,13 +114,13 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
         "v1" | "v2" if matches!(kind, "ltra" | "tline") => Voltage,
         "capcur" if kind == "diode" => Current,
         "gd" if kind == "diode" => Admittance,
-        "go" | "gpi" | "gmu" if kind == "bjt" => Admittance,
+        "go" | "gpi" | "gmu" if bipolar => Admittance,
         "gmbs" if mos => Admittance,
         "cd" if kind == "mos9" => Current,
         "vgs" | "vds" | "vbs" | "vbd" if kind == "mos9" => Voltage,
         "cd" if kind == "diode" => Capacitance,
         "charge" if kind == "diode" => Charge,
-        "cpi" | "cmu" if kind == "bjt" => Capacitance,
+        "cpi" | "cmu" if bipolar => Capacitance,
         "vth" | "vdsat" if mos => Voltage,
         "von" if mos && !bsim => Voltage,
         "cgg" | "cgs" | "cgd" if mos => Capacitance,

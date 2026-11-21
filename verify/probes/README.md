@@ -579,3 +579,122 @@ Both original BSIM junction probes used an unsupported instance TEMP. The replac
 ### R14c results
 
 All eight repaired probes and the R14b settings have been examined. Across the current R14 and R14b templates, 457 of 484 completed waveform settings pass. The four NUMDGT settings reproduce the numeric listings and wrdata bytes. The three bare `ID=PF1` settings stop at parameter substitution with undefined PF1 on line 8. No waveform is expected for these three runs. The 27 waveform differences comprise 24 early-BSIM noise settings and the BSIM2 25 ps trap, 25 ps Gear and 5 ps Gear inverters. The 1 ps trap and Gear runs both pass. [Measured laws and acceptance deck status](../../docs/r14-models.md)
+
+## R15 native VBIC
+
+Each template changes one numeric input. Use supply currents for the DC and AC comparisons. For AC, retain both components of the complex current. The thermal probes record junction **rise** in kelvin. The noise readout uses the current through the base-bias source and an ideal 1 kΩ transimpedance. Keep the logs for the unknown-key and EBBE controls. All 189 settings across the 64 templates ran with Sansho. R15b compares all 189 settings against the cached 44.2 outputs below. [Equations, defaults and open choices](../../docs/vbic.md)
+
+```sh
+NGSPICE=tools/ngspice/ngspice.sh verify/probes/sweep.sh verify/probes/r15_vbic_*.cir
+```
+
+The driver continues through failed settings and reports them together after the final deck. For the seven acceptance waveforms, the verifier accepts `verify/decks/r15_vbic_*.cir` as positional inputs.
+
+| Probe | Measurement |
+|---|---|
+| [aje](r15_vbic_aje.cir) | Imaginary drive current at the forward continuation of the B–E junction. |
+| [ajc](r15_vbic_ajc.cir) | Imaginary drive current at the forward continuation of the B–C junction. |
+| [ajs](r15_vbic_ajs.cir) | Imaginary drive current at the forward continuation of the substrate junction. |
+| [vrt](r15_vbic_vrt.cir) | Collector capacitance past the reverse reach-through voltage. |
+| [rci](r15_vbic_rci.cir) | Collector current versus voltage at five base currents, varying RCI. |
+| [gamm](r15_vbic_gamm.cir) | Collector current versus voltage at five base currents, varying GAMM. |
+| [vo](r15_vbic_vo.cir) | Collector current versus voltage at five base currents, varying VO. |
+| [hrcf](r15_vbic_hrcf.cir) | Collector current versus voltage at five base currents, varying HRCF. |
+| [vef](r15_vbic_vef.cir) | Forward and saturated current versus VEF at several injection levels. |
+| [ver](r15_vbic_ver.cir) | Forward and saturated current versus VER at several injection levels. |
+| [qbm](r15_vbic_qbm.cir) | Forward and saturated current versus QBM at several injection levels. |
+| [nkf](r15_vbic_nkf.cir) | Forward and saturated current versus NKF at several injection levels. |
+| [avc1](r15_vbic_avc1.cir) | Base-current reversal and collector multiplication as reverse bias increases. |
+| [avc2](r15_vbic_avc2.cir) | Base-current reversal and collector multiplication as reverse bias increases. |
+| [vbbe](r15_vbic_vbbe.cir) | Emitter reverse voltage at the specified breakdown current. |
+| [wsp](r15_vbic_wsp.cir) | Substrate and base currents across distinct intrinsic and pocket junction biases. |
+| [rbp](r15_vbic_rbp.cir) | Substrate and base currents across distinct intrinsic and pocket junction biases. |
+| [ikp](r15_vbic_ikp.cir) | Substrate and base currents across distinct intrinsic and pocket junction biases. |
+| [wbe](r15_vbic_wbe.cir) | Complex short-circuit base and collector currents versus frequency for WBE. |
+| [td](r15_vbic_td.cir) | Complex short-circuit base and collector currents versus frequency for TD. |
+| [tf](r15_vbic_tf.cir) | Complex short-circuit base and collector currents versus frequency for TF. |
+| [qtf](r15_vbic_qtf.cir) | Complex short-circuit base and collector currents versus frequency for QTF. |
+| [xtf](r15_vbic_xtf.cir) | Complex short-circuit base and collector currents versus frequency for XTF. |
+| [qco](r15_vbic_qco.cir) | Complex short-circuit base and collector currents versus frequency for QCO. |
+| [xis](r15_vbic_xis.cir) | Collector and base currents over temperature, isolating XIS. |
+| [xii](r15_vbic_xii.cir) | Collector and base currents over temperature, isolating XII. |
+| [xin](r15_vbic_xin.cir) | Collector and base currents over temperature, isolating XIN. |
+| [ea](r15_vbic_ea.cir) | Collector and base currents over temperature, isolating EA. |
+| [eaie](r15_vbic_eaie.cir) | Collector and base currents over temperature, isolating EAIE. |
+| [eaic](r15_vbic_eaic.cir) | Collector and base currents over temperature, isolating EAIC. |
+| [tnf](r15_vbic_tnf.cir) | Collector and base currents over temperature, isolating TNF. |
+| [tavc](r15_vbic_tavc.cir) | Collector and base currents over temperature, isolating TAVC. |
+| [xre](r15_vbic_xre.cir) | Collector and base currents over temperature, isolating XRE. |
+| [xrbi](r15_vbic_xrbi.cir) | Collector and base currents over temperature, isolating XRBI. |
+| [xrc](r15_vbic_xrc.cir) | Collector and base currents over temperature, isolating XRC. |
+| [rth](r15_vbic_rth.cir) | Junction-rise amplitude and decay constant after a power pulse. |
+| [cth](r15_vbic_cth.cir) | Junction-rise amplitude and decay constant after a power pulse. |
+| [kfn](r15_vbic_kfn.cir) | Base-current noise through a noiseless 1 kΩ transimpedance, varying KFN. |
+| [afn](r15_vbic_afn.cir) | Base-current noise through a noiseless 1 kΩ transimpedance, varying AFN. |
+| [bfn](r15_vbic_bfn.cir) | Base-current noise through a noiseless 1 kΩ transimpedance, varying BFN. |
+| [rbx](r15_vbic_rbx.cir) | Base-current noise through a noiseless 1 kΩ transimpedance, varying RBX. |
+| [area](r15_vbic_area.cir) | Electrical currents and junction heating with AREA applied to the complete device. |
+| [m](r15_vbic_m.cir) | Electrical currents and junction heating with M applied to the complete device. |
+| [unknownfit](r15_vbic_unknownfit.cir) | Log warning versus rejection for an unknown numeric model key. |
+| [junction_temp](r15_vbic_junction_temp.cir) | Reverse and near-zero bias capacitance at three junction temperatures. |
+| [shot_bias](r15_vbic_shot_bias.cir) | White base noise level versus independently calculable diode current. |
+| [isrr](r15_vbic_isrr.cir) | Reverse transport normalization in saturation. |
+| [td_step](r15_vbic_td_step.cir) | Step shape and group delay with static transport and no diffusion capacitance. |
+| [tr](r15_vbic_tr.cir) | Reverse transit charge, measured at forward B–C bias. |
+| [selft](r15_vbic_selft.cir) | On/off behavior of the fifth pin with a finite external DC path. |
+| [implicit_rth](r15_vbic_implicit_rth.cir) | Base and collector currents with SELFT enabled and the thermal pin omitted. |
+| [cap_partition](r15_vbic_cap_partition.cir) | Base impedance across its spreading-resistance pole at three depletion partitions. |
+| [default_is](r15_vbic_default_is.cir) | Compare the collector currents of a default card and an explicit IS card. |
+| [ebbe](r15_vbic_ebbe.cir) | Log and reverse current for an explicit breakdown-offset input. |
+| [noise_area](r15_vbic_noise_area.cir) | Flicker and white levels versus AREA with AFN unequal to one. |
+| [noise_m](r15_vbic_noise_m.cir) | Flicker and white levels versus M with AFN unequal to one. |
+| [reverse_epi](r15_vbic_reverse_epi.cir) | Epitaxial knee and current direction across the collector to emitter reversal. |
+| [temp_precedence](r15_vbic_temp_precedence.cir) | Whether instance DTEMP changes the current with instance TEMP and model DTEMP set. |
+| [model_dtemp](r15_vbic_model_dtemp.cir) | Whether model DTEMP adds to a fixed instance TEMP. |
+| [xrcx](r15_vbic_xrcx.cir) | Extrinsic collector exponent with fixed shared and intrinsic exponents. |
+| [xisr](r15_vbic_xisr.cir) | Reverse saturation-current ratio when the B–C junction dominates transport. |
+| [tvbbe1](r15_vbic_tvbbe1.cir) | Hot and cold breakdown current around the nominal emitter knee. |
+| [noise_rci](r15_vbic_noise_rci.cir) | White collector-noise floor in quasi-saturation with variable epitaxial resistance. |
+| [avalanche_noise](r15_vbic_avalanche_noise.cir) | White base-current noise as impact generation opposes forward base current. |
+
+### R15b comparison
+
+Build the native executable, then compare the cached per-setting decks, raw files and logs from the repository root.
+
+```sh
+cargo build --offline --release -p sansho-cli --features jit
+python3 verify/compare_vbic.py
+cargo run --offline --release -q -p sansho-verify --features jit -- --cached -v verify/decks/r15_*.cir
+```
+
+| Outcome | R15 | R15b |
+|---|---:|---:|
+| Complete waveform and model warning match | 124 | 187 |
+| Complete reference with a waveform or warning mismatch | 63 | 0 |
+| Partial reference, excluded from pass count | 2 | 2 |
+
+The driver prints each signal's score, maximum absolute error, reference peak and number of reference samples. The score is max absolute error divided by (absolute floor + relative tolerance × reference peak). The DC and complex AC tolerance is 0.2%, with floors of 1 nA and 1 µV. Transient tolerances are 3% for currents and 1% for voltages after linear interpolation onto reference times. Noise uses 0.2% with a 1e−30 floor, for both spectral densities and both integrated results. Nested DC compares in sweep order. For the two-point linear AC probes, 44.2 saved only the first frequency. Only that common frequency enters the score. The driver also compares ignored-parameter warnings. Both UNKNOWNFIT settings warn, all EBBE settings are accepted silently, and none of the R15 settings was rejected at binding.
+
+The 200 ps and 1 ns TD transient references aborted with “Timestep too small” at the internal Q1 branch. Their 65,848 and 22 recorded samples are scored up to their last time, with the partial-reference status retained. All seven acceptance decks pass. Five have tighter tolerances in R15b. [Laws, numerical evidence and remaining differences](../../docs/vbic.md#evidence-from-ngspice-442)
+
+### R15b follow-up probes
+
+```sh
+NGSPICE=tools/ngspice/ngspice.sh verify/probes/sweep.sh verify/probes/r15b_vbic_*.cir
+python3 verify/compare_vbic.py --pattern 'r15b_vbic_*'
+```
+
+The ten templates contain 34 settings. Sansho completes 29 and rejects the four nonbinary QBM values and negative RCI with `E-ELAB-PARAM`. Keep the 44.2 logs for the domain probes, including settings that produce no raw file.
+
+| Probe | Measurement to distinguish |
+|---|---|
+| [TD with Gear](r15b_vbic_td_gear.cir) | Starts from zero forward transport, uses a finite rise and a capped Gear timestep. Tests delay and settling after turn-on. |
+| [Reverse-only shot noise](r15b_vbic_reverse_noise.cir) | At VBE=0, IBCI separates reverse transport noise from B–C diode noise. |
+| [Reach-through smoothing](r15b_vbic_art.cir) | Three junction biases straddle −VRT with positive AJC. The ART sweep measures the reverse transition width. |
+| [Pocket TR](r15b_vbic_pocket_tr.cir) | Suppresses intrinsic transport to isolate the parasitic charge with finite RBP and IKP. |
+| [QTF base width](r15b_vbic_qtf_width.cir) | Nonunit Early width and high injection distinguish depletion width from total base charge in transit storage. |
+| [QBM domain](r15b_vbic_qbm_domain.cir) | Tests rejection, warning, or branch selection at negative, fractional and above-unit QBM. |
+| [RCI domain](r15b_vbic_rci_domain.cir) | Compares negative, zero and finite RCI to an omitted-resistance card on the same AC sweep. |
+| [XRB](r15b_vbic_xrb.cir) | Isolates access, intrinsic and pocket resistance exponents on a single temperature sweep. |
+| [External heating](r15b_vbic_external_heat.cir) | Provides a DC path outside the fifth pin to measure power injection at zero RTH. |
+| [Zero HRCF](r15b_vbic_hrcf_zero.cir) | Measures the zero-selector branch at finite VO with strong reverse current. |

@@ -1,0 +1,11 @@
+Complex terminal admittance with variable QTF
+* Provenance: original Sansho R15 circuit.
+* sweep: qtf 0 .5 1
+.param probe=0
+Vc c 0 2
+Vb b 0 .70 ac 1
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=1e-18 rbi=80 rci=15 gamm=1e-10 tf=.4n cje=1p cjc=.3p itf=.1m vtf=1 qtf={probe})
+.ac dec 8 100k 10G
+.save i(Vc) i(Vb)
+.end

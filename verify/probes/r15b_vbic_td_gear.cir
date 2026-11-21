@@ -1,0 +1,12 @@
+Excess-phase turn-on from zero forward transport with Gear integration
+* Provenance: original Sansho R15b circuit.
+* sweep: td 0 200p 1n
+.param probe=0
+Vc c 0 1
+Vb b 0 pulse(0 .68 2n 300p 300p 6n 20n)
+Q1 c b 0 dev
+.model dev npn(level=4 td={probe})
+.options method=gear maxord=2
+.tran 10p 14n 0 10p
+.save i(Vc)
+.end
