@@ -227,6 +227,7 @@ impl Workspace {
 /// Build an evaluation context from the options.
 pub(crate) fn make_ctx(opts: &SimOptions, mode: Mode, tran: TranParams) -> EvalCtx {
     EvalCtx {
+        dc_sweep: false,
         initial_charge: false,
         mode,
         time: 0.0,

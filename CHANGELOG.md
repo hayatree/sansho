@@ -4,6 +4,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Add native silicon B4SOI 4.4 NMOS and PMOS at levels 10 and 58 with partial, unified and ideal full depletion, floating and contacted film, a back gate, self-heating, RF resistance networks and noise. R17c passes eleven of twelve ngspice 44.2 acceptance circuits and the 45 and 90 fF inverter probes. The original 80 ps inverter transient is a documented time-grid difference. [Model coverage and open choices](docs/bsimsoi.md)
+
 - Add native level-eight HICUM/L2 NPN and PNP devices targeting 2.4.0, with charge control, high-injection storage, substrate, NQS, electrothermal and noise analyses. Six of seven acceptance decks pass against cached ngspice 44.2 data. The isolated BC mirror establishes a PNP known difference. R16c passes 276 cached probe settings. [Model and measurement status](docs/hicum.md)
 
 - Add native level-four VBIC NPN and PNP devices with substrate transport, quasi-saturation, excess phase, a junction-temperature port and noise. Seven acceptance decks and isolated parameter sweeps cover the initial 1.2 card mapping. All seven decks and 219 complete black-box probe settings pass against ngspice 44.2. [Equations and open choices](docs/vbic.md)

@@ -1,0 +1,12 @@
+Isolated gate-channel barrier normalization
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: igc_barrier .017 .021 .026
+.param probe=.017
+Vd d 0 0.95
+Vg g 0 .8
+Ve e 0 0
+M1 d g 0 e 0 dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=2.1n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 igcmod=1 aigc={probe} bigc=.001 dlcig=0)
+.dc Vg 0 1.2 .05
+.save i(Vg)
+.end

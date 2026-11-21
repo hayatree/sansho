@@ -72,6 +72,7 @@ for deck in "$@"; do
         failures+=("$stem (missing sweep values)")
         continue
     fi
+    rejected=$(sed -n 's/^\* expect-unknown-instance: \([[:alnum:]_]\{1,\}\)$/\1/p' "$deck")
     for value in "${values[@]}"; do
         base="$out/${stem}_$value"
         failed=0
@@ -90,6 +91,13 @@ for deck in "$@"; do
             if ! grep -Eiq '^[[:space:]]*\.control([[:space:]]|$)' "$deck"; then
                 [[ -s "$base.raw" ]] || failed=1
             fi
+        fi
+        if [[ -n $rejected ]]; then
+            if [[ -s $base.raw ]] || grep -q '^PROBE-TIMEOUT ' "$base.log" ||
+                ! grep -Fqi "unknown parameter ($rejected)" "$base.log"; then
+                failures+=("$stem $value (expected rejection of $rejected)")
+            fi
+            continue
         fi
         if (( failed )) || grep -Eiq '^error([ :]|$)|run simulation\(s\) aborted|simulation interrupted due to error|^doAnalyses:.*(failed|timestep too small)' "$base.log"; then
             failures+=("$stem $value ($base.log)")

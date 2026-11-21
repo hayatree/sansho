@@ -1149,27 +1149,27 @@ impl Flat<'_> {
                     .chain(5..5usize.saturating_add(dimensions.saturating_mul(2)).min(n))
                     .collect(),
                 'j' | 'z' | 'u' => (1..4.min(n)).collect(),
-                'm' if toks
-                    .get(6)
-                    .is_some_and(|t| self.defs.models.contains(&t.lower()))
-                    && !toks[4..6].iter().any(Token::is_eq) =>
-                {
-                    (1..6).collect()
-                }
-                'm' if toks
-                    .get(4)
-                    .is_some_and(|v| self.defs.models.contains(&v.lower()))
-                    && !toks
-                        .get(5)
-                        .is_some_and(|v| self.defs.models.contains(&v.lower())) =>
-                {
-                    (1..4.min(n)).collect()
+                'm' => {
+                    let end = (4..n)
+                        .find(|&i| toks.get(i + 1).is_some_and(Token::is_eq))
+                        .unwrap_or(n);
+                    let mut model = end.saturating_sub(1);
+                    while model > 4
+                        && matches!(
+                            toks[model].lower().as_str(),
+                            "off" | "thermal" | "tnodeout" | "sens_l" | "sens_w"
+                        )
+                        && !self.defs.models.contains(&toks[model].lower())
+                    {
+                        model -= 1;
+                    }
+                    (1..model.min(n)).collect()
                 }
                 'w' | 'b' | 'r' | 'c' | 'l' | 'v' | 'i' | 'd' | 'f' | 'h' => {
                     (1..3.min(n)).collect()
                 }
                 'e' | 'g' if toks.get(4).is_some_and(Token::is_eq) => (1..3.min(n)).collect(),
-                's' | 'e' | 'g' | 'm' | 't' | 'o' => (1..5.min(n)).collect(),
+                's' | 'e' | 'g' | 't' | 'o' => (1..5.min(n)).collect(),
                 'n' => {
                     let end = (1..n)
                         .find(|&i| toks.get(i + 1).is_some_and(Token::is_eq))

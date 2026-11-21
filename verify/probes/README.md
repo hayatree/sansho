@@ -764,3 +764,82 @@ cargo build --offline --release -p sansho-cli --features jit
 python3 verify/compare_vbic.py --pattern 'r16*'
 cargo run --offline --release -q -p sansho-verify --features jit -- --cached verify/decks/r16_*.cir
 ```
+
+## R17 B4SOI 4.4
+
+The 100 `r17_soi_*` templates use original silicon parameters. Their 292 settings exercise the level 10 implementation. The 12 acceptance circuits in `verify/decks/` cover output and transfer for a floating partially depleted film, a contacted film and an ideal fully depleted device, plus back-gate bias, pulsed heating, an inverter, AC admittance, temperature and noise. The R17b comparison uses cached ngspice 44.2 waveforms.
+
+| Fit in this order | Probe suffixes and what to measure |
+|---|---|
+| Baseline and geometry | Start with `sparse`, then compare `delvto`, `mulu0`, `lvth0/wvth0/pvth0`, `nf`, `m`, `nseg` and `stress`. Extract transfer shifts separately from current scaling. `mobmod`, `minv`, `pclm` and `pdits` vary the channel shape. |
+| Body electrostatics | Compare `soimod`, `instance_mode`, `fdmod`, `vbs0fd/vbs0pd` and `depletion_clip` against explicit modes. Use `tsi`, `tbox`, `cdsbs`, `k1b`, `vbsa` and `nofffd` for the back-gate slope. Use `unified_floor` and `keta` for transitions under applied body bias. |
+| Body current and kink | Fit the contacted `isdif`, `iddif`, `isrec`, `istun`, `ndiode`, `vrec0` and `vtun0` currents first. Toggle `bjtoff`, then use `isbjt`, `ln`, `ahli`, `vabjt` and `bjt_reverse` to separate bipolar transport. `alpha0`, `beta2`, `iiimod` and `impact_kink` test the current fed back into a floating film. `gmin` resolves the numerical shunt. |
+| Gate and diffusion leakage | `agidl`, `agisl` and `gidlmod` exchange the leaking diffusion. `igcmod`, `igc_barrier`, `dlcig` and `pigcd` distinguish overlap and channel tunnelling. `igbmod`, `igb_acc`, `dc_contact_area` and `opposite_gate` isolate body-contact leakage and overlap. |
+| Charge and access networks | Fit real and imaginary terminal currents for `capmod`, `vgstcvmod`, `acde`, `xpart`, `body_charge`, `fbody`, `tt`, `film_normalization`, `box_transition` and `cfrcoeff`. The low-frequency susceptance divided by angular frequency gives a signed capacitance. `rgatemod`, `rbodymod` and `rdsmod` expose the resistive contribution. `zero_contact` and `body_pins` read the film independently of P. |
+| Temperature and history | Fit the isothermal currents using `kt1`, `ute` and `xbjt`. Then use `shmod`, `rth0`, `cth0`, `thermal_override`, `thermal_seven`, `thermal_size`, `thermal_potential` and `external_rth` to distinguish power, thermal resistance and time constant. `ic_body` tests UIC. `forward_film` includes the zero-diffusion gate turn-off case. |
+| Noise and diagnostics | `fnoimod`, `kf` and `noia` distinguish low-frequency slopes. `tnoimod`, `ntnoi`, `noise_source` and `impact_noise` isolate white, series-source and floating-film noise. Square the output amplitude and divide by the square of the 1 kΩ readout gain to recover drain-current power density. `ignored` exercises the warning path. |
+
+Run the native sweep from the repository root. The driver substitutes the setting into the template, requires a complete readable plot with finite samples and removes its temporary raw files.
+
+```sh
+cargo build --offline --release -p sansho-cli --features jit
+python3 verify/compare_vbic.py --native-only --pattern 'r17_soi_*'
+```
+
+For the maintainer's reference collection and subsequent cached comparison, use the same templates. The comparison checks that the cached circuit matches the current template. It interpolates transient samples on the reference time grid and compares complex AC values directly. For these SOI fits it uses a 0.2% relative tolerance on DC and AC vectors, a 0.1 fA absolute floor on lead currents and a 0.001 aF or aC floor on device capacitance and charge. Absolute floors matter near current cancellation and when a leakage branch is switched off.
+
+```sh
+verify/probes/sweep.sh verify/probes/r17_soi_*.cir
+python3 verify/compare_vbic.py --pattern 'r17_soi_*'
+```
+
+## R17b cached fit
+
+The original 292 settings moved from 74 passes and 218 failures to **276 waveform passes, 13 failures and 3 matching parameter rejections**. The three MULU0 logs identify an unknown instance parameter and contain no waveform. The template now declares the expected parameter diagnostic. The sweep driver and native comparison both check it. The positive mobility sweep uses model U0.
+
+| Acceptance deck | R17 worst score | R17b worst score |
+|---|---:|---:|
+| AC | 270.887 | 0.466 |
+| Back gate | 117.626 | 0.291 |
+| Contacted output | 1.344 | <0.001 |
+| Contacted transfer | 0.938 | <0.001 |
+| FD output | 117.161 | 0.027 |
+| FD transfer | 114.335 | 0.017 |
+| Heat | 1.505 | 0.184 |
+| Inverter | 29.104 | 3.166 |
+| Noise | 30.164 | 0.005 |
+| Floating PD output | 9.886 | 0.150 |
+| Floating PD transfer | 6.466 | 0.007 |
+| Temperature | 15.938 | <0.001 |
+
+The acceptance count rose from 1/12 to 11/12. The inverter's largest errors are 39.49 mV at 1.370 ns and 23.60 µA of supply current at 15.45 ns. The R17 reference contains external signals only. [Model equations and quantitative extractions](../../docs/bsimsoi.md#r17b-measurements-against-442)
+
+| Remaining original probe settings | Observation |
+|---|---|
+| `forward_film` .001 and .02 | Film history differs by up to 16 mV during the pulse edge. Drain current and temperature meet tolerance. |
+| `thermal_seven` 100 and 1k | Film contact transients differ by 1.34 and 13.4 µV, respectively, just after gate turn-off. |
+| `impact_noise` 0, 1 and 3 | The zero-NOIF integrated output agrees within 0.02 µV. Input-referred noise and the roll-off of the finite-NOIF contribution remain distinguishable. |
+| `opposite_gate` .2p and .8p | The area slope is 11.7205 mF/m² at −0.85 V. The measured pole places the added capacitance on the film side of the body-contact resistance. Its magnitude still differs. |
+| `istun` .01 and .1, `vtun0` .6 and 1 | The largest differences are at the second DC point. For ISTUN=.1, extrapolating the first-point current and slope gives 15.24175 pA at −0.42 V. The oracle gives 15.24175 pA, while evaluating the nonlinear junction at that voltage gives 15.38062 pA. Changing the sweep start tests the role of the previous linearization. |
+
+All 36 follow-up settings now have 44.2 output. Three noise runs contain AC data only. R17c reproduces the 45 and 90 fF inverter follow-ups and records the original 80 ps acceptance transient as a known difference. [R17c results and remaining differences](../../docs/bsimsoi.md#r17c-measurements-against-442)
+
+| Follow-up template | Measurement |
+|---|---|
+| `r17b_inverter_film` | Sweep the load and save both film voltages, thresholds and channel-plus-collector currents on both switching edges. |
+| `r17b_forward_iv` | Sweep the contacted film through 0.9 V with both inverter cards at three drain voltages. The PMOS back gate retains the inverter substrate bias. Separate threshold and lateral collector errors. |
+| `r17b_junction_cap` | Compare drain susceptance below, at and above 0.95 PBSWG with junction injection and gate overlap disabled. |
+| `r17b_noise_film` | Measure complex gain, contact current and input/output noise together at three body return resistances. |
+| `r17b_patch` | Measure opposite-implant capacitance and the body-resistance pole over three gate biases. |
+| `r17b_reverse_tunnel` | Move the starting bias while retaining the same overlap points and voltage step. |
+| `r17b_fd_drain` | Measure threshold and film voltage alongside drain current, independently varying drain, back gate and gate. |
+| `r17b_partition` | Read gate, film, drain and source susceptances at three XPART settings with FBODY=2. |
+| `r17b_tunnel_body` | Shift the physical body voltage to distinguish gate-to-body voltage from effective channel film bias across both tunnelling regimes. |
+| `r17b_mobility` | Scale accepted model U0 by the three historical MULU0 factors. |
+| `r17b_mob4_field` | Separate the Appendix B default from explicit EU field dependence with finite UA. |
+| `r17b_dc_charge` | Compare stored DC terminal charges at DEBUG=−1, 0 and 1 with the same film bias sweep. |
+
+```sh
+verify/probes/sweep.sh verify/probes/r17b_*.cir
+python3 verify/compare_vbic.py --pattern 'r17b_*'
+```

@@ -1,0 +1,12 @@
+DC charge reporting and the Appendix A debug selector
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: debug -1 0 1
+.param probe=-1
+Vd d 0 .95
+Vg g 0 .78
+Vb b 0 .08
+M1 d g 0 0 b dev l=.48u w=2.4u debug={probe}
+.model dev nmos(level=10 tox=4.6n tsi=75n k1=.42 vth0=.48)
+.dc Vb -.1 .55 .05
+.save i(Vd) @m1[qb] @m1[qg]
+.end

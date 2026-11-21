@@ -1,0 +1,13 @@
+Rejected SOI instance mobility multiplier
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* expect-unknown-instance: mulu0
+* sweep: mulu0 0.7 1 1.4
+.param probe=0.7
+Vd d 0 0.95
+Vg g 0 .8
+Ve e 0 0
+M1 d g 0 e 0 dev l=.48u w=2.4u mulu0={probe}
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047)
+.dc Vg 0 1.2 .05
+.save i(Vd) i(Vg)
+.end

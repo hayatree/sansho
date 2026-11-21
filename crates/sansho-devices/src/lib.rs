@@ -16,6 +16,7 @@ pub mod bjt;
 pub mod bsim3;
 pub mod bsim4;
 mod bsim_body;
+pub mod bsimsoi;
 pub mod controlled;
 pub mod diode;
 pub mod distortion;
@@ -505,6 +506,8 @@ pub struct TranParams {
 /// Evaluation context.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvalCtx {
+    /// Sampling a swept DC characteristic, including its first bias point.
+    pub dc_sweep: bool,
     /// Sample instance initial charges for the first UIC history point.
     pub initial_charge: bool,
     /// Source mode.
@@ -533,6 +536,7 @@ impl EvalCtx {
     /// Context for DC analyses.
     pub fn dc() -> Self {
         Self {
+            dc_sweep: false,
             initial_charge: false,
             mode: Mode::Dc,
             time: 0.0,

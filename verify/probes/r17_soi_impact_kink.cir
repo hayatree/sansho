@@ -1,0 +1,12 @@
+Floating-film voltage through the impact onset
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: impact_kink 0 .00002 .00012
+.param probe=0
+Vd d 0 0.95
+Vg g 0 .8
+Ve e 0 0
+M1 d g 0 e dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 beta2=.18 vdsatii0=1.05 alpha0={probe} isdif=.01)
+.dc Vd .05 1.8 .025
+.save @m1[vbs] i(Vd)
+.end

@@ -1,0 +1,13 @@
+Drain sweep across impact generation onset varying alpha0
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: alpha0 0 10u 100u
+.param probe=0
+Vd d 0 0.95
+Vg g 0 .8
+Ve e 0 0
+Vb b 0 .38
+M1 d g 0 e b dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 alpha0={probe})
+.dc Vd .05 1.75 .05
+.save i(Vb) i(Vd)
+.end

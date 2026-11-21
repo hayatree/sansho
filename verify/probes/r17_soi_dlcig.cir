@@ -1,0 +1,13 @@
+Thin-oxide gate, drain and contact currents varying dlcig
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: dlcig 0 10n 30n
+.param probe=0
+Vd d 0 0.95
+Vg g 0 .8
+Ve e 0 0
+Vb b 0 .1
+M1 d g 0 e b dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=2.1n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 aigc=.021 bigc=.001 aigsd=.023 bigsd=.001 igcmod=1 dlcig={probe})
+.dc Vg -1.4 1.6 .05
+.save i(Vg) i(Vb) i(Vd)
+.end

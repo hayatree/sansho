@@ -461,6 +461,7 @@ pub const CODES: &[CodeInfo] = &[
         &[
             "Check the model documentation for the supported parameters.",
             "JFET2 ignores AFAC, CDSS, LD, LG, LS, NFING and RG. MOS9 rejects XD, ALPHA and INPUT_DELTA. BSIM1/2 ignore WDF and DELL. VDMOS accepts TEXP0 and TEXP1.",
+            "BSIMSOI reports unused model and instance keys, including unsupported bin coefficients. [Level 10 coverage](bsimsoi.md)",
             "VBIC reports unconsumed card keys. It accepts EBBE as an explicit dimensionless emitter-breakdown offset. [Native VBIC](vbic.md)",
             "For a diode, TBV1 and TBV2 are unrecognized. Use TCV (V/K) to subtract TCV × (T − TNOM) from BV.",
         ],

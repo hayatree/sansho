@@ -1,0 +1,11 @@
+Model mobility scaling at fixed geometry
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: u0_scale .7 1 1.4
+.param probe=.7
+Vd d 0 .95
+Vg g 0 0
+M1 d g 0 0 0 dev l=.48u w=2.4u
+.model dev nmos(level=10 vth0=.48 k1=.42 tox=4.6n nch=1.1e17 u0={.047*probe})
+.dc Vg 0 1.2 .05
+.save i(Vd) @m1[gm]
+.end

@@ -1,0 +1,13 @@
+Back-gate sweep at three drain biases including the FD threshold observable
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: vds .1 .55 1.1
+.param probe=.1
+Vd d 0 {probe}
+Vg g 0 .8
+Ve e 0 0
+M1 d g 0 e dev l=.48u w=2.4u
+.model dev nmos(level=10 soimod=2 fdmod=1 tox=4.6n tsi=30n tbox=105n
++ nch=1.1e17 k1=.42 vth0=.48 u0=.047 cdsbs=.001 dvbd0=.03 dvbd1=.2)
+.dc Ve -1.5 1.5 .1 Vg .4 1 .3
+.save i(Vd) @m1[vth] @m1[vbs]
+.end

@@ -1,0 +1,13 @@
+Channel and body currents over temperature varying kt1
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: kt1 -.2 -.08 0
+.param probe=-.2
+Vd d 0 .45
+Vg g 0 .15
+Ve e 0 0
+Vb b 0 .48
+M1 d g 0 e b dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 isbjt=.03 kt1={probe})
+.dc temp -30 120 10
+.save i(Vb) i(Vd)
+.end

@@ -1,0 +1,13 @@
+Unified SOI complementary inverter driving a capacitive load
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sansho-verify: known-difference At 5.436738 ns the 45 fF ngspice 44.2 references at 80 and 20 ps differ by 27.68 mV against a 12.48 mV allowance. See docs/bsimsoi.md.
+Vdd rail 0 1.2
+Vin in 0 pulse(0 1.2 1n .25n .25n 4n 10n)
+M1 out in 0 0 nfilm l=.42u w=1.8u
+M2 out in rail 0 pfilm l=.42u w=3.6u
+.model nfilm nmos(level=10 soimod=1 tox=5n tsi=44n tbox=100n k1=.44 vth0=.47 u0=.052)
+.model pfilm pmos(level=10 soimod=1 tox=5n tsi=44n tbox=100n k1=.42 vth0=-.46 u0=.024)
+Cl out 0 45f
+.tran .08n 17n
+.save v(in) v(out) i(Vdd)
+.end

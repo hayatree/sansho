@@ -607,6 +607,12 @@ pub(crate) fn compile_cached(
             (m.name.as_str(), enabled && p.get("rth", 0.) > 0.)
         })
         .collect();
+    let soi_cards: HashMap<_, _> = nl
+        .models
+        .iter()
+        .filter(|m| m.is_bsimsoi())
+        .map(|m| (m.name.as_str(), ModelParams::new(&m.params)))
+        .collect();
     let mut grounded = digital_ports.grounded_dac;
     for e in &nl.elements {
         if let ElementKind::Bjt { model, s: None, .. } = &e.kind {
@@ -816,6 +822,39 @@ pub(crate) fn compile_cached(
                     dc.union(g_id(node(tj)), g_id(node(tc)));
                 }
                 dc.union(g_id(node(d)), g_id(node(s)));
+            }
+            ElementKind::Mosfet {
+                d,
+                s,
+                extra,
+                model,
+                params,
+                ..
+            } if soi_cards.contains_key(model.as_str()) => {
+                dc.union(g_id(node(d)), g_id(node(s)));
+                let inst = ModelParams::new(params);
+                let mut contacts = extra.as_slice();
+                if inst.get("tnodeout", 0.) != 0.
+                    && let Some((last, rest)) = contacts.split_last()
+                {
+                    let card = &soi_cards[model.as_str()];
+                    contacts = rest;
+                    if card.get("shmod", 0.) == 1.
+                        && inst.get("rth0", card.get("rth0", 0.)) > 0.
+                        && let Some(t) = node(last)
+                    {
+                        dc.union(t, nn);
+                        touches[t] += 1;
+                    }
+                }
+                if let [_, film] = contacts
+                    && let Some(b) = node(film)
+                {
+                    touches[b] += 1;
+                }
+                for c in contacts {
+                    dc.union(g_id(node(c)), g_id(node(s)));
+                }
             }
             ElementKind::Mosfet { d, s, b, .. } => {
                 // The gate has no DC path; drain/source/bulk are connected via the junctions.
@@ -1423,6 +1462,7 @@ fn native_groups<'a>(
     let mut bipolar_models = HashMap::new();
     let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
     let mut classic_mos = [1, 2, 3, 6, 9, 4, 5].map(|_| Chunked::<Mos1s>::new(CHUNK_NONLINEAR));
+    let mut sois = Chunked::<sansho_devices::bsimsoi::Sois>::new(CHUNK_NONLINEAR);
     let mut bsim3 = Chunked::<Bsim3s>::new(CHUNK_NONLINEAR);
     let mut compact_models = HashMap::<_, PreparedMos>::new();
     let mut bsim4 = Chunked::<Bsim4s>::new(CHUNK_NONLINEAR);
@@ -2238,6 +2278,7 @@ fn native_groups<'a>(
                 g,
                 s,
                 b,
+                extra,
                 model,
                 params,
                 off,
@@ -2256,6 +2297,66 @@ fn native_groups<'a>(
                     pd: scaled("pd", 0.0, 1),
                     ps: scaled("ps", 0.0, 1),
                 };
+                if let Some(card) = model_cache.card(model).filter(|c| c.is_bsimsoi()) {
+                    let p = ModelParams::new(&card.params);
+                    let binding = Binding {
+                        model: &p,
+                        instance: &inst,
+                        geometry: geom,
+                        polarity: if card.kind == "pmos" { -1. } else { 1. },
+                        temp: inst.get("temp", opts.temp + inst.get("dtemp", 0.)),
+                        tnom: opts.tnom,
+                        scale: opts.scale,
+                    };
+                    let thermal = inst.get("tnodeout", 0.) != 0.;
+                    let pins = extra.iter().map(|n| node(n)).collect::<Vec<_>>();
+                    let result = if card.version.as_deref().is_some_and(|v| v != "4.4.0") {
+                        Err("expected B4SOI 4.4".into())
+                    } else {
+                        sansho_devices::bsimsoi::Model::bind(&binding).and_then(|m| {
+                            sois.cur().push(
+                                &e.name,
+                                [node(d), node(g), node(s), node(b)],
+                                &pins,
+                                thermal,
+                                *off,
+                                m,
+                            )
+                        })
+                    };
+                    if let Err(message) = result {
+                        errors.push(
+                            Diagnostic::error("E-ELAB-MODEL", format!("{}: {message}", e.name))
+                                .with_span(e.span),
+                        );
+                        continue;
+                    }
+                    ModelCache::warn_ignored(card, &p.unused(), diags);
+                    // Appendix A instance inputs are bound above, including
+                    // inactive resistance selectors. The 44.2 MULU0 logs
+                    // distinguish unknown instance keys from model warnings.
+                    let unused = inst.unused();
+                    if !unused.is_empty() {
+                        errors.push(
+                            Diagnostic::error(
+                                "E-ELAB-PARAM",
+                                format!(
+                                    "{}: unknown SOI instance parameter(s): {}",
+                                    e.name,
+                                    unused.join(", ")
+                                ),
+                            )
+                            .with_span(e.span),
+                        );
+                        continue;
+                    }
+                    nonlinear_count += 1;
+                    continue;
+                }
+                if !extra.is_empty() || e.ic.len() > 3 {
+                    errors.push(Diagnostic::error("E-PARSE-ARITY",format!("{}: extended MOS terminals and initial conditions require a BSIMSOI card",e.name)).with_span(e.span));
+                    continue;
+                }
                 if let Some(card) = model_cache.card(model)
                     && matches!(card.kind.as_str(), "nmos" | "pmos")
                     && card
@@ -2422,6 +2523,7 @@ fn native_groups<'a>(
         devices.into_groups(&mut groups);
     }
     bsim3.into_groups(&mut groups);
+    sois.into_groups(&mut groups);
     bsim4.into_groups(&mut groups);
     groups.extend(controlled);
     Ok((groups, nonlinear_count))
@@ -2670,7 +2772,7 @@ impl<'a> ModelCache<'a> {
             )
             .with_span(card.span);
             if matches!(card.kind.as_str(), "nmos" | "pmos") {
-                d = d.with_note("built-in MOSFET levels are 1–6, 8, 9, 49 and 54");
+                d = d.with_note("built-in MOSFET levels are 1–6, 8–10, 49, 54 and 58");
             }
             errors.push(d);
             return None;

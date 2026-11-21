@@ -1,0 +1,12 @@
+Mode four field exponent at finite specified mobility degradation
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: eu 0 1 1.67
+.param probe=0
+Vd d 0 .95
+Vg g 0 0
+M1 d g 0 0 0 dev l=.48u w=2.4u
+.model dev nmos(level=10 tox=4.6n k1=.42 vth0=.48 mobmod=4 u0=.047
++ ua=1e-14 eu={probe} uc=0)
+.dc Vg 0 1.2 .05
+.save i(Vd)
+.end

@@ -273,12 +273,7 @@ pub(crate) fn sample_directive(
 pub(crate) fn sample_element(line: &Line, nl: &Netlist) -> Result<Element, Vec<Diagnostic>> {
     let head = line.tokens[0].lower();
     let mut p = Parser::default();
-    if head.starts_with('m')
-        && line
-            .tokens
-            .iter()
-            .any(|t| t.text.eq_ignore_ascii_case("thermal"))
-    {
+    if head.starts_with('m') {
         p.vdmos_models = nl
             .models
             .iter()
@@ -464,7 +459,7 @@ impl Parser {
         {
             let count = match head.as_bytes()[0] {
                 b'd' => 1,
-                b'm' => 3,
+                b'm' => 5,
                 b't' | b'o' => 4,
                 _ => 2,
             };
@@ -475,7 +470,7 @@ impl Parser {
                     break;
                 }
             }
-            if ic.len() != count && !(head.starts_with('m') && ic.len() == 2) {
+            if ic.len() != count && !(head.starts_with('m') && (2..=4).contains(&ic.len())) {
                 self.err(
                     "E-PARSE-ARITY",
                     format!("{name} IC requires {count} values"),
@@ -554,15 +549,17 @@ impl Parser {
                         "icvds" | "vds" => 0,
                         "icvgs" | "vgs" => 1,
                         "icvbs" | "vbs" if count == 3 => 2,
+                        "icves" | "ves" if count == 3 => 3,
+                        "icvps" | "vps" if count == 3 => 4,
                         _ => return true,
                     };
-                    ic.resize(count, 0.);
+                    ic.resize(ic.len().max(count).max(slot + 1), 0.);
                     ic[slot] = *value;
                     false
                 });
             }
             if !ic.is_empty()
-                && (matches!(kind, ElementKind::Mosfet { .. }) && ic.len() != 3
+                && (matches!(kind, ElementKind::Mosfet { .. }) && !(3..=5).contains(&ic.len())
                     || matches!(kind, ElementKind::Vdmos { .. }) && ic.len() != 2)
             {
                 self.err(
@@ -1405,12 +1402,21 @@ impl Parser {
             );
             return None;
         }
+        if f.positional.len() >= 6
+            && f.positional
+                .last()
+                .is_some_and(|t| t.text.eq_ignore_ascii_case("tnodeout"))
+        {
+            f.positional.pop();
+            f.params.push(("tnodeout".into(), 1.));
+        }
         let pins = match f.positional.as_slice() {
             [_, _, _, tj, tc, _] => Some([node_name(tj), node_name(tc)]),
             _ => None,
         };
         if let [d, g, s, .., model] = f.positional.as_slice()
-            && (pins.is_some() || f.positional.len() == 4)
+            && (pins.is_some() && self.vdmos_models.contains(&model.lower())
+                || f.positional.len() == 4)
         {
             return Some(ElementKind::Vdmos {
                 thermal_pins: pins,
@@ -1422,16 +1428,18 @@ impl Parser {
                 off: f.off,
             });
         }
-        if f.positional.len() != 5 {
+        if !(5..=8).contains(&f.positional.len()) {
             return self.arity(line, usage);
         }
         let p = &f.positional;
+        let last = p.len() - 1;
         Some(ElementKind::Mosfet {
             d: node_name(&p[0]),
             g: node_name(&p[1]),
             s: node_name(&p[2]),
             b: node_name(&p[3]),
-            model: p[4].lower(),
+            extra: p[4..last].iter().map(node_name).collect(),
+            model: p[last].lower(),
             params: f.params,
             off: f.off,
         })
@@ -1870,6 +1878,29 @@ impl Parser {
                         )
                         .with_span(e.span),
                     ),
+                Some(m) if let ElementKind::Mosfet { extra, params, .. } = &e.kind => {
+                    let t = params
+                        .iter()
+                        .rfind(|(k, _)| k == "tnodeout")
+                        .is_some_and(|(_, v)| *v != 0.);
+                    let bad = if m.is_bsimsoi() {
+                        (t && extra.is_empty()) || (!t && extra.len() > 2)
+                    } else {
+                        !extra.is_empty() || t || e.ic.len() > 3
+                    };
+                    if bad {
+                        errs.push(
+                            Diagnostic::error(
+                                "E-PARSE-ARITY",
+                                format!(
+                                    "{}: invalid MOS terminals or IC for model {}",
+                                    e.name, m.name
+                                ),
+                            )
+                            .with_span(e.span),
+                        );
+                    }
+                }
                 Some(_) => {}
             }
         }

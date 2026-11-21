@@ -30,7 +30,11 @@ pub(crate) fn in_bin(
     width: f64,
     fingers: f64,
 ) -> bool {
-    let w = if level == 54. { width / fingers } else { width };
+    let w = if matches!(level, 10. | 58. | 54.) {
+        width / fingers
+    } else {
+        width
+    };
     let tol = 1. - 1e-9;
     length >= lmin * tol && length < lmax * tol && w >= wmin * tol && w < wmax * tol
 }

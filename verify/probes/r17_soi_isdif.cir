@@ -1,0 +1,13 @@
+SOI body junction sweep varying isdif
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: isdif .001 .02 .15
+.param probe=.001
+Vd d 0 .45
+Vg g 0 .15
+Ve e 0 0
+Vb b 0 .1
+M1 d g 0 e b dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 isrec=0 isbjt=0 isdif={probe})
+.dc Vb -.45 .57 .03
+.save i(Vb) i(Vd)
+.end

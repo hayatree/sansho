@@ -1,0 +1,13 @@
+Floating-body equilibrium sensitivity to circuit gmin
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: gmin 1e-15 1e-12 1e-9
+.param probe=1e-15
+Vd d 0 0.95
+Vg g 0 .8
+Ve e 0 0
+M1 d g 0 e dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047)
+.options gmin={probe}
+.dc Vd 0 1.2 .05
+.save i(Vd) @m1[vbs]
+.end

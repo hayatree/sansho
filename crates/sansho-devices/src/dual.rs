@@ -22,7 +22,7 @@ pub struct Dual<const N: usize> {
 impl<const N: usize> Dual<N> {
     /// A constant (zero gradient).
     #[inline]
-    pub fn cst(v: f64) -> Self {
+    pub const fn cst(v: f64) -> Self {
         Self { v, d: [0.0; N] }
     }
 

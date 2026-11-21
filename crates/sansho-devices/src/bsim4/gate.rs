@@ -6,13 +6,18 @@ use crate::dual::Dual;
 use crate::{ModelParams, junction::safe_exp};
 
 #[derive(Debug)]
-struct Barrier {
-    scale: f64,
-    exponent: f64,
-    coeff: [f64; 3],
+pub(crate) struct Barrier {
+    pub(crate) scale: f64,
+    pub(crate) exponent: f64,
+    pub(crate) coeff: [f64; 3],
 }
 impl Barrier {
-    fn current<const N: usize>(&self, voltage: Dual<N>, aux: Dual<N>, oxide: Dual<N>) -> Dual<N> {
+    pub(crate) fn current<const N: usize>(
+        &self,
+        voltage: Dual<N>,
+        aux: Dual<N>,
+        oxide: Dual<N>,
+    ) -> Dual<N> {
         let [a, b, c] = self.coeff;
         self.scale * voltage * aux * safe_exp(-self.exponent * (a - b * oxide) * (1. + c * oxide))
     }

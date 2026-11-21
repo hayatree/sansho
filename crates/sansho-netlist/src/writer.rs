@@ -670,6 +670,7 @@ pub fn write(nl: &Netlist) -> String {
                 }
             }
             ElementKind::Mosfet {
+                extra,
                 d,
                 g,
                 s,
@@ -678,7 +679,11 @@ pub fn write(nl: &Netlist) -> String {
                 params: ps,
                 off,
             } => {
-                let _ = write!(l, "{name} {d} {g} {s} {b} {model}");
+                let _ = write!(l, "{name} {d} {g} {s} {b}");
+                for pin in extra {
+                    let _ = write!(l, " {pin}");
+                }
+                let _ = write!(l, " {model}");
                 params(&mut l, ps);
                 if *off {
                     l += " off";
@@ -768,6 +773,38 @@ mod tests {
             assert_eq!(crate::parse_number(&num(v)), Some(v), "{v}");
         }
         assert_eq!(num(1.0), "1");
+    }
+
+    #[test]
+    fn soi_optional_pins_survive_flattening_and_round_trip() {
+        let text = "SOI terminals
+.subckt cell a z p t
+.model film nmos level=10
+M1 a a z z p b t film tnodeout ic=.1,.2,.3,.4,.5
+.ends
+X1 rail 0 contact rise cell
+.end";
+        let a = parse(text).unwrap();
+        let b = parse(&write(&a)).unwrap();
+        assert_eq!(a.elements[0].kind, b.elements[0].kind);
+        assert_eq!(b.elements[0].ic, [0.1, 0.2, 0.3, 0.4, 0.5]);
+        let nodes = a.elements[0].kind.nodes();
+        assert_eq!(nodes.len(), 7);
+        assert_eq!(nodes[4], "contact");
+        assert_ne!(nodes[5], "b");
+        assert_eq!(nodes[6], "rise");
+        for (terminals, card) in [
+            ("d g s e p", "nmos level=54"),
+            ("d g s e p b t", "nmos level=10"),
+        ] {
+            let deck = format!("bad pins\nM1 {terminals} dev\n.model dev {card}\n");
+            assert!(
+                parse(&deck)
+                    .unwrap_err()
+                    .iter()
+                    .any(|d| d.code == "E-PARSE-ARITY")
+            );
+        }
     }
 
     #[test]

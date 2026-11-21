@@ -1,0 +1,12 @@
+Opposite implant capacitance and body contact pole at three gate biases
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: vg -1.25 -.45 .55
+.param probe=-1.25
+Vd d 0 .95
+Vg g 0 {probe} ac 1
+Vb b 0 .08
+M1 d g 0 0 b dev l=.48u w=2.4u agbcp2=.8p
+.model dev nmos(level=10 tox=2.5n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 rbsh=200)
+.ac dec 5 10k 100G
+.save i(Vd) i(Vg) i(Vb)
+.end

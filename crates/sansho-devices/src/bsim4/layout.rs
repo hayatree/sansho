@@ -7,56 +7,76 @@ use crate::{ModelParams, mos1::Mos1Geometry};
 pub(super) fn stress_active(i: &ModelParams, nf: f64) -> bool {
     i.get("sa", 0.) > 0. && i.get("sb", 0.) > 0. && (nf == 1. || i.get("sd", 0.) > 0.)
 }
-pub(super) fn stress(m: &mut Size, b: &Binding<'_>, scale: f64) -> Result<(), String> {
+/// Common LOD geometry and shifts from BSIM4 §14 and BSIMSOI §9.
+pub(crate) struct Stress {
+    pub mobility: f64,
+    pub velocity: f64,
+    pub threshold: f64,
+    pub k2: f64,
+    pub eta: f64,
+}
+
+pub(crate) fn layout_stress(b: &Binding<'_>, nf: f64, scale: f64) -> Option<Stress> {
     let (p, i) = (b.model, b.instance);
-    let bin = super::params::Bin::new(p, m.l, m.w);
     let Mos1Geometry { l, w, .. } = b.geometry;
     let sa = i.get("sa", 0.) * scale;
     let sb = i.get("sb", 0.) * scale;
     let sd = i.get("sd", 0.) * scale;
-    if stress_active(i, m.nf) {
-        let width = w / m.nf + p.get("xw", 0.) + p.get("wlod", 0.);
-        let length = l + p.get("xl", 0.);
-        let factor = |base: &str, exp: &str| {
-            let l = length.powf(p.get(&format!("llod{exp}"), 0.));
-            let w = width.powf(p.get(&format!("wlod{exp}"), 0.));
-            1. + p.get(&format!("l{base}"), 0.) / l
-                + p.get(&format!("w{base}"), 0.) / w
-                + p.get(&format!("p{base}"), 0.) / (l * w)
-        };
-        let tnom = p.get("tnom", b.tnom) + 273.15;
-        let ku = p.get("ku0", 0.)
-            / (factor("ku0", "ku0") * (1. + p.get("tku0", 0.) * ((b.temp + 273.15) / tnom - 1.)));
-        let kv = factor("kvth0", "vth");
-        let reference =
-            1. / (p.get("saref", 1e-6) + 0.5 * l) + 1. / (p.get("sbref", 1e-6) + 0.5 * l);
-        // Euler-Maclaurin tail of the equally spaced reciprocal sum for large NF.
-        let inverse = |distance: f64| {
-            let first = distance + 0.5 * l;
-            let pitch = sd + l;
-            let count = m.nf.min(128.) as usize;
-            let mut sum = (0..count)
-                .map(|k| 1. / (first + k as f64 * pitch))
-                .sum::<f64>();
-            if m.nf > 128. {
-                let a = first + 128. * pitch;
-                let z = first + m.nf * pitch;
-                sum += (z / a).ln() / pitch
-                    + 0.5 * (1. / a - 1. / z)
-                    + pitch / 12. * (1. / a.powi(2) - 1. / z.powi(2));
-            }
-            sum / m.nf
-        };
-        let actual = inverse(sa) + inverse(sb);
-        let kvsat = p.get("kvsat", 0.);
-        // The 44.2 KU0-only sweep leaves mobility unchanged. The combined decks retain
-        // the KU0-dependent saturation velocity shift.
-        m.vsat *= (1. + kvsat * ku * actual) / (1. + kvsat * ku * reference);
-        let change = actual - reference;
-        m.vth0 += m.sign * p.get("kvth0", 0.) / kv * change;
-        m.k2ox += m.toxe / p.get("toxm", m.toxe) * p.get("stk2", 0.) / kv.powf(p.get("lodk2", 1.))
-            * change;
-        m.p.eta0 += p.get("steta0", 0.) / kv.powf(p.get("lodeta0", 1.)) * change;
+    if !stress_active(i, nf) {
+        return None;
+    }
+    let width = w / nf + p.get("xw", 0.) + p.get("wlod", 0.);
+    let length = l + p.get("xl", 0.);
+    let factor = |base: &str, exp: &str| {
+        let l = length.powf(p.get(&format!("llod{exp}"), 0.));
+        let w = width.powf(p.get(&format!("wlod{exp}"), 0.));
+        1. + p.get(&format!("l{base}"), 0.) / l
+            + p.get(&format!("w{base}"), 0.) / w
+            + p.get(&format!("p{base}"), 0.) / (l * w)
+    };
+    let tnom = p.get("tnom", b.tnom) + 273.15;
+    let ku = p.get("ku0", 0.)
+        / (factor("ku0", "ku0") * (1. + p.get("tku0", 0.) * ((b.temp + 273.15) / tnom - 1.)));
+    let kv = factor("kvth0", "vth");
+    let reference = 1. / (p.get("saref", 1e-6) + 0.5 * l) + 1. / (p.get("sbref", 1e-6) + 0.5 * l);
+    // Euler-Maclaurin tail of the equally spaced reciprocal sum for large NF.
+    let inverse = |distance: f64| {
+        let first = distance + 0.5 * l;
+        let pitch = sd + l;
+        let count = nf.min(128.) as usize;
+        let mut sum = (0..count)
+            .map(|k| 1. / (first + k as f64 * pitch))
+            .sum::<f64>();
+        if nf > 128. {
+            let a = first + 128. * pitch;
+            let z = first + nf * pitch;
+            sum += (z / a).ln() / pitch
+                + 0.5 * (1. / a - 1. / z)
+                + pitch / 12. * (1. / a.powi(2) - 1. / z.powi(2));
+        }
+        sum / nf
+    };
+    let actual = inverse(sa) + inverse(sb);
+    let kvsat = p.get("kvsat", 0.);
+    let diff = actual - reference;
+    Some(Stress {
+        mobility: (1. + ku * actual) / (1. + ku * reference),
+        velocity: (1. + kvsat * ku * actual) / (1. + kvsat * ku * reference),
+        threshold: p.get("kvth0", 0.) / kv * diff,
+        k2: p.get("stk2", 0.) / kv.powf(p.get("lodk2", 1.)) * diff,
+        eta: p.get("steta0", 0.) / kv.powf(p.get("lodeta0", 1.)) * diff,
+    })
+}
+
+pub(super) fn stress(m: &mut Size, b: &Binding<'_>, scale: f64) -> Result<(), String> {
+    let (p, i) = (b.model, b.instance);
+    let bin = super::params::Bin::new(p, m.l, m.w);
+    if let Some(stress) = layout_stress(b, m.nf, scale) {
+        // The 44.2 BSIM4 KU0-only sweep leaves mobility unchanged.
+        m.vsat *= stress.velocity;
+        m.vth0 += m.sign * stress.threshold;
+        m.k2ox += m.toxe / p.get("toxm", m.toxe) * stress.k2;
+        m.p.eta0 += stress.eta;
     }
     let sc = i.get("sca", 0.)
         + p.get("web", 0.) * i.get("scb", 0.)

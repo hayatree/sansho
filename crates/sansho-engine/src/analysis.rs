@@ -348,6 +348,7 @@ pub(crate) fn dc_sweep(
         column.try_reserve_exact(count).map_err(|_| invalid())?;
     }
     let mut ctx = make_ctx(opts, Mode::Dc, NO_TRAN);
+    ctx.dc_sweep = true;
     let integ = Integration::dc(n);
     let mut probes = crate::probes::Probes::bind(ckt, nl, opts.savecurrents)?;
     let mut point = None;

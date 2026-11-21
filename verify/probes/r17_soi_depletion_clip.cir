@@ -1,0 +1,12 @@
+Ideal FD response with film bending below and above the gap limit
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: depletion_clip 45n 85n 150n
+.param probe=45n
+Vd d 0 0.95
+Vg g 0 .8
+Ve e 0 0
+M1 d g 0 e dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi={probe} tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 soimod=2)
+.dc Ve -1.5 1.5 .1
+.save i(Vd) @m1[vth]
+.end

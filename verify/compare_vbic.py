@@ -1,4 +1,4 @@
-"""Compare VBIC or HICUM sweeps against cached ASCII raw files, offline.
+"""Compare VBIC, HICUM or BSIMSOI sweeps against cached ASCII raw files, offline.
 
 Provenance: original Sansho comparison of independently generated waveforms.
 Run cargo build --release -p sansho-cli --features jit before invoking.
@@ -42,9 +42,15 @@ def plots(path):
     return result
 
 
-def compare(reference, native):
+def device_signal(name):
+    """ASCII raw writers can attach a current or voltage wrapper to @ vectors."""
+    match = re.fullmatch(r"[vi]\((@[^()]+)\)", name)
+    return match.group(1) if match else name
+
+
+def compare(reference, native, soi=False, unavailable=()):
     for kind, columns in reference.items():
-        ours = native[kind]
+        ours = {device_signal(name): data for name, data in native[kind].items()}
         integrated = kind == "integrated noise"
         single_point = integrated or kind == "operating point"
         names = list(columns)
@@ -54,9 +60,9 @@ def compare(reference, native):
             y = [z.real for z in next(iter(ours.values()))]
         for name in names:
             signal = name.removeprefix("v(").removesuffix(")") if integrated else name
-            # 44.2 wraps time-valued device outputs in v(...) in ASCII raw.
-            if signal not in ours and re.fullmatch(r"v\(@[^()]+\[tf\]\)", signal):
-                signal = signal[2:-1]
+            signal = device_signal(signal)
+            if signal in unavailable:
+                continue
             ref, sim = columns[name], ours[signal]
             if single_point:
                 paired = sim
@@ -81,6 +87,14 @@ def compare(reference, native):
             delta, peak = max(errors), max(map(abs, ref))
             current = name.startswith("i(")
             floor = 1e-9 if current else 1e-6
+            if soi and current:
+                floor = 1e-16
+            if soi and signal.startswith("@m"):
+                quantity = signal.split("[")[-1].rstrip("]")
+                if quantity.startswith(("q", "c")):
+                    floor = 1e-21
+                elif quantity.startswith(("g", "i")):
+                    floor = 1e-16
             rel = 0.002
             if signal.startswith("@") and signal.endswith("[tf]"):
                 floor = 1e-18  # Transit time is in seconds.
@@ -106,6 +120,15 @@ def expand(template, value):
     return body
 
 
+def rejected_parameter(body):
+    marker = re.search(r"^\* expect-unknown-instance: (\w+)$", body, re.MULTILINE)
+    return marker.group(1) if marker else None
+
+
+def native_rejected(run, name):
+    return run.returncode and "E-ELAB-PARAM" in run.stderr and name in run.stderr.lower()
+
+
 def native_check(template, value, work, binary):
     # The oracle sweep script replaces precisely this assignment in R15/R16.
     deck = work / (template.stem + "_" + value + ".cir")
@@ -113,6 +136,9 @@ def native_check(template, value, work, binary):
     deck.write_text(body)
     target = deck.with_suffix(".raw")
     run = simulate(deck, target, binary)
+    name = rejected_parameter(body)
+    if name:
+        return ("NATIVE-REJECT" if native_rejected(run, name) else "FAIL"), [run.stderr.strip()]
     if run.returncode:
         return "FAIL", [run.stderr.strip()]
     waveforms = plots(target)
@@ -153,6 +179,11 @@ def check(deck, out, binary, expected, value):
                 if len(samples) != points or not all(math.isfinite(abs(x)) for x in samples):
                     return "FAIL", [f"incomplete native {kind} {name}"]
         return "ORACLE-NONTERMINATION", ["44.2 produced no usable reference"]
+    name = rejected_parameter(expected)
+    if name:
+        rejected = (not timed_out and f"unknown parameter ({name})" in log.lower()
+                    and not (raw.exists() and raw.stat().st_size) and native_rejected(run, name))
+        return ("BOTH-REJECT" if rejected else "FAIL"), [f"unknown instance parameter {name}", run.stderr.strip()]
     if timed_out:
         return "FAIL", ["oracle setting timed out"]
     if not raw.exists() or not raw.stat().st_size:
@@ -186,7 +217,15 @@ def check(deck, out, binary, expected, value):
     for settings, signals in re.findall(r"^\* known-difference: (.+) \| (.+)$", expected, re.MULTILINE):
         if value in settings.split():
             known.update(signals.split())
-    for signal, delta, peak, score, n in compare(plots(raw), plots(target)):
+    # 44.2 can write a zero-filled column even after rejecting its name.
+    unavailable = set(re.findall(r"^Warning: unrecognized variable - (\S+)\s*$", log, re.MULTILINE))
+    if unavailable:
+        detail.append("unavailable in reference: " + ", ".join(sorted(unavailable)))
+    measured = list(compare(plots(raw), plots(target), soi=stem.startswith(("r17_soi_", "r17b_")),
+                            unavailable=unavailable))
+    if not measured and status == "PASS":
+        status = "PARTIAL-REFERENCE"
+    for signal, delta, peak, score, n in measured:
         detail.append(f"{signal}={score:.4g}({delta:.4g}/{peak:.4g},{n}pts)")
         if score > 1:
             if signal not in known:
@@ -194,6 +233,7 @@ def check(deck, out, binary, expected, value):
             elif status == "PASS":
                 status = "KNOWN-DIFFERENCE"
     if "simulation(s) aborted" in log:
+        detail.append(f"available comparison: {status}")
         status = "PARTIAL-REFERENCE"
     return status, detail
 
@@ -205,7 +245,8 @@ def main():
     parser.add_argument("--binary", type=Path, default=ROOT.parent / "target/release/sansho")
     parser.add_argument("--out", type=Path, help="directory for native comparison raws")
     args = parser.parse_args()
-    out = args.out or (ROOT / "out/r16" if args.pattern.startswith("r16") else OUT)
+    round_name = args.pattern[:3]
+    out = args.out or (ROOT / "out" / round_name if round_name in {"r16", "r17"} else OUT)
     counts = Counter()
     templates = sorted((ROOT / "probes").glob(args.pattern + ".cir"))
     if not templates:

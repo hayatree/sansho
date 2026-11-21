@@ -53,10 +53,7 @@ impl Size {
         if self.cv.mode == 0 {
             return q;
         }
-        let k = self.cv.kappa[side].max(0.01);
-        let sum = v + 0.02;
-        let edge = (sum - (sum.sq() + 0.08).sqrt()) * 0.5;
-        q + self.cv.edge[side] * (v - edge - 0.5 * k * ((1. - 4. * edge / k).sqrt() - 1.))
+        q + self.cv.edge[side] * ldd_overlap(v, self.cv.kappa[side])
     }
 
     pub(super) fn charges<const N: usize>(&self, b: &CvBias<N>) -> [Dual<N>; 4] {
@@ -134,24 +131,36 @@ impl Size {
         } else {
             smooth_min(sat, b.drain, 0.02)
         };
-        // Normalize by the overdrive before taking powers in the partition integral.
-        let y = abulk * vd / over;
-        let mean = 1. - 0.5 * y;
-        let corr = y / (12. * mean);
-        let inversion = -cap * over * (mean + y * corr);
-        let bulk = base + cap * (1. - abulk) * vd * (0.5 - corr);
-        let drain = if cv.xpart == 0.5 {
-            0.5 * inversion
-        } else if cv.xpart > 0.5 {
-            -0.5 * cap * over * (1. - 1.5 * y + 3. * y * corr)
-        } else {
-            -0.5 * cap * over * (1. - (5. / 3.) * y + y.sq() * (1. - 0.2 * y)) / mean.sq()
-        };
-        [drain, -bulk - inversion, inversion - drain, bulk]
+        partition(over, abulk, vd, cap, base, cv.xpart)
     }
 }
 
-pub(super) fn depletion<const N: usize>(arg: Dual<N>, k1: f64) -> Dual<N> {
+// Ward-Dutton channel-charge integrals shared with BSIMSOI §4.2.
+pub(crate) fn partition<const N: usize>(
+    over: Dual<N>,
+    abulk: Dual<N>,
+    vd: Dual<N>,
+    cap: Dual<N>,
+    base: Dual<N>,
+    xpart: f64,
+) -> [Dual<N>; 4] {
+    // Normalize by the overdrive before taking powers in the partition integral.
+    let y = abulk * vd / over;
+    let mean = 1. - 0.5 * y;
+    let corr = y / (12. * mean);
+    let inversion = -cap * over * (mean + y * corr);
+    let bulk = base + cap * (1. - abulk) * vd * (0.5 - corr);
+    let drain = if xpart == 0.5 {
+        0.5 * inversion
+    } else if xpart > 0.5 {
+        -0.5 * cap * over * (1. - 1.5 * y + 3. * y * corr)
+    } else {
+        -0.5 * cap * over * (1. - (5. / 3.) * y + y.sq() * (1. - 0.2 * y)) / mean.sq()
+    };
+    [drain, -bulk - inversion, inversion - drain, bulk]
+}
+
+pub(crate) fn depletion<const N: usize>(arg: Dual<N>, k1: f64) -> Dual<N> {
     if arg.v < 0. {
         arg
     } else if k1 == 0. {
@@ -159,4 +168,12 @@ pub(super) fn depletion<const N: usize>(arg: Dual<N>, k1: f64) -> Dual<N> {
     } else {
         k1 * ((arg + 0.25 * k1 * k1).sqrt() - 0.5 * k1)
     }
+}
+
+// Bias-dependent lightly doped diffusion overlap (BSIMSOI §4.4).
+pub(crate) fn ldd_overlap<const N: usize>(v: Dual<N>, kappa: f64) -> Dual<N> {
+    let k = kappa.max(0.01);
+    let sum = v + 0.02;
+    let edge = 0.5 * (sum - (sum.sq() + 0.08).sqrt());
+    v - edge - 0.5 * k * ((1. - 4. * edge / k).sqrt() - 1.)
 }

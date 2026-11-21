@@ -60,10 +60,19 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
     use Quantity::*;
     let mos = matches!(
         kind,
-        "mos1" | "mos2" | "mos3" | "mos6" | "mos9" | "bsim1" | "bsim2" | "bsim3" | "bsim4"
+        "mos1"
+            | "mos2"
+            | "mos3"
+            | "mos6"
+            | "mos9"
+            | "bsim1"
+            | "bsim2"
+            | "bsim3"
+            | "bsim4"
+            | "bsimsoi"
     );
     let bipolar = matches!(kind, "bjt" | "vbic" | "hicum");
-    let bsim = matches!(kind, "bsim1" | "bsim2" | "bsim3" | "bsim4");
+    let bsim = matches!(kind, "bsim1" | "bsim2" | "bsim3" | "bsim4" | "bsimsoi");
     Some(match p {
         "i" if matches!(
             kind,
@@ -109,12 +118,14 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
         }
         "ib" if mos || bipolar => Current,
         "id" if mos || matches!(kind, "diode" | "jfet" | "jfet2" | "mesfet" | "vdmos") => Current,
+        "ie" | "ic" | "ids" | "igidl" | "igisl" if kind == "bsimsoi" => Current,
+        "vbs" | "vgs" | "vds" | "ves" if kind == "bsimsoi" => Voltage,
         "ibd" if kind == "vdmos" => Current,
         "vgs" | "vds" if kind == "vdmos" => Voltage,
         "cgs" | "cgd" if matches!(kind, "vdmos" | "jfet2") => Capacitance,
         "ibd" | "ibs" if mos => Current,
-        "isub" if matches!(kind, "bsim3" | "bsim4") => Current,
-        "igs" | "igd" | "igb" | "igcd" | "igcs" if kind == "bsim4" => Current,
+        "isub" if matches!(kind, "bsim3" | "bsim4" | "bsimsoi") => Current,
+        "igs" | "igd" | "igb" | "igcd" | "igcs" if matches!(kind, "bsim4" | "bsimsoi") => Current,
         "gm" if mos
             || matches!(
                 kind,

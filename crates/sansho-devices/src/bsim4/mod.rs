@@ -5,7 +5,9 @@
 pub mod catalog;
 mod channel;
 mod charges;
+pub(crate) use charges::{depletion, ldd_overlap, partition};
 mod gate;
+pub(crate) use gate::Barrier;
 mod junction;
 mod layout;
 mod noise;
@@ -21,6 +23,7 @@ use crate::{
 use charges::ChargeModel;
 use junction::Junction;
 use layout::Network;
+pub(crate) use layout::layout_stress;
 use params::Size;
 use sansho_diag::Diagnostic;
 use std::sync::Arc;
@@ -29,14 +32,14 @@ type D = Dual<4>;
 const EPS0: f64 = 8.8541878128e-12;
 const EPS_SI: f64 = 11.7 * EPS0;
 
-fn floor<const N: usize>(x: Dual<N>, lower: f64) -> Dual<N> {
+pub(crate) fn floor<const N: usize>(x: Dual<N>, lower: f64) -> Dual<N> {
     if x.v < lower { Dual::cst(lower) } else { x }
 }
 fn theta<const N: usize>(x: Dual<N>) -> Dual<N> {
     let e = (-floor(x, 1e-8)).exp();
     e / (1. - e).sq()
 }
-fn softplus<const N: usize>(x: Dual<N>) -> Dual<N> {
+pub(crate) fn softplus<const N: usize>(x: Dual<N>) -> Dual<N> {
     if x.v > 35. {
         x
     } else if x.v < -35. {
@@ -46,7 +49,7 @@ fn softplus<const N: usize>(x: Dual<N>) -> Dual<N> {
     }
 }
 /// Rationalized lower root of the smoothing quadratic (5.33), exact zero at x=0.
-fn smooth_min<const N: usize>(limit: Dual<N>, x: Dual<N>, delta: f64) -> Dual<N> {
+pub(crate) fn smooth_min<const N: usize>(limit: Dual<N>, x: Dual<N>, delta: f64) -> Dual<N> {
     let diff = limit - x - delta;
     2. * limit * x / (limit + x + delta + (diff.sq() + 4. * delta * limit).sqrt())
 }

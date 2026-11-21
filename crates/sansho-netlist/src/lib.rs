@@ -384,8 +384,11 @@ pub enum ElementKind {
         g: String,
         /// Source.
         s: String,
-        /// Bulk.
+        /// Bulk, or the back gate of an SOI device.
         b: String,
+        /// Optional SOI contact, body and thermal terminals in card order.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        extra: Vec<String>,
         /// Model name (lower-cased).
         model: String,
         /// Instance parameters (`l`, `w`, `ad`, `as`, `pd`, `ps`, ...).
@@ -440,6 +443,16 @@ pub struct ModelCard {
 }
 
 impl ModelCard {
+    /// Silicon-on-insulator MOSFET levels in the ngspice 44 dialect.
+    pub fn is_bsimsoi(&self) -> bool {
+        matches!(self.kind.as_str(), "nmos" | "pmos")
+            && self
+                .params
+                .iter()
+                .rfind(|(k, _)| k == "level")
+                .is_some_and(|(_, v)| matches!(v, 10. | 58.))
+    }
+
     /// True for a native level-four bipolar card, honoring the last LEVEL.
     pub fn is_vbic(&self) -> bool {
         self.bipolar_level(4.)
@@ -527,7 +540,13 @@ impl ElementKind {
                 v.extend(tj.as_deref());
                 v
             }
-            Self::Mosfet { d, g, s, b, .. } => vec![d, g, s, b],
+            Self::Mosfet {
+                d, g, s, b, extra, ..
+            } => {
+                let mut nodes: Vec<&str> = vec![d, g, s, b];
+                nodes.extend(extra.iter().map(String::as_str));
+                nodes
+            }
         }
     }
 }
