@@ -1,0 +1,15 @@
+JFET2 mirrored gate transfer and signed output currents
+* Provenance: original Sansho R14 circuit.
+* sweep: vto -2 -1.5 -1
+.param probe=-2
+Vg g 0 -.8
+Eg pg 0 g 0 -1
+Vd d 0 1.7
+Vp pd 0 -1.7
+Jn d g 0 n
+Jp pd pg 0 p
+.model n njf(level=2 vto={probe} beta=.4m)
+.model p pjf(level=2 vto={probe} beta=.4m)
+.dc Vg -2.1 0 .035
+.save i(Vd) i(Vp)
+.end

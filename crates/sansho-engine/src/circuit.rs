@@ -1370,7 +1370,7 @@ fn native_groups<'a>(
     let mut h_src = Chunked::<Ccvs>::new(CHUNK_LINEAR);
     let mut diodes = Chunked::<Diodes>::new(CHUNK_NONLINEAR);
     let mut bjts = Chunked::<Bjts>::new(CHUNK_NONLINEAR);
-    let mut classic_mos = [1, 2, 3, 6].map(|_| Chunked::<Mos1s>::new(CHUNK_NONLINEAR));
+    let mut classic_mos = [1, 2, 3, 6, 9, 4, 5].map(|_| Chunked::<Mos1s>::new(CHUNK_NONLINEAR));
     let mut bsim3 = Chunked::<Bsim3s>::new(CHUNK_NONLINEAR);
     let mut compact_models = HashMap::<_, PreparedMos>::new();
     let mut bsim4 = Chunked::<Bsim4s>::new(CHUNK_NONLINEAR);
@@ -1733,25 +1733,35 @@ fn native_groups<'a>(
                     continue;
                 };
                 let inst = ModelParams::new(params);
-                let result = instance_temperature(&inst, opts, p.opt(&["tnom"])).and_then(|t| {
+                let level_two = p.get("level", 1.) == 2.;
+                let nominal = p.opt(&["tnom"]);
+                let result = instance_temperature(&inst, opts, nominal).and_then(|mut t| {
+                    let terminals = [node(d), node(g), node(s)];
+                    let area = inst.get("area", 1.);
+                    let copies = inst.opt(&["m", "mult"]).unwrap_or(1.);
+                    if level_two {
+                        // The JFET2 reverse saturation-current sweeps resolve both
+                        // instance and model temperatures in Celsius.
+                        if let Some(k) = p.opt(&["temp"])
+                            && inst.opt(&["temp"]).is_none()
+                        {
+                            t.kelvin = 273.15 + k + inst.get("dtemp", 0.);
+                        }
+                        return sansho_devices::jfet2::Jfet2::new(
+                            &e.name, terminals, &p, polarity, t, area, copies, *off,
+                        )
+                        .map(|g| Box::new(g) as Box<dyn DeviceGroup>);
+                    }
                     let builder = if matches!(e.kind, ElementKind::Mesfet { .. }) {
                         sansho_devices::jfet::Jfet::mesfet
                     } else {
                         sansho_devices::jfet::Jfet::new
                     };
-                    builder(
-                        &e.name,
-                        [node(d), node(g), node(s)],
-                        &p,
-                        polarity,
-                        t,
-                        inst.get("area", 1.),
-                        inst.opt(&["m", "mult"]).unwrap_or(1.),
-                        *off,
-                    )
+                    builder(&e.name, terminals, &p, polarity, t, area, copies, *off)
+                        .map(|g| Box::new(g) as Box<dyn DeviceGroup>)
                 });
                 match result {
-                    Ok(g) => controlled.push(Box::new(g)),
+                    Ok(g) => controlled.push(g),
                     Err(d) => errors.push(d.with_span(e.span)),
                 }
                 ModelCache::warn_ignored(card, &p.unused(), diags);
@@ -2174,7 +2184,43 @@ fn native_groups<'a>(
                     nonlinear_count += 1;
                     continue;
                 }
-                let Some(mut m) = model_cache.mos(model, opts.tnom, diags, &mut errors) else {
+                let mut m = if let Some(card) = model_cache.card(model)
+                    && matches!(card.kind.as_str(), "nmos" | "pmos")
+                    && card
+                        .params
+                        .iter()
+                        .rev()
+                        .find(|(k, _)| k == "level")
+                        .is_some_and(|(_, v)| matches!(v, 4. | 5.))
+                {
+                    let p = ModelParams::new(&card.params);
+                    let polarity = if card.kind == "pmos" { -1. } else { 1. };
+                    if inst.opt(&["temp"]).is_some() {
+                        errors.push(
+                            Diagnostic::error(
+                                "E-ELAB-PARAM",
+                                format!(
+                                    "{}: instance TEMP is unsupported for BSIM1/2, use .temp",
+                                    e.name
+                                ),
+                            )
+                            .with_span(e.span),
+                        );
+                        continue;
+                    }
+                    match Mos1Model::early_bsim(&p, polarity, &geom) {
+                        Ok(m) => {
+                            ModelCache::warn_ignored(card, &p.unused(), diags);
+                            m
+                        }
+                        Err(d) => {
+                            errors.push(d.with_span(e.span));
+                            continue;
+                        }
+                    }
+                } else if let Some(m) = model_cache.mos(model, opts.tnom, diags, &mut errors) {
+                    m
+                } else {
                     continue;
                 };
                 let copies = inst.opt(&["m", "mult"]).unwrap_or(1.);
@@ -2475,7 +2521,8 @@ impl<'a> ModelCache<'a> {
         let params = ModelParams::new(&card.params);
         let level = params.get("level", 1.0);
         if !(level == 1.
-            || matches!(card.kind.as_str(), "nmos" | "pmos") && matches!(level, 2. | 3. | 6.))
+            || matches!(card.kind.as_str(), "nmos" | "pmos") && matches!(level, 2. | 3. | 6. | 9.)
+            || matches!(card.kind.as_str(), "njf" | "pjf") && level == 2.)
         {
             let mut d = Diagnostic::error(
                 "E-ELAB-MODEL",
@@ -2483,9 +2530,24 @@ impl<'a> ModelCache<'a> {
             )
             .with_span(card.span);
             if matches!(card.kind.as_str(), "nmos" | "pmos") {
-                d = d.with_note("built-in MOSFET levels are 1, 2, 3, 6, 8, 49 and 54");
+                d = d.with_note("built-in MOSFET levels are 1–6, 8, 9, 49 and 54");
             }
             errors.push(d);
+            return None;
+        }
+        if level == 9.
+            && let Some((key, _)) = card
+                .params
+                .iter()
+                .find(|(key, _)| matches!(key.as_str(), "alpha" | "xd" | "input_delta"))
+        {
+            errors.push(
+                Diagnostic::error(
+                    "E-ELAB-MODEL",
+                    format!("model `{}`: level 9 rejects model input `{key}`", card.name),
+                )
+                .with_span(card.span),
+            );
             return None;
         }
         let polarity = match card.kind.as_str() {

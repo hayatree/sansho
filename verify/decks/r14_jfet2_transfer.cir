@@ -1,0 +1,9 @@
+JFET2 cutoff and gate transfer at two drain biases
+* Provenance: original Sansho R14 circuit.
+Vd d 0 1.5
+Vg g 0 -0.5
+J1 d g 0 dev
+.model dev njf(level=2 beta=0.7m vto=-1.6 cgs=4p cgd=1p)
+.dc Vg -2.4 0 .025 Vd .2 2 1.8
+.save i(Vd) i(Vg)
+.end

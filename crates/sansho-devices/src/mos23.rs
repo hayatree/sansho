@@ -349,16 +349,25 @@ impl Channel {
                 };
                 // Drain depletion widens beyond pinch-off. Continue the length
                 // smoothly beyond half the channel to keep Leff positive.
-                let loss = if kappa > 0. && depletion > 0. && vd.v > sat.v {
-                    let field = if velocity > 0. {
-                        // End field from current continuity at saturation,
-                        // E = kappa * I_sat / (L * dI/dV at the knee).
-                        // Substituting the saturation condition avoids subtraction
-                        // of nearly equal terms in the left-hand derivative.
-                        field_voltage * (1. + field_voltage / sat) * (kappa / length)
+                let loss = if kappa <= 0. || depletion <= 0. {
+                    Dual::cst(0.)
+                } else if velocity == 0. {
+                    // With no velocity limit, the measured triode shortening
+                    // is quartic. Tangency to sqrt(Vd - Vsat + offset) fixes
+                    // the offset to Vsat/8 at the join.
+                    let offset = sat / 8.;
+                    let scale = depletion * kappa.sqrt() / length;
+                    if vd.v < sat.v {
+                        scale * offset.sqrt() * (vd / sat).sq().sq()
                     } else {
-                        Dual::cst(0.)
-                    };
+                        scale * (vd - sat + offset).sqrt()
+                    }
+                } else if vd.v > sat.v {
+                    // End field from current continuity at saturation,
+                    // E = kappa * I_sat / (L * dI/dV at the knee).
+                    // Substituting the saturation condition avoids subtraction
+                    // of nearly equal terms in the left-hand derivative.
+                    let field = field_voltage * (1. + field_voltage / sat) * (kappa / length);
                     drain_extension((vd - sat) * kappa, depletion.powi(2), field) / length
                 } else {
                     Dual::cst(0.)

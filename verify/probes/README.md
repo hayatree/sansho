@@ -451,3 +451,131 @@ value in its 3.375 ns sample. Sansho publishes both edges at the real
 event. The positive-T 0.025 ns trace also has one discrepant event sample
 at 2.375 ns. The logs do not determine the ordering at finer precision.
 [Model laws](../../docs/xspice.md#r13e-measured-laws)
+
+## R14 classical models
+
+The maintainer supplied 390 ASCII raw files plus logs, including truncated runs. The tables identify the one-variable experiments. Use the R14b commands below to regenerate the failed settings and collect the remaining measurements. [Equations and interpretation](../../docs/r14-models.md)
+
+### Parker–Skellern junction FET
+
+| JFET2 | What the sweep distinguishes |
+|---|---|
+| [p](r14_jfet2_p.cir), [q](r14_jfet2_q.cir) | Linear-region and saturation power dependence. Lower XI makes the Q limit measurable. |
+| [xi](r14_jfet2_xi.cir), [z](r14_jfet2_z.cir) | Saturation scale and rounding of the knee in the drain-bias families. |
+| [vst](r14_jfet2_vst.cir), [mvst](r14_jfet2_mvst.cir) | Semilog transfer slope below cutoff and its drain-bias dependence. |
+| [lfgam](r14_jfet2_lfgam.cir), [lfg1](r14_jfet2_lfg1.cir), [lfg2](r14_jfet2_lfg2.cir) | Low-frequency threshold feedback and its separate dependence on the two end voltages. |
+| [hfgam](r14_jfet2_hfgam.cir), [hfg1](r14_jfet2_hfg1.cir), [hfg2](r14_jfet2_hfg2.cir) | Drain-excited admittance across the gate relaxation pole. The three runs isolate high-frequency opposite-end feedback and each bias sensitivity. |
+| [hfeta](r14_jfet2_hfeta.cir), [hfe1](r14_jfet2_hfe1.cir), [hfe2](r14_jfet2_hfe2.cir) | Gate-excited admittance across the same pole. Inspect amplitude and sign of the instantaneous gate-feedback terms. |
+| [taug](r14_jfet2_taug.cir), [taud](r14_jfet2_taud.cir) | Pole frequency for gate feedback at fixed heating, and for heating at fixed gate feedback. |
+| [delta](r14_jfet2_delta.cir) | Channel-current reduction with intrinsic dissipation at several gate and drain biases. |
+| [cgs](r14_jfet2_cgs.cir), [cgd](r14_jfet2_cgd.cir) | AC source and drain currents with two unequal junction biases. These distinguish the physical assignment of the gate capacitances. |
+| [acgam](r14_jfet2_acgam.cir), [xc](r14_jfet2_xc.cir) | Cross-terminal gate-charge coupling and loss of capacitance at a pinched-off end. |
+| [vbi](r14_jfet2_vbi.cir), [fc](r14_jfet2_fc.cir) | Junction charge curvature at unequal biases and the onset of its forward continuation. |
+| [cdss](r14_jfet2_cdss.cir) | Ignored-parameter control under drain excitation. |
+| [lg](r14_jfet2_lg.cir), [ld](r14_jfet2_ld.cir), [ls](r14_jfet2_ls.cir) | Flat lead controls. The logs flag these inductances and RG as ignored. |
+| [ibd](r14_jfet2_ibd.cir), [vbd](r14_jfet2_vbd.cir), [n](r14_jfet2_n.cir) | Reverse gate knee magnitude and position, then forward gate ideality from the semilog slope. |
+| [afac](r14_jfet2_afac.cir), [nfing](r14_jfet2_nfing.cir) | Ignored-parameter controls at fixed electrical bias. |
+| [polarity](r14_jfet2_polarity.cir) | Mirrored NJF and PJF transfer with equal signed VTO settings. |
+| [model_temp](r14_jfet2_model_temp.cir), [instance_temp](r14_jfet2_instance_temp.cir), [tnom](r14_jfet2_tnom.cir) | Model and instance TEMP are Celsius. TNOM sets the junction reference temperature. |
+| [kf](r14_jfet2_kf.cir), [af](r14_jfet2_af.cir) | Flicker amplitude and current exponent with a noiseless transimpedance readout. |
+
+### MOS9 compared with MOS3
+
+| MOS9 | What the sweep distinguishes |
+|---|---|
+| [xl](r14_mos9_xl.cir), [xw](r14_mos9_xw.cir), [wd](r14_mos9_wd.cir) | Length and width mask adjustments and the diffusion-width correction. Compare the two sense currents at each drain and gate bias. |
+| [delvto](r14_mos9_delvto.cir), [delvto_p](r14_mos9_delvto_p.cir) | Threshold offset sign and magnitude on NMOS and PMOS. |
+| [kappa](r14_mos9_kappa.cir), [vmax](r14_mos9_vmax.cir) | Post-knee length modulation and velocity-limited saturation. The comparison spans the knee. |
+| [eta](r14_mos9_eta.cir), [delta](r14_mos9_delta.cir) | Drain-dependent threshold shift and the narrow-width correction. |
+| [theta](r14_mos9_theta.cir), [xj](r14_mos9_xj.cir) | Transverse mobility reduction and depletion sharing with finite substrate doping. |
+| [nfs](r14_mos9_nfs.cir) | Weak-inversion gate family around and below the source threshold. |
+| [xd](r14_mos9_xd.cir), [alpha](r14_mos9_alpha.cir), [input_delta](r14_mos9_input_delta.cir) | 44.2 rejected each original card. The replacement positive controls sweep NSUB, TOX and DELTA respectively. |
+
+### Extracted parameters common to early BSIM
+
+| BSIM1 | BSIM2 | What the sweep distinguishes |
+|---|---|---|
+| [lvfb](r14_bsim1_lvfb.cir), [wvfb](r14_bsim1_wvfb.cir) | [lvfb](r14_bsim2_lvfb.cir), [wvfb](r14_bsim2_wvfb.cir) | Flat-band shift from inverse length or width. Each deck measures two devices with a twofold change of that single dimension. |
+| [dl](r14_bsim1_dl.cir), [dw](r14_bsim1_dw.cir) | [dl](r14_bsim2_dl.cir), [dw](r14_bsim2_dw.cir) | Effective-dimension reduction in micrometres at fixed drawn geometry. |
+| [vfb_p](r14_bsim1_vfb_p.cir) | [vfb_p](r14_bsim2_vfb_p.cir) | Mirrored PMOS/NMOS transfer as the signed flat-band coefficient changes. |
+| [k2](r14_bsim1_k2.cir) | [k2](r14_bsim2_k2.cir) | Threshold shift from the second body-effect term under fixed reverse body bias. |
+| [tox](r14_bsim1_tox.cir) | [tox](r14_bsim2_tox.cir) | Oxide-thickness units and transconductance scaling across weak and strong inversion. |
+| [vdd](r14_bsim1_vdd.cir) | [vdd](r14_bsim2_vdd.cir) | Mobility interpolation reference voltage with different low- and high-field mobilities. |
+| [n0](r14_bsim1_n0.cir), [nb](r14_bsim1_nb.cir), [nd](r14_bsim1_nd.cir) | [n0](r14_bsim2_n0.cir), [nb](r14_bsim2_nb.cir), [nd](r14_bsim2_nd.cir) | Weak-inversion intercept slope, body dependence and drain dependence. Compare semilog gate transfers. |
+| [temp](r14_bsim1_temp.cir), [junction_temp](r14_bsim1_junction_temp.cir) | [temp](r14_bsim2_temp.cir), [junction_temp](r14_bsim2_junction_temp.cir) | Extraction temperature at fixed operating temperature, then circuit temperature with a forward body-junction sweep. |
+| [mult](r14_bsim1_mult.cir) | [mult](r14_bsim2_mult.cir) | Drain-current magnitude for parallel copies with unchanged drawn dimensions. |
+| [xpart](r14_bsim1_xpart.cir) | [xpart](r14_bsim2_xpart.cir) | Real and imaginary gate, drain, source and bulk currents at saturation. Drain/source displacement partition distinguishes 40/60 from 0/100. |
+| [pbsw](r14_bsim1_pbsw.cir) | [pbsw](r14_bsim2_pbsw.cir) | Reverse-biased sidewall capacitance with explicit perimeter and drain-only AC drive. |
+| [wdf](r14_bsim1_wdf.cir), [dell](r14_bsim1_dell.cir) | [wdf](r14_bsim2_wdf.cir), [dell](r14_bsim2_dell.cir) | Default diffusion geometry with areas and perimeters omitted. Both parameters warn in Sansho. A changing bulk admittance would reveal an implicit geometry rule. |
+| [kf](r14_bsim1_kf.cir), [af](r14_bsim1_af.cir) | [kf](r14_bsim2_kf.cir), [af](r14_bsim2_af.cir) | Flicker level and current-power exponent through a noiseless 1 kΩ transimpedance. |
+
+### BSIM1 bias fits
+
+| BSIM1 | What the sweep distinguishes |
+|---|---|
+| [mus](r14_bsim1_mus.cir), [x3ms](r14_bsim1_x3ms.cir) | High-drain mobility and its endpoint slope. Inspect output conductance on either side of the measurement voltage. |
+| [x2mz](r14_bsim1_x2mz.cir), [x2ms](r14_bsim1_x2ms.cir) | Body sensitivity of the zero-drain and high-drain mobilities. |
+| [u1](r14_bsim1_u1.cir), [x2u1](r14_bsim1_x2u1.cir), [x3u1](r14_bsim1_x3u1.cir) | Strength of velocity reduction, its body correction and its drain correction. |
+| [x2u0](r14_bsim1_x2u0.cir) | Body correction to transverse-field mobility degradation. |
+| [x2e](r14_bsim1_x2e.cir), [x3e](r14_bsim1_x3e.cir) | Body and drain sensitivities of the barrier-lowering coefficient. |
+
+### BSIM2 bias fits
+
+| BSIM2 | What the sweep distinguishes |
+|---|---|
+| [mus0](r14_bsim2_mus0.cir), [mu0b](r14_bsim2_mu0b.cir), [musb](r14_bsim2_musb.cir) | High-field mobility and separate body slopes at the two extraction endpoints. |
+| [mu20](r14_bsim2_mu20.cir), [mu2b](r14_bsim2_mu2b.cir), [mu2g](r14_bsim2_mu2g.cir) | Saturating mobility term at fixed unequal mobility endpoints. Vary the base, body and gate coefficients independently. |
+| [mu30](r14_bsim2_mu30.cir), [mu3b](r14_bsim2_mu3b.cir), [mu3g](r14_bsim2_mu3g.cir) | Linear drain-field mobility coefficient and its body and gate dependences. The nonzero tanh shape separates the linear slope from the VDD endpoint constraint. |
+| [mu40](r14_bsim2_mu40.cir), [mu4b](r14_bsim2_mu4b.cir), [mu4g](r14_bsim2_mu4g.cir) | Curvature of the drain-field interpolation and its body and gate dependence. |
+| [uab](r14_bsim2_uab.cir), [ub0](r14_bsim2_ub0.cir), [ubb](r14_bsim2_ubb.cir) | Transverse-field degradation. Compare the linear body correction and the quadratic gate coefficient and its body correction. |
+| [u1b](r14_bsim2_u1b.cir), [u1d](r14_bsim2_u1d.cir) | Velocity-limiting field sensitivity to body and drain voltages. |
+| [etab](r14_bsim2_etab.cir) | Body correction to drain-induced threshold lowering. |
+| [vof0](r14_bsim2_vof0.cir), [vofb](r14_bsim2_vofb.cir), [vofd](r14_bsim2_vofd.cir) | Weak-inversion offset, its body slope and its drain slope. Inspect transfer shifts below the lower spline endpoint. |
+| [vglow](r14_bsim2_vglow.cir), [vghigh](r14_bsim2_vghigh.cir) | Position and continuity of the two joins in the transition from diffusion to drift current. |
+| [ai0](r14_bsim2_ai0.cir), [aib](r14_bsim2_aib.cir), [bi0](r14_bsim2_bi0.cir), [bib](r14_bsim2_bib.cir) | Above-knee hot-electron enhancement, its exponential slope and both body sensitivities. |
+| [vgg](r14_bsim2_vgg.cir), [vbb](r14_bsim2_vbb.cir) | Gate and bulk clipping at twice the signed extraction voltage. |
+
+### Vertical power MOSFET
+
+| VDMOS | What the sweep distinguishes |
+|---|---|
+| [texp0_ambient](r14_vdmos_texp0_ambient.cir), [texp0_junction](r14_vdmos_texp0_junction.cir) | RD-only device at elevated ambient temperature or clamped junction rise. The ambient control resolves the explicit RD exponent. The clamped control is flat in 44.2. |
+| [texp1_ambient](r14_vdmos_texp1_ambient.cir), [texp1_junction](r14_vdmos_texp1_junction.cir) | RQ-only device with finite VQ. RD = 0 removes the branch. All settings coincide in 44.2. |
+
+### Control output
+
+| Control | What the sweep distinguishes |
+|---|---|
+| [numdgt](r14_control_numdgt.cir) | Scalar measurement, echo, complex print columns, print line and complex wrdata fields at positive and negative precision. Examine the log and the per-setting .control/fields.dat side by side. |
+
+### R14b reference runs
+
+From the repository root, run the eight repaired probes and the new isolating probes with an installed ngspice 44.2 or the reference wrapper. The driver saves a deck and log per setting, plus a raw or control text file. It reports failed settings together after the last run. Keep the logs, including the four NUMDGT logs, and the corresponding `*.control/fields.dat` files.
+
+```bash
+NGSPICE=tools/ngspice/ngspice.sh verify/probes/sweep.sh \
+  verify/probes/r14_bsim{1,2}_junction_temp.cir \
+  verify/probes/r14_bsim2_u1b.cir verify/probes/r14_control_numdgt.cir \
+  verify/probes/r14_mos9_{alpha,input_delta,kappa,xd}.cir \
+  verify/probes/r14b_*.cir
+cargo run --release -q -p sansho-verify --features jit -- verify/decks/r14_bsim1_inverter.cir
+```
+
+| R14b probe stems (all begin with r14b_) | Quantity to extract |
+|---|---|
+| bsim1_rail | Near-zero drain-bias slope and diffusion plateau versus MUS at fixed strong gate drive. |
+| bsim1_sparse, bsim2_sparse | Drain sweep at three gate biases with VDD omitted, to locate the mobility endpoint. |
+| bsim1_gate_charge, bsim2_gate_charge | Gate-driven terminal capacitances across cutoff, weak inversion and saturation. |
+| bsim2_triode_charge | Drain-excited terminal capacitances at low drain bias across inversion. |
+| bsim1_noise_bias, bsim2_noise_bias, bsim1_white_bias, bsim2_white_bias | Bias sensitivity of the 1 Hz intercept and, with KF = 0, the white floor, using the same noiseless transimpedance as the AF sweeps. |
+| bsim2_inverter_trap, bsim2_inverter_gear | Peak and trapezoidal mean of supply current across input ramp endpoints at three maximum timesteps. |
+| jfet2_id | Inspect the model log for a descriptive text ID on an otherwise supported card. |
+| jfet2_xc_bias | XC dependence as the gate approaches cutoff. |
+| vdmos_rd_hot, vdmos_rthjc | Clamped RD-only exponents with explicit RTHJC, then mixed resistance with variable RTHJC. |
+| vdmos_texp0_ambient, vdmos_texp0_junction, vdmos_texp1_ambient, vdmos_texp1_junction | Vary each explicit exponent independently with both RD and RQ present, under ambient or junction heating. |
+
+Both original BSIM junction probes used an unsupported instance TEMP. The replacements sweep .temp. The original BSIM2 U1B sweep crossed a negative velocity coefficient with omitted VBB. The replacement sets VBB = −1 V and uses smaller signed coefficients. The three rejected MOS9 inputs have separate elaboration tests. Their replacement decks retain the original filenames. KAPPA = 0 parsed but stopped after three samples, so the revised deck starts at 0.05. The control deck sets the Nutmeg variable directly.
+
+### R14c results
+
+All eight repaired probes and the R14b settings have been examined. Across the current R14 and R14b templates, 457 of 484 completed waveform settings pass. The four NUMDGT settings reproduce the numeric listings and wrdata bytes. The three bare `ID=PF1` settings stop at parameter substitution with undefined PF1 on line 8. No waveform is expected for these three runs. The 27 waveform differences comprise 24 early-BSIM noise settings and the BSIM2 25 ps trap, 25 ps Gear and 5 ps Gear inverters. The 1 ps trap and Gear runs both pass. [Measured laws and acceptance deck status](../../docs/r14-models.md)

@@ -312,6 +312,8 @@ fn thermal_vdmos_coupled_jacobian_with_drift_resistance() {
         ("rs", 0.2),
         ("subshift", 0.03),
         ("ksubthres", 0.07),
+        ("texp0", 2.5),
+        ("texp1", -0.6),
         ("tcvth", 0.001),
     ]);
     let dev = Vdmos::new("m1", [Some(0), Some(1), None], &p, &params(&[]), HOT, false).unwrap();
@@ -371,5 +373,105 @@ fn analog_port_residuals_and_dynamic_charges() {
         ),
     ] {
         check(build(card, ports), &["a", "b", "out"], &bias);
+    }
+}
+
+#[test]
+fn r14_jfet2_filtered_gate_and_heat_derivatives() {
+    let p = params(&[
+        ("vst", 0.04),
+        ("p", 1.7),
+        ("q", 2.2),
+        ("xi", 2.),
+        ("cgs", 4e-12),
+        ("cgd", 1e-12),
+        ("xc", 0.4),
+        ("acgam", 0.1),
+        ("delta", 30.),
+        ("taud", 1e-8),
+        ("taug", 3e-9),
+        ("hfgam", 0.03),
+        ("lfgam", 0.01),
+        ("rg", 3.),
+        ("lg", 1e-9),
+    ]);
+    for sign in [-1., 1.] {
+        let dev = sansho_devices::jfet2::Jfet2::new(
+            "j",
+            [Some(0), Some(1), None],
+            &p,
+            sign,
+            HOT,
+            1.5,
+            2.,
+            false,
+        )
+        .unwrap();
+        check(
+            dev,
+            &["d", "g"],
+            &[0.8 * sign, -0.6 * sign, -0.6, -1.4, 0.015],
+        );
+    }
+}
+
+#[test]
+fn r14_early_bsim_terminal_charge_and_current_jacobians() {
+    use sansho_devices::mos1::{Mos1Geometry, Mos1Model, Mos1s};
+    for level in [4., 5.] {
+        for sign in [-1., 1.] {
+            let p = params(&[
+                ("level", level),
+                ("phi", 0.7),
+                ("tox", 0.02),
+                ("vfb", -0.5),
+                ("k1", 0.6),
+                ("k2", 0.05),
+                ("cj", 2e-4),
+                ("cjsw", 2e-10),
+                ("pbsw", 0.65),
+                ("muz", 530.),
+                ("mu0", 530.),
+                ("mu20", 0.8),
+                ("mu3g", 5.),
+                ("mus0", 630.),
+                ("u1", 0.2),
+                ("u10", 0.2),
+                ("n0", 1.5),
+                ("cgdo", 1e-10),
+            ]);
+            let geom = Mos1Geometry {
+                l: 1e-6,
+                w: 3e-6,
+                ad: 1e-12,
+                as_: 1e-12,
+                pd: 2e-6,
+                ps: 2e-6,
+            };
+            for (g, d) in [
+                (-0.4, 0.2),
+                (0.72, 0.15),
+                (1.6, 0.22),
+                (1.6, 2.),
+                (1.1, -0.2),
+            ] {
+                let mut model = Mos1Model::early_bsim(&p, sign, &geom).unwrap();
+                model.at_temperature(HOT);
+                model.multiply(2.);
+                let mut dev = Mos1s::default();
+                dev.push(
+                    "m",
+                    [Some(0), Some(1), Some(2), Some(3)],
+                    model,
+                    geom,
+                    false,
+                );
+                check(
+                    dev,
+                    &["d", "g", "s", "b"],
+                    &[d * sign, g * sign, 0., -0.25 * sign],
+                );
+            }
+        }
     }
 }

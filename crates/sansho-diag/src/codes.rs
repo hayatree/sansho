@@ -380,7 +380,7 @@ pub const CODES: &[CodeInfo] = &[
         "Unsupported model",
         "The model level or type is not supported.",
         &[
-            "Use NJF/PJF level 1 for J devices. Built-in MOS channels accept levels 1, 2, 3, 8, 49 and 54. See docs/compatibility.md for parameter coverage.",
+            "Use NJF/PJF level 1 or 2 for J devices. Built-in MOS channels accept levels 1–6, 8, 9, 49 and 54. See docs/compatibility.md for parameter coverage.",
         ],
     ),
     e(
@@ -393,7 +393,10 @@ pub const CODES: &[CodeInfo] = &[
         "E-ELAB-PARAM",
         "Invalid instance parameter",
         "An instance parameter is out of range (e.g. a non-positive channel length).",
-        &["Fix the instance parameter."],
+        &[
+            "Fix the instance parameter.",
+            "BSIM1/2 require positive effective dimensions, TOX in micrometres, PHI and low-field mobility. For JFET2, check the junction potential, exponents, geometry, lead impedances and relaxation times.",
+        ],
     ),
     w(
         "W-ELAB-DANGLING",
@@ -447,6 +450,7 @@ pub const CODES: &[CodeInfo] = &[
         "A `.model` parameter is not implemented in this version and has no effect.",
         &[
             "Check the model documentation for the supported parameters.",
+            "JFET2 ignores AFAC, CDSS, LD, LG, LS, NFING and RG. MOS9 rejects XD, ALPHA and INPUT_DELTA. BSIM1/2 ignore WDF and DELL. VDMOS accepts TEXP0 and TEXP1.",
             "For a diode, TBV1 and TBV2 are unrecognized. Use TCV (V/K) to subtract TCV × (T − TNOM) from BV.",
         ],
     ),

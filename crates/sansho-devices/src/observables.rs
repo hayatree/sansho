@@ -36,13 +36,6 @@ pub(crate) fn mos(
         ("vth", threshold),
         ("vdsat", sat),
     ]);
-    const Q: [&str; 4] = ["qd", "qg", "qs", "qb"];
-    const C: [[&str; 4]; 4] = [
-        ["cdd", "cdg", "cds", "cdb"],
-        ["cgd", "cgg", "cgs", "cgb"],
-        ["csd", "csg", "css", "csb"],
-        ["cbd", "cbg", "cbs", "cbb"],
-    ];
     if reverse {
         charge.swap(0, 2);
     }
@@ -52,7 +45,23 @@ pub(crate) fn mos(
         if reverse {
             grad.swap(0, 2);
         }
-        values.push((Q[r], q.v * mult));
-        values.extend(C[r].into_iter().zip(grad.map(|x| x * mult)));
+        terminal_charge(values, r, q.v * mult, grad.map(|g| g * mult));
     }
+}
+
+pub(crate) fn terminal_charge(
+    values: &mut Vec<(&'static str, f64)>,
+    row: usize,
+    charge: f64,
+    gradient: [f64; 4],
+) {
+    const Q: [&str; 4] = ["qd", "qg", "qs", "qb"];
+    const C: [[&str; 4]; 4] = [
+        ["cdd", "cdg", "cds", "cdb"],
+        ["cgd", "cgg", "cgs", "cgb"],
+        ["csd", "csg", "css", "csb"],
+        ["cbd", "cbg", "cbs", "cbb"],
+    ];
+    values.push((Q[row], charge));
+    values.extend(C[row].into_iter().zip(gradient));
 }

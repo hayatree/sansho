@@ -1,0 +1,12 @@
+BSIM1 X2MS bias and geometry response
+* Provenance: original Sansho R14 circuit.
+* sweep: x2ms -100 0 100
+.param probe=-100
+Vd d 0 1.5
+Vg g 0 1.4
+Vb b 0 -.25
+M1 d g 0 b dev w=4u l=1.2u
+.model dev nmos(level=4 phi=.7 vfb=-.52 k1=.55 tox=.025 muz=470 u0=.12 u1=.1 eta=.012 vdd=3 temp=27 n0=1.45 xpart=0 k2=.025 mus=620 x2ms={probe})
+.dc Vg -.2 2.2 .05 Vd .2 3 1.4
+.save i(Vg) i(Vd)
+.end

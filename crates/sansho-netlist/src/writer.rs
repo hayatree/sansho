@@ -343,6 +343,11 @@ pub fn write_analysis(a: &AnalysisCard) -> String {
 
 /// Format a model card with its explicit parameters.
 pub fn write_model(m: &crate::ModelCard) -> String {
+    write_model_with(m, num)
+}
+
+/// Write a model listing using the caller's numeric display precision.
+pub fn write_model_with(m: &crate::ModelCard, num: impl Fn(f64) -> String) -> String {
     let mut l = format!(".model {} {} (", m.name, m.kind);
     let ps: Vec<String> = m
         .params
@@ -391,7 +396,16 @@ pub fn write_model(m: &crate::ModelCard) -> String {
                 .collect();
             let _ = write!(l, " {k}=\"{table}\"");
         } else {
-            let _ = write!(l, " {k}=[{}]", list(values));
+            let _ = write!(
+                l,
+                " {k}=[{}]",
+                values
+                    .iter()
+                    .copied()
+                    .map(&num)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
         }
     }
     l += ")";

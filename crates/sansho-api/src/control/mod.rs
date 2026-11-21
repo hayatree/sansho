@@ -325,7 +325,14 @@ impl State<'_> {
             _ => None,
         }
     }
-    fn expand(&self, s: &str) -> Result<String> {
+    fn expand(&self, s: &str, echo: bool) -> Result<String> {
+        let display = |v: f64| {
+            if echo {
+                files::substitution(v)
+            } else {
+                v.to_string()
+            }
+        };
         let mut rest = s;
         let mut out = String::new();
         while let Some((before, tail)) = rest.split_once('$') {
@@ -350,9 +357,9 @@ impl State<'_> {
                     .iter()
                     .map(|z| {
                         if v.complex {
-                            format!("{},{}", z.re, z.im)
+                            format!("{},{}", display(z.re), display(z.im))
                         } else {
-                            z.re.to_string()
+                            display(z.re)
                         }
                     })
                     .collect::<Vec<_>>()
@@ -412,7 +419,9 @@ impl State<'_> {
         while let Some(s) = body.get(pc) {
             pc += 1;
             if s.command == "goto" {
-                let label = self.expand(&s.arguments).map_err(|e| e.with_span(s.span))?;
+                let label = self
+                    .expand(&s.arguments, false)
+                    .map_err(|e| e.with_span(s.span))?;
                 pc = body
                     .iter()
                     .position(|s| s.command == "label" && s.arguments.eq_ignore_ascii_case(&label))
@@ -438,7 +447,7 @@ impl State<'_> {
         Ok(Flow::Next)
     }
     fn condition(&mut self, s: &str) -> Result<bool> {
-        let expanded = self.expand(s)?;
+        let expanded = self.expand(s, false)?;
         Ok(eval(self, &expanded)?
             .values
             .iter()
@@ -457,14 +466,14 @@ impl State<'_> {
                 let mut var = String::new();
                 let mut items = vec![].into_iter();
                 if cmd == "repeat" && !args.is_empty() {
-                    let args = self.expand(args)?;
+                    let args = self.expand(args, false)?;
                     count = Some(integer(eval(self, &args)?.number()?, usize::MAX)?);
                 }
                 if cmd == "foreach" {
                     let (name, words) = split(args);
                     var = name.to_ascii_lowercase();
                     items = self
-                        .expand(words)?
+                        .expand(words, false)?
                         .split_whitespace()
                         .map(str::to_owned)
                         .collect::<Vec<_>>()
@@ -494,7 +503,7 @@ impl State<'_> {
                 Ok(Flow::Next)
             }
             Block::Command => {
-                let args = self.expand(args)?;
+                let args = self.expand(args, cmd == "echo")?;
                 self.command(cmd, &args, depth)
             }
         }
@@ -585,7 +594,7 @@ impl State<'_> {
                 let mut row = i.to_string();
                 for c in &table.columns {
                     if let Some(v) = c.get(i) {
-                        row.push_str(&format!("\t{v:e}"))
+                        row.push_str(&format!("\t{}", files::batch_number(*v, self.decimals(6))))
                     }
                 }
                 self.transcript.lines.push(row);
@@ -617,7 +626,9 @@ impl State<'_> {
         self.plots[plot]
             .locals
             .insert(name.clone(), Vector::scalar(x));
-        self.transcript.lines.push(format!("{name} = {x:e}"));
+        self.transcript
+            .lines
+            .push(format!("{name:<20}=  {}", files::batch_number(x, 6)));
         Ok(())
     }
     fn set(&mut self, args: &str) -> Result<()> {
@@ -721,9 +732,12 @@ impl State<'_> {
             "echo" => self.transcript.lines.push(args.trim_matches('"').into()),
             "print" | "wrdata" | "write" => self.output(cmd, args)?,
             "showmod" if args.trim().is_empty() => {
+                let decimals = self.decimals(6);
                 self.transcript
                     .lines
-                    .extend(self.deck.models.iter().map(sansho_netlist::write_model));
+                    .extend(self.deck.models.iter().map(|m| {
+                        sansho_netlist::write_model_with(m, |v| files::batch_number(v, decimals))
+                    }));
             }
             "edisplay" | "eprint" => {
                 let a = self.plots[self.current]
@@ -736,6 +750,7 @@ impl State<'_> {
                 } else {
                     args.split_whitespace().collect()
                 };
+                let decimals = self.decimals(6);
                 for name in names {
                     let trace = a
                         .events
@@ -752,9 +767,9 @@ impl State<'_> {
                         };
                         self.transcript.lines.push(format!("{name} {kind}"));
                     } else {
-                        self.transcript
-                            .lines
-                            .extend(trace.iter().map(|(axis, s)| format!("{axis:e} {name} {s}")));
+                        self.transcript.lines.extend(trace.iter().map(|(axis, s)| {
+                            format!("{} {name} {s}", files::batch_number(*axis, decimals))
+                        }));
                     }
                 }
             }
@@ -771,10 +786,21 @@ impl State<'_> {
                 // interprets a plain complex trace as magnitude.
                 let mut a = p.snapshot()?;
                 if let sansho_output::Data::Complex { columns } = &a.data
-                    && c.kind
-                        .signals()
-                        .iter()
-                        .all(|sig| sig.is_vector() && p.get(&sig.pos).is_some_and(|v| !v.complex))
+                    && c.kind.signals().iter().all(|sig| {
+                        let real = |node: &str| {
+                            let name = if sig.is_vector() {
+                                node.to_owned()
+                            } else if sig.current {
+                                format!("i({node})")
+                            } else if node == "0" {
+                                return true;
+                            } else {
+                                format!("v({node})")
+                            };
+                            p.get(&name).is_some_and(|v| !v.complex)
+                        };
+                        real(&sig.pos) && sig.neg.as_deref().is_none_or(real)
+                    })
                 {
                     a.data = sansho_output::Data::Real {
                         columns: columns
@@ -834,11 +860,14 @@ impl State<'_> {
                 };
             }
             "option" | "options" if args.is_empty() => {
+                let decimals = self.decimals(6);
                 self.transcript
                     .lines
                     .extend(self.deck.options.iter().map(|o| {
-                        o.value
-                            .map_or_else(|| o.name.clone(), |v| format!("{} = {v}", o.name))
+                        o.value.map_or_else(
+                            || o.name.clone(),
+                            |v| format!("{} = {}", o.name, files::batch_number(v, decimals)),
+                        )
                     }))
             }
             "option" | "options" => self.deck.options.extend(cards("options", args)?.options),

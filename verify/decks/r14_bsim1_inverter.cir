@@ -1,0 +1,16 @@
+BSIM1 loaded complementary inverter rise and fall
+* Provenance: original Sansho R14 circuit.
+* sansho-verify: known-difference 44.2 and Sansho trap endpoints at 11.600 ns differ by 128 uA; the two final-step means agree within 0.34 uA and both first post-ramp samples are -377.32 uA. See docs/r14-models.md.
+Vcc cc 0 3
+Vin in 0 pulse(0 3 1n .3n .3n 3n 7n)
+Mn out in 0 0 n w=6u l=1.2u
+Mp out in cc cc p w=10u l=1.2u
+.model n nmos(level=4 phi=.7 vfb=-.52 k1=.55 k2=.025 tox=.025 muz=470 mus=470 u0=.12 u1=.1 eta=.012 vdd=3 temp=27 n0=1.45 xpart=0)
+.model p pmos(level=4 phi=.7 vfb=-.52 k1=.55 k2=.025 tox=.025 muz=200 mus=200 u0=.12 u1=.1 eta=.012 vdd=3 temp=27 n0=1.45 xpart=0)
+* A DC load above the limited diffusion current keeps both rails resolvable.
+Rp cc out 1meg
+Rn out 0 1meg
+Cl out 0 40f
+.tran .025n 12n
+.save v(in) v(out) i(Vcc)
+.end

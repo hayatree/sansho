@@ -542,7 +542,25 @@ impl Parser {
                 None
             }
         };
-        if let Some(kind) = kind {
+        if let Some(mut kind) = kind {
+            let ic_fields = match &mut kind {
+                ElementKind::Mosfet { params, .. } => Some((params, 3)),
+                ElementKind::Vdmos { params, .. } => Some((params, 2)),
+                _ => None,
+            };
+            if let Some((params, count)) = ic_fields {
+                params.retain(|(key, value)| {
+                    let slot = match key.as_str() {
+                        "icvds" | "vds" => 0,
+                        "icvgs" | "vgs" => 1,
+                        "icvbs" | "vbs" if count == 3 => 2,
+                        _ => return true,
+                    };
+                    ic.resize(count, 0.);
+                    ic[slot] = *value;
+                    false
+                });
+            }
             if !ic.is_empty()
                 && (matches!(kind, ElementKind::Mosfet { .. }) && ic.len() != 3
                     || matches!(kind, ElementKind::Vdmos { .. }) && ic.len() != 2)
@@ -1267,6 +1285,12 @@ impl Parser {
                 let v = self.number(vt, &k)?;
                 f.params.push((k, v));
                 i += 3;
+            } else if f.positional.len() >= 5
+                && t[0].lower().starts_with('m')
+                && matches!(t[i].lower().as_str(), "sens_l" | "sens_w")
+            {
+                f.params.push((t[i].lower(), 1.));
+                i += 1;
             } else if t[i].lower() == "off" {
                 f.off = true;
                 i += 1;
@@ -2437,6 +2461,14 @@ impl Parser {
                             );
                             return;
                         };
+                        if name == "numdgt" {
+                            self.err(
+                                "E-PARSE-UNEXPECTED",
+                                "use set numdgt inside .control",
+                                t[i].span,
+                            );
+                            return;
+                        }
                         if name == "method" {
                             if !matches!(vt.lower().as_str(), "gear" | "trap" | "trapezoidal") {
                                 self.diags.push(

@@ -359,6 +359,7 @@ impl Parameter {
             Self::Model(m, p) => nl.models[m].params[p].1 = v,
             Self::Instance(i, j) => match &mut nl.elements[i].kind {
                 ElementKind::Bjt { params, .. }
+                | ElementKind::Mosfet { params, .. }
                 | ElementKind::Urc { params, .. }
                 | ElementKind::Vdmos { params, .. }
                 | ElementKind::Mesfet { params, .. } => params[j].1 = v,
@@ -378,7 +379,53 @@ impl Parameter {
 fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
     let mut nominal = nl.clone();
     let mut params = vec![];
-    for (i, e) in nl.elements.iter().enumerate() {
+    let (options, _) = crate::SimOptions::from_cards(&nl.options);
+    for (i, e) in nominal.elements.iter_mut().enumerate() {
+        if let ElementKind::Mosfet {
+            model,
+            params: instance,
+            ..
+        } = &mut e.kind
+        {
+            if !instance
+                .iter()
+                .any(|(k, _)| matches!(k.as_str(), "sens_l" | "sens_w"))
+            {
+                continue;
+            }
+            if !nl
+                .models
+                .iter()
+                .find(|m| m.name == *model)
+                .and_then(|m| m.params.iter().rfind(|(k, _)| k == "level"))
+                .is_some_and(|(_, v)| *v == 9.)
+            {
+                continue;
+            }
+            for (flag, key, default) in
+                [("sens_l", "l", options.defl), ("sens_w", "w", options.defw)]
+            {
+                if instance
+                    .iter()
+                    .rfind(|(k, _)| k == flag)
+                    .is_some_and(|(_, v)| *v != 0.)
+                {
+                    let j = instance
+                        .iter()
+                        .rposition(|(k, _)| k == key)
+                        .unwrap_or_else(|| {
+                            instance.push((key.into(), default.unwrap_or(100e-6) / options.scale));
+                            instance.len() - 1
+                        });
+                    params.push((
+                        format!("{}:{key}", e.name),
+                        Parameter::Instance(i, j),
+                        instance[j].1,
+                    ));
+                }
+            }
+            continue;
+        }
         let value = match &e.kind {
             ElementKind::Bjt {
                 params: instance, ..
@@ -450,6 +497,7 @@ fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
         let defaults: &[(&str, f64)] = match m.kind.as_str() {
             "d" => &[("is", 1e-14), ("n", 1.)],
             "nmf" | "pmf" => &[("vto", -2.), ("beta", 2.5e-3), ("alpha", 2.)],
+            "njf" | "pjf" if level == 2. => &[("vto", -2.), ("beta", 1e-4)],
             "njf" | "pjf" => &[("vto", -2.), ("beta", 1e-4), ("lambda", 0.)],
             "npn" | "pnp" => &[("is", 1e-16), ("bf", 100.), ("br", 1.)],
             "nmos" | "pmos" if level == 1. => &[("gamma", 0.), ("lambda", 0.), ("phi", 0.6)],
@@ -521,7 +569,7 @@ fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
                         | "tc2"
                 )
                 || (matches!(m.kind.as_str(), "nmos" | "pmos")
-                    && matches!(level, 2. | 3.)
+                    && matches!(level, 2. | 3. | 9.)
                     && *v > 0.
                     && matches!(
                         key.as_str(),

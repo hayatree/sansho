@@ -107,14 +107,93 @@ fn publish(
     }
     Ok(())
 }
-fn number(z: sansho_sparse::c64, cx: bool) -> String {
-    if cx {
-        format!("{:.15e},{:.15e}", z.re, z.im)
+/// Scientific fields in interpreter output (manual §§13.5.59, 13.5.106).
+/// Rust rounds the mantissa, including exponent carry and signed zero.
+pub(super) fn batch_number(value: f64, decimals: usize) -> String {
+    let field = format!("{value:.decimals$e}");
+    if let Some((mantissa, exponent)) = field.split_once('e')
+        && let Ok(power) = exponent.parse::<i32>()
+    {
+        return format!("{mantissa}e{power:+03}");
+    }
+    field.to_ascii_lowercase()
+}
+
+fn print_field(value: f64, decimals: usize) -> String {
+    batch_number(
+        value,
+        decimals.saturating_sub(usize::from(value.is_sign_negative())),
+    )
+}
+
+fn print_value(z: sansho_sparse::c64, complex: bool, decimals: usize, separator: &str) -> String {
+    let real = print_field(z.re, decimals);
+    if complex {
+        format!("{real},{separator}{}", print_field(z.im, decimals))
     } else {
-        format!("{:.15e}", z.re)
+        real
     }
 }
+
+/// Nutmeg vector substitution uses six significant digits in general format.
+pub(super) fn substitution(value: f64) -> String {
+    let scientific = batch_number(value, 5);
+    let Some((mantissa, exp)) = scientific.split_once('e') else {
+        return scientific;
+    };
+    let Ok(power) = exp.parse::<i32>() else {
+        return scientific;
+    };
+    if !(-4..6).contains(&power) {
+        return format!(
+            "{}e{exp}",
+            mantissa.trim_end_matches('0').trim_end_matches('.')
+        );
+    }
+    let places = (5 - power) as usize;
+    let fixed = format!("{value:.places$}");
+    if places == 0 {
+        fixed
+    } else {
+        fixed.trim_end_matches('0').trim_end_matches('.').into()
+    }
+}
+
+fn print_line(name: &str, v: &Vector, decimals: usize, lines: &mut Vec<String>) {
+    if v.values.len() == 1 {
+        lines.push(format!(
+            "{name} = {}",
+            print_value(v.values[0], v.complex, decimals, "")
+        ));
+        return;
+    }
+    let mut line = format!("{name} = (  ");
+    let mut column = line.len();
+    for (i, &z) in v.values.iter().enumerate() {
+        if i != 0 {
+            if column >= 72 {
+                lines.push(std::mem::take(&mut line));
+                column = 0;
+            }
+            line.push('\t');
+            column = (column / 8 + 1) * 8;
+        }
+        let field = print_value(z, v.complex, decimals, "");
+        column += field.len();
+        line.push_str(&field);
+    }
+    line.push_str("\t)");
+    lines.push(line);
+}
+
 impl State<'_> {
+    pub(super) fn decimals(&self, default: usize) -> usize {
+        self.vars
+            .get("numdgt")
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| (1..=17).contains(n))
+            .unwrap_or(default)
+    }
     fn selected(&mut self, args: &str) -> Result<Vec<(String, Vector)>> {
         if args.is_empty() || args.eq_ignore_ascii_case("all") {
             let p = &self.plots[self.current];
@@ -183,20 +262,15 @@ impl State<'_> {
         if n == 0 {
             return Err(error("empty vector"));
         }
+        let decimals = self.decimals(if cmd == "wrdata" { 8 } else { 6 });
+        let fmt = |v| batch_number(v, decimals);
         let p = &self.plots[self.current];
         match cmd {
             "print" => {
                 let mut lines = vec![];
                 if style == "line" || n == 1 && style != "col" {
                     for (name, v) in &selected {
-                        lines.push(format!(
-                            "{name} = {}",
-                            v.values
-                                .iter()
-                                .map(|&z| number(z, v.complex))
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        ))
+                        print_line(name, v, decimals, &mut lines);
                     }
                 } else {
                     let scale = p
@@ -206,27 +280,43 @@ impl State<'_> {
                         .filter(|(s, x)| {
                             x.len() == n && !selected.iter().any(|(k, _)| *k == s.name)
                         });
-                    lines.push(format!(
-                        "Index{}\t{}",
-                        scale.map_or_else(String::new, |(s, _)| format!("\t{}", s.name)),
-                        selected
+                    // Indexed listings have an eight-column index and
+                    // sixteen display columns per real component.
+                    let mut rest = selected.as_slice();
+                    while !rest.is_empty() {
+                        let mut width = 8 + usize::from(scale.is_some()) * 16;
+                        let count = rest
                             .iter()
-                            .map(|(s, _)| s.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\t")
-                    ));
-                    for i in 0..n {
-                        let mut row = i.to_string();
-                        if let Some((_, xs)) = scale {
-                            row.push_str(&format!("\t{:.15e}", xs[i]));
+                            .take_while(|(_, v)| {
+                                width += if v.complex { 32 } else { 16 };
+                                width <= 80
+                            })
+                            .count();
+                        let (page, remaining) = rest.split_at(count);
+                        rest = remaining;
+                        let mut header = format!("{:<8}", "Index");
+                        if let Some((s, _)) = scale {
+                            header.push_str(&format!("{:<16}", s.name));
                         }
-                        for (_, v) in &selected {
-                            row.push('\t');
-                            if let Some(&z) = v.values.get(i) {
-                                row.push_str(&number(z, v.complex))
+                        for (name, v) in page {
+                            let width = if v.complex { 32 } else { 16 };
+                            header.push_str(&format!("{name:<width$}"));
+                        }
+                        lines.push(header);
+                        for i in 0..n {
+                            let mut row = format!("{i}\t");
+                            if let Some((_, xs)) = scale {
+                                row.push_str(&print_field(xs[i], decimals));
+                                row.push('\t');
                             }
+                            for (_, v) in page {
+                                if let Some(&z) = v.values.get(i) {
+                                    row.push_str(&print_value(z, v.complex, decimals, "\t"));
+                                }
+                                row.push('\t');
+                            }
+                            lines.push(row);
                         }
-                        lines.push(row);
                     }
                 }
                 if let Some(name) = dest {
@@ -290,11 +380,11 @@ impl State<'_> {
                     if header {
                         for (i, (name, v)) in selected.iter().enumerate() {
                             if !single || i == 0 {
-                                write!(f, " {scale_name}")?
+                                write!(f, " {scale_name:<width$}", width = decimals + 7)?
                             }
-                            write!(f, " {name}")?;
+                            write!(f, " {name:<width$}", width = decimals + 7)?;
                             if v.complex {
-                                write!(f, " {name}")?
+                                write!(f, " {name:<width$}", width = decimals + 7)?
                             }
                         }
                         writeln!(f)?;
@@ -304,17 +394,19 @@ impl State<'_> {
                             if !single || col == 0 {
                                 write!(
                                     f,
-                                    " {:.15e}",
-                                    v.scale
+                                    "{:>width$} ",
+                                    fmt(v
+                                        .scale
                                         .as_deref()
                                         .and_then(|xs| xs.get(i))
                                         .copied()
-                                        .unwrap_or(scale.values[i].re)
+                                        .unwrap_or(scale.values[i].re)),
+                                    width = decimals + 7
                                 )?
                             }
-                            write!(f, " {:.15e}", v.values[i].re)?;
+                            write!(f, "{:>width$} ", fmt(v.values[i].re), width = decimals + 7)?;
                             if v.complex {
-                                write!(f, " {:.15e}", v.values[i].im)?
+                                write!(f, "{:>width$} ", fmt(v.values[i].im), width = decimals + 7)?
                             }
                         }
                         writeln!(f)?;
@@ -327,5 +419,21 @@ impl State<'_> {
             self.transcript.written_files.push(name.into())
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::batch_number;
+    #[test]
+    fn scientific_rounding_sign_and_exponent() {
+        for (v, places, field) in [
+            (-0.0, 2, "-0.00e+00"),
+            (9.9999, 2, "1.00e+01"),
+            (-2.35e-105, 2, "-2.35e-105"),
+            (f64::INFINITY, 6, "inf"),
+        ] {
+            assert_eq!(batch_number(v, places), field);
+        }
     }
 }

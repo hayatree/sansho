@@ -4,6 +4,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Add provisional JFET2, MOS9, BSIM1 and BSIM2 models with DC, charge, AC, temperature and noise. VDMOS accepts TEXP0 and TEXP1. Against ngspice 44.2 nine acceptance decks pass. The two inverter decks have quantified trapezoidal supply-current differences on coarse grids. [Equations, assumptions and probe index](docs/r14-models.md)
+- Match measured NUMDGT formatting for signed real and complex print fields, wrdata, measurement and echo output. [Batch number formatting](docs/control.md#batch-number-formatting)
+
 - Add the 27 remaining built-in analog, hybrid and digital model families in ngspice 44 §§8.2–8.4, including PWL and hysteretic magnetic cores, winding coupling, two- and three-dimensional file tables, a clocked state machine and RAM. Real nodes sum sampled drivers and share propagation deadlines with digital nodes. Ten new decks exercise the library with one and two workers. [Model behavior and reference-probe choices](docs/xspice.md#r13-analog-models)
 
 - Report `E-UNSUPPORTED` for XSPICE external-process and co-simulation models and the `codemodel` library-loading command.

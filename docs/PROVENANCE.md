@@ -449,3 +449,11 @@ R13e derives the per-output LUT delay history, transient amplifier startup
 deadline and short real-bridge step behavior from the ten maintainer-supplied
 44.2 logs for the three original R13d follow-ups.
 [Measurements and unresolved boundaries](xspice.md#r13e-measured-laws)
+
+## R14 classical models and control fields
+
+JFET2 follows Parker and Skellern, IEEE T-MTT 45(9), 1997, with parameter definitions from ngspice 44 manual §7.4.5. The knee relation, feedback coefficients, charge derivatives, cold-power heating and temperature laws were reconstructed independently from the maintainer’s 44.2 black-box measurements. MOS9 reuses Sansho’s MOS3 and the mask adjustments in §§7.6.2.6 and 27.6.5. The VDMOS resistance law combines §7.7 with the R9 and R14 thermal controls.
+
+The early BSIM channel and charge use Sheu, Scharfetter, Ko and Jeng, IEEE JSSC 22(4), 1987, and Jeng, UCB/ERL M90/90. Parameter meanings follow §§7.6.3 and 27.6.6–7. Inverse-dimension units, body clamps, mobility normalization, weak-inversion joins and charge partition were independently checked against terminal data. All R14 and R14b circuits are original. [Quantitative derivations and remaining discrepancies](r14-models.md)
+
+Control formatting follows manual §§13.5.59 and 13.5.106 and the cached R10/R13 default print, measurement and wrdata samples. The R14c formatter uses the four corrected 44.2 control logs and wrdata byte streams. The R14b admittances and inverter comparisons independently check the charge equations, including the 0/100 partition in Berkeley ERL M85/85 §4.2 and the rounded cutoff in the Parker–Skellern PSFET model description. The zero-VMAX MOS3/9 shortening follows the paired drain sweeps and continuity at pinch-off. [Measurement details](r14-models.md)

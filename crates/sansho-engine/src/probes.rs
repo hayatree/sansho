@@ -58,8 +58,11 @@ fn diagnostic(name: &str) -> Diagnostic {
 
 fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
     use Quantity::*;
-    let mos = matches!(kind, "mos1" | "mos2" | "mos3" | "mos6" | "bsim3" | "bsim4");
-    let bsim = matches!(kind, "bsim3" | "bsim4");
+    let mos = matches!(
+        kind,
+        "mos1" | "mos2" | "mos3" | "mos6" | "mos9" | "bsim1" | "bsim2" | "bsim3" | "bsim4"
+    );
+    let bsim = matches!(kind, "bsim1" | "bsim2" | "bsim3" | "bsim4");
     Some(match p {
         "i" if matches!(
             kind,
@@ -86,26 +89,28 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
             Power
         }
         "ic" | "ie" if kind == "bjt" => Current,
-        "ig" if mos || matches!(kind, "jfet" | "mesfet" | "vdmos") => Current,
-        "is" if mos || matches!(kind, "bjt" | "jfet" | "mesfet" | "vdmos") => Current,
+        "ig" if mos || matches!(kind, "jfet" | "jfet2" | "mesfet" | "vdmos") => Current,
+        "is" if mos || matches!(kind, "bjt" | "jfet" | "jfet2" | "mesfet" | "vdmos") => Current,
         "ib" if mos || kind == "bjt" => Current,
-        "id" if mos || matches!(kind, "diode" | "jfet" | "mesfet" | "vdmos") => Current,
+        "id" if mos || matches!(kind, "diode" | "jfet" | "jfet2" | "mesfet" | "vdmos") => Current,
         "ibd" if kind == "vdmos" => Current,
         "vgs" | "vds" if kind == "vdmos" => Voltage,
-        "cgs" | "cgd" if kind == "vdmos" => Capacitance,
+        "cgs" | "cgd" if matches!(kind, "vdmos" | "jfet2") => Capacitance,
         "ibd" | "ibs" if mos => Current,
-        "isub" if bsim => Current,
+        "isub" if matches!(kind, "bsim3" | "bsim4") => Current,
         "igs" | "igd" | "igb" | "igcd" | "igcs" if kind == "bsim4" => Current,
-        "gm" if mos || matches!(kind, "bjt" | "jfet" | "mesfet" | "vdmos") => Admittance,
-        "gds" if mos || matches!(kind, "jfet" | "mesfet" | "vdmos") => Admittance,
-        "qgs" | "qgd" if kind == "mesfet" => Charge,
-        "vgs" | "vgd" if kind == "mesfet" => Voltage,
+        "gm" if mos || matches!(kind, "bjt" | "jfet" | "jfet2" | "mesfet" | "vdmos") => Admittance,
+        "gds" if mos || matches!(kind, "jfet" | "jfet2" | "mesfet" | "vdmos") => Admittance,
+        "qgs" | "qgd" if matches!(kind, "mesfet" | "jfet2") => Charge,
+        "vgs" | "vgd" if matches!(kind, "mesfet" | "jfet2") => Voltage,
         "i1" | "i2" if matches!(kind, "urc" | "ltra" | "tline") => Current,
         "v1" | "v2" if matches!(kind, "ltra" | "tline") => Voltage,
         "capcur" if kind == "diode" => Current,
         "gd" if kind == "diode" => Admittance,
         "go" | "gpi" | "gmu" if kind == "bjt" => Admittance,
         "gmbs" if mos => Admittance,
+        "cd" if kind == "mos9" => Current,
+        "vgs" | "vds" | "vbs" | "vbd" if kind == "mos9" => Voltage,
         "cd" if kind == "diode" => Capacitance,
         "charge" if kind == "diode" => Charge,
         "cpi" | "cmu" if kind == "bjt" => Capacitance,

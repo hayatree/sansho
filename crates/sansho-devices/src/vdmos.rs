@@ -16,6 +16,9 @@ use sansho_diag::Diagnostic;
 struct TemperatureLaw {
     mu: f64,
     tcvth: f64,
+    texp0: Option<f64>,
+    explicit_rthjc: bool,
+    texp1: f64,
     ideality: f64,
     eg: f64,
     xti: f64,
@@ -76,6 +79,9 @@ impl Vdmos {
         let vj = p.get("vj", 0.8);
         let ideality = p.get("n", 1.);
         let law = TemperatureLaw {
+            explicit_rthjc: p.opt(&["rthjc"]).is_some(),
+            texp0: p.opt(&["texp0"]),
+            texp1: p.get("texp1", 0.3),
             mu: p.get("mu", -1.5),
             tcvth: p.get("tcvth", 0.),
             ideality,
@@ -119,10 +125,15 @@ impl Vdmos {
             af: p.get("af", 1.),
             off,
         };
-        let model = model.at_temperature(t.kelvin);
-        if ![model.sub_slope, model.vq]
-            .iter()
-            .all(|x| x.is_finite() && *x > 0.)
+        let mut model = model.at_temperature(t.kelvin);
+        if model.series[0] == 0. && model.rq > 0. {
+            model.rq = 0.;
+        }
+        if law.texp0.is_some_and(|e| !e.is_finite())
+            || !law.texp1.is_finite()
+            || ![model.sub_slope, model.vq]
+                .iter()
+                .all(|x| x.is_finite() && *x > 0.)
             || !model.subshift.is_finite()
             || !model.rq.is_finite()
             || model.rq < 0.
@@ -176,7 +187,11 @@ impl Vdmos {
         hot.kp *= t.ratio().powf(self.law.mu);
         hot.threshold -= self.law.tcvth * (kelvin - self.temp);
         // The two R9b drain biases give the same drift multiplier at 55 °C.
-        hot.rq *= t.ratio().powf(0.3);
+        // Manual §7.7: exponent of the bias-dependent drain resistance.
+        if let Some(exponent) = self.law.texp0 {
+            hot.series[0] *= t.ratio().powf(exponent);
+        }
+        hot.rq *= t.ratio().powf(self.law.texp1);
         hot.nvt = self.law.ideality * thermal_voltage(kelvin);
         hot.saturation *= (t.saturation(self.law.eg, self.law.xti) / self.law.ideality).exp();
         hot.cjo *= t.capacitance(self.vj, self.grading);
@@ -499,7 +514,13 @@ impl ThermalVdmos {
         let ratio = kelvin / self.electrical.temp;
         hot.kp *= ratio.powf(hot.law.mu);
         // The clamped hot transfer resolves RD separately from RS.
-        hot.series[0] *= ratio.powf(1.5);
+        // Manual §7.7: exponent of the fixed drain resistance.
+        if hot.law.explicit_rthjc {
+            hot.series[0] *= ratio.powf(hot.law.texp0.unwrap_or(1.5));
+        } else {
+            hot.series[0] = self.electrical.series[0];
+        }
+        hot.rq *= ratio.powf(hot.law.texp1);
         hot
     }
 }
@@ -686,5 +707,40 @@ impl DeviceGroup for ThermalVdmos {
         out: &mut Vec<NoiseSource>,
     ) -> Result<(), Diagnostic> {
         self.electrical_at(self.kelvin(x)).noise(ctx, x, slots, out)
+    }
+}
+
+#[cfg(test)]
+mod drain_exponent_tests {
+    use super::*;
+    #[test]
+    fn ambient_and_junction_ratios_compose_in_the_drift_branch() {
+        let model = ModelParams::new(&[
+            ("rd".into(), 0.7),
+            ("rq".into(), 0.4),
+            ("rthjc".into(), 1.),
+            ("texp0".into(), -2.),
+            ("texp1".into(), 3.),
+        ]);
+        let dev = Vdmos::new(
+            "m",
+            [None; 3],
+            &model,
+            &ModelParams::default(),
+            Temperature {
+                nominal: 300.,
+                kelvin: 330.,
+            },
+            false,
+        )
+        .unwrap();
+        assert!(model.unused().is_empty());
+        let thermal = ThermalVdmos::new(dev, [None; 2], 1., 1., 0.).unwrap();
+        let hot = thermal.electrical_at(360.);
+        assert!(
+            (hot.series[0] - 0.7 * (300_f64 / 360.).powi(2) * (330_f64 / 360.).powi(2)).abs()
+                < 1e-15
+        );
+        assert!((hot.rq - 0.4 * 1.2_f64.powi(3) * (360_f64 / 330.).powi(3)).abs() < 1e-15);
     }
 }

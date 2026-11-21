@@ -67,6 +67,20 @@ The evaluator dispatches a fixed command set. Host commands, `!`, `shell`, `cd`,
 
 All loops and jumps share a default budget of 10,000 iterations per execution. Block nesting is limited to 64 levels, expression nesting to 48 and expression token count to 256. Vector constructors and uniform-grid generation permit up to one million points.
 
+## Batch number formatting
+
+Set `numdgt` inside the control block. The four 44.2 reference runs cover 4, 7, 12 and −6. A deck-level `.options NUMDGT` is a parse error. Sansho supports positive integer settings through 17. The observed negative setting restores command defaults.
+
+| Output | Precision and field layout | Example at numdgt = 4 |
+|---|---|---|
+| Indexed print | Default six fractional places. A minus sign consumes one place. Each component ends with a tab, and a complex real component also has a comma before the tab. The index is eight columns wide in the header. A real vector takes 16 header columns, a complex vector 32. | `3.3333e-01` and `-3.333e-01` |
+| Print line | Same numeric fields. Vector values are tab-separated within parentheses and wrap onto continuation lines. Complex pairs use a comma between components. | `3.3333e-01,-1.000e+00` |
+| Wrdata | Default eight fractional places. Both signs retain all places. The scale and each real or imaginary component have their own field, a sign column and a trailing blank. Header labels start one space into the same fields. | `-3.3333e-01` |
+| Measurement | Left-aligned name in 20 columns, equals sign, two spaces, six fractional places independent of numdgt. | `endpoint            =  -3.333333e-01` |
+| Echo vector substitution | Six significant digits in general format, with trailing fractional zeros removed. | `measured -0.333333` |
+
+Scientific fields use lowercase e and a signed exponent of at least two digits. Text redirection uses the same listing as the transcript. Structured vectors, subsequent script calculations and raw files keep their numerical precision. The byte comparison covers numeric records, names, whitespace and complete wrdata files. The reference simulator also prints run banners and dates. [Precision probe](../verify/probes/r14_control_numdgt.cir)
+
 ## Library and MCP
 
 `Session::simulate(id, None)` executes a fresh script with file output disabled. Pass explicit analysis cards to run just those analyses. An embedding can supply an output directory and iteration limit with `Session::simulate_with_control`. The loaded session circuit is reusable after a script alters its private copy.

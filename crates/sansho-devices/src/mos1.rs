@@ -34,6 +34,12 @@ use crate::{
 /// Permittivity of SiO2 (F/m).
 const EPS_OX: f64 = 3.9 * 8.854_187_812_8e-12;
 
+#[derive(Debug, Clone, PartialEq)]
+enum ChannelModel {
+    Classical(crate::mos23::Channel),
+    EarlyBsim(Box<crate::early_bsim::EarlyBsim>),
+}
+
 /// Parameters shared by the classical MOS terminal and charge models.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(missing_docs)]
@@ -41,11 +47,14 @@ pub struct Mos1Model {
     /// Prepared operating temperature in kelvin.
     pub temperature: Option<f64>,
     copies: f64,
-    channel: crate::mos23::Channel,
+    channel: ChannelModel,
     mobility: f64,
     surface_states: f64,
     sheet: [Option<f64>; 2],
     width_reduction: f64,
+    mask: [f64; 2],
+    level: u8,
+    pbsw: f64,
     pub kf: f64,
     pub af: f64,
     pub tnom: Option<f64>,
@@ -78,18 +87,34 @@ pub struct Mos1Model {
 }
 
 impl Mos1Model {
-    /// Group index for the three classical channel models.
+    /// Stable batch order for classical and early BSIM levels.
     pub fn level_index(&self) -> usize {
-        match self.channel {
-            crate::mos23::Channel::SquareLaw => 0,
-            crate::mos23::Channel::PowerLaw { .. } => 3,
-            crate::mos23::Channel::ChargeSheet { .. } => 1,
-            crate::mos23::Channel::SemiEmpirical { .. } => 2,
+        match &self.channel {
+            ChannelModel::EarlyBsim(_) if self.level == 4 => 5,
+            ChannelModel::EarlyBsim(_) => 6,
+            ChannelModel::Classical(crate::mos23::Channel::SquareLaw) => 0,
+            ChannelModel::Classical(crate::mos23::Channel::ChargeSheet { .. }) => 1,
+            ChannelModel::Classical(crate::mos23::Channel::PowerLaw { .. }) => 3,
+            ChannelModel::Classical(_) if self.level == 9 => 4,
+            ChannelModel::Classical(_) => 2,
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match &self.channel {
+            ChannelModel::EarlyBsim(_) if self.level == 4 => "bsim1",
+            ChannelModel::EarlyBsim(_) => "bsim2",
+            ChannelModel::Classical(_) if self.level == 9 => "mos9",
+            ChannelModel::Classical(m) => m.name(),
         }
     }
 
     /// Apply sheet resistance only at ends without an explicit model resistance.
     pub fn apply_squares(&mut self, inst: &ModelParams) {
+        if self.level == 9 {
+            // Manual §27.6.5.1. The sensitivity analysis consumes these flags.
+            inst.accept(&["sens_l", "sens_w"]);
+        }
         if let Some(sheet) = self.sheet[0] {
             self.rd = sheet * inst.get("nrd", 1.);
         }
@@ -120,22 +145,100 @@ impl Mos1Model {
         if t.kelvin == t.nominal {
             return;
         }
-        let phi = t.potential(self.phi);
-        self.vto += -0.5 * t.gap_change()
-            + self.polarity
-                * (0.5 * (phi - self.phi) + self.gamma * (phi.sqrt() - self.phi.sqrt()));
-        self.phi = phi;
-        self.kp /= t.ratio().powf(1.5);
-        self.mobility /= t.ratio().powf(1.5);
-        self.is *= t.mos_saturation();
-        self.js *= t.mos_saturation();
+        // The early BSIM DC junction and drift sweeps coincide at all
+        // three ambient temperatures. Keep the separate junction-capacitance
+        // translation for which those DC measurements give no information.
+        if !matches!(self.channel, ChannelModel::EarlyBsim(_)) {
+            let phi = t.potential(self.phi);
+            self.vto += -0.5 * t.gap_change()
+                + self.polarity
+                    * (0.5 * (phi - self.phi) + self.gamma * (phi.sqrt() - self.phi.sqrt()));
+            self.phi = phi;
+            self.kp /= t.ratio().powf(1.5);
+            self.mobility /= t.ratio().powf(1.5);
+            self.is *= t.mos_saturation();
+            self.js *= t.mos_saturation();
+        }
         let bottom = t.capacitance(self.pb, self.mj);
         self.cbd = self.cbd.map(|c| c * bottom);
         self.cbs = self.cbs.map(|c| c * bottom);
         self.cj *= bottom;
-        self.cjsw *= t.capacitance(self.pb, self.mjsw);
+        self.cjsw *= t.capacitance(self.pbsw, self.mjsw);
+        self.pbsw = t.potential(self.pbsw);
         self.pb = t.potential(self.pb);
     }
+    /// Bind geometry-dependent BSIM1/2 process data before temperature translation.
+    pub fn early_bsim(
+        p: &ModelParams,
+        polarity: f64,
+        geom: &Mos1Geometry,
+    ) -> Result<Self, Diagnostic> {
+        use crate::early_bsim::{EarlyBsim, binned};
+        let second = p.get("level", 4.) == 5.;
+        // Bounds have already participated in model selection by the parser.
+        p.accept(&["lmin", "lmax", "wmin", "wmax"]);
+        // Manual §§7.6.3, 27.6.6–7: tox, dl and dw on the extracted card are in µm.
+        let dl = 1e-6 * p.get("dl", 0.);
+        let dw = 1e-6 * p.get("dw", 0.);
+        let l = geom.l - dl;
+        let w = geom.w - dw;
+        let tox = p.get("tox", 0.) * 1e-6;
+        let phi = binned(p, "phi", l, w, 0.);
+        let mu = p.get(if second { "mu0" } else { "muz" }, 0.) * 1e-4;
+        if ![l, w, tox, phi, mu]
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.)
+        {
+            return Err(Diagnostic::error(
+                "E-ELAB-PARAM",
+                "BSIM1/2 require positive effective dimensions, TOX (µm), PHI and MUZ/MU0",
+            ));
+        }
+        let vfb = binned(p, "vfb", l, w, 0.);
+        let k1 = binned(p, "k1", l, w, 0.);
+        let pb = p.get("pb", 0.8);
+        let sheet = Some(p.get("rsh", 0.));
+        let cox = 3.453e-11 / tox;
+        Ok(Self {
+            channel: ChannelModel::EarlyBsim(Box::new(EarlyBsim::bind(p, second, l, w))),
+            level: if second { 5 } else { 4 },
+            mobility: mu,
+            kp: mu * cox,
+            cox,
+            gamma: k1,
+            phi,
+            polarity,
+            vto: polarity * (vfb + phi + k1 * phi.sqrt()),
+            mask: [-dl, -dw],
+            width_reduction: 0.,
+            ld: 0.,
+            copies: 1.,
+            surface_states: 0.,
+            tnom: p.opt(&["temp"]),
+            temperature: None,
+            rd: 0.,
+            rs: 0.,
+            sheet: [sheet; 2],
+            kf: p.get("kf", 0.),
+            af: p.get("af", 1.),
+            lambda: 0.,
+            cgso: p.get("cgso", 0.),
+            cgdo: p.get("cgdo", 0.),
+            cgbo: p.get("cgbo", 0.),
+            cbd: None,
+            cbs: None,
+            cj: p.get("cj", 0.),
+            cjsw: p.get("cjsw", 0.),
+            mj: p.get("mj", 0.5),
+            mjsw: p.get("mjsw", 0.),
+            pb,
+            pbsw: p.get("pbsw", pb),
+            is: 1e-15,
+            js: p.get("js", 0.),
+            fc: 0.5,
+        })
+    }
+
     /// Build from `.model` parameters. Returns the model and the names of ignored parameters.
     pub fn from_params(p: &ModelParams, polarity: f64) -> (Self, Vec<String>) {
         Self::from_params_at(p, polarity, 27.)
@@ -185,11 +288,29 @@ impl Mos1Model {
         });
         let rd = p.opt(&["rd"]);
         let rs = p.opt(&["rs"]);
-        let sheet = if level == 1. { None } else { p.opt(&["rsh"]) };
+        let sheet = if level == 9. {
+            Some(p.get("rsh", 0.))
+        } else if level == 1. {
+            None
+        } else {
+            p.opt(&["rsh"])
+        };
         let m = Self {
-            channel: crate::mos23::Channel::bind(level, p, cox, nsub),
+            channel: ChannelModel::Classical(crate::mos23::Channel::bind(level, p, cox, nsub)),
             sheet: [rd, rs].map(|r| sheet.filter(|_| r.is_none())),
-            width_reduction: if level == 3. { p.get("wd", 0.) } else { 0. },
+            level: level as u8,
+            pbsw: p.get("pb", 0.8),
+            // Manual §27.6.5.2. XL/XW are signed adjustments to the drawn dimensions.
+            mask: if level == 9. {
+                [p.get("xl", 0.), p.get("xw", 0.)]
+            } else {
+                [0.; 2]
+            },
+            width_reduction: if matches!(level, 3. | 9.) {
+                p.get("wd", 0.)
+            } else {
+                0.
+            },
             mobility: u0 * 1e-4,
             surface_states: if matches!(level, 1. | 6.) {
                 0.
@@ -203,13 +324,18 @@ impl Mos1Model {
             tnom,
 
             polarity,
-            vto,
+            vto: vto
+                + if level == 9. {
+                    p.opt(&["delvto", "delvt0"]).unwrap_or(0.)
+                } else {
+                    0.
+                },
             kp,
             gamma,
             phi,
             lambda: if level == 6. {
                 p.opt(&["lambda0", "lambda"]).unwrap_or(0.)
-            } else if level == 3. {
+            } else if matches!(level, 3. | 9.) {
                 0.
             } else {
                 p.get("lambda", 0.)
@@ -334,8 +460,17 @@ impl Mos1s {
         geom: Mos1Geometry,
         off: bool,
     ) {
-        let leff = geom.l - 2.0 * model.ld;
-        let width = geom.w - 2. * model.width_reduction;
+        let leff = geom.l + model.mask[0] - 2.0 * model.ld;
+        let width = geom.w + model.mask[1] - 2. * model.width_reduction;
+        let saturation = |area: f64| {
+            if matches!(model.channel, ChannelModel::EarlyBsim(_)) {
+                (model.js * area).max(model.is)
+            } else if model.js > 0. && area > 0. {
+                model.js * area
+            } else {
+                model.is
+            }
+        };
         let mut d = Derived {
             width,
             length: leff,
@@ -353,16 +488,8 @@ impl Mos1s {
             cgs_ov: model.cgso * width,
             cgd_ov: model.cgdo * width,
             cgb_ov: model.cgbo * leff,
-            isd: if model.js > 0.0 && geom.ad > 0.0 {
-                model.js * geom.ad
-            } else {
-                model.is
-            },
-            iss: if model.js > 0.0 && geom.as_ > 0.0 {
-                model.js * geom.as_
-            } else {
-                model.is
-            },
+            isd: saturation(geom.ad),
+            iss: saturation(geom.as_),
             cbd: model.cbd.unwrap_or(model.cj * geom.ad),
             cbs: model.cbs.unwrap_or(model.cj * geom.as_),
             cbd_sw: model.cjsw * geom.pd,
@@ -400,18 +527,32 @@ impl Mos1s {
                 ]
                 .iter()
                 .all(|v| v.is_finite() && *v >= 0.)
+                || !model.mask.iter().all(|v| v.is_finite())
                 || !model.vto.is_finite()
-                || !model.channel.valid()
+                || match &model.channel {
+                    ChannelModel::Classical(m) => !m.valid(),
+                    ChannelModel::EarlyBsim(b) => {
+                        !b.valid()
+                            || !model.pbsw.is_finite()
+                            || model.pbsw <= 0.
+                            || ![
+                                model.js, model.is, model.cj, model.cjsw, model.kf, model.cgso,
+                                model.cgdo, model.cgbo, geom.ad, geom.as_, geom.pd, geom.ps,
+                            ]
+                            .iter()
+                            .all(|v| v.is_finite() && *v >= 0.)
+                    }
+                }
                 || !(0. ..1.).contains(&model.fc))
         {
             return Some("invalid classical MOS channel, junction or geometry parameter".into());
         }
-        if geom.w - 2. * model.width_reduction <= 0.0 {
+        if geom.w + model.mask[1] - 2. * model.width_reduction <= 0.0 {
             Some(format!(
                 "effective W must be positive (drawn width {})",
                 geom.w
             ))
-        } else if geom.l - 2.0 * model.ld <= 0.0 {
+        } else if geom.l + model.mask[0] - 2.0 * model.ld <= 0.0 {
             Some(format!(
                 "effective channel length L - 2*LD must be positive (L = {}, LD = {})",
                 geom.l, model.ld
@@ -474,7 +615,7 @@ impl DeviceGroup for Mos1s {
                     format!(
                         "{}: DISTO derivatives unavailable for {}",
                         self.names[i],
-                        m.channel.name()
+                        m.name()
                     ),
                 ));
             }
@@ -575,7 +716,7 @@ impl DeviceGroup for Mos1s {
         let first = self.at[i].q + 4;
         let sign = self.model[i].polarity;
         match p {
-            "id" => vec![(first + 1, -sign), (first + 3, -sign)],
+            "id" | "cd" => vec![(first + 1, -sign), (first + 3, -sign)],
             "ig" => vec![(first, sign), (first + 1, sign), (first + 2, sign)],
             "is" => vec![(first, -sign), (first + 4, -sign)],
             "ib" => vec![(first + 2, -sign), (first + 3, sign), (first + 4, sign)],
@@ -608,11 +749,26 @@ impl DeviceGroup for Mos1s {
                 if r > 0. {
                     emit(self.ext[i][k], self.int[i][k], thermal / r, 0.);
                     at.g += 4;
+                    at.f += 2;
                 }
             }
             let gm = slots.g[at.g + 1].abs();
             emit(d, s, thermal * (2. / 3.) * gm, 0.);
             if m.kf != 0. {
+                if matches!(m.channel, ChannelModel::EarlyBsim(_)) {
+                    // The 1 Hz intercept in the AF sweeps scales as a current
+                    // to AF. The extracted-card Cox is in F/cm² here.
+                    let dv = &self.derived[i];
+                    let cox = m.cox * 1e-4 / m.copies;
+                    let current = slots.f[at.f].abs() / m.copies;
+                    emit(
+                        d,
+                        s,
+                        m.copies * m.kf * current.powf(m.af) / (dv.width * dv.length * cox * cox),
+                        1.,
+                    );
+                    continue;
+                }
                 // Gate-referred KF / (Cgate f^AF) becomes drain current
                 // power via gm². gm includes all parallel copies.
                 emit(
@@ -629,7 +785,7 @@ impl DeviceGroup for Mos1s {
         self.names.get(index).map(String::as_str)
     }
     fn type_name(&self) -> &'static str {
-        self.model.first().map_or("mos1", |m| m.channel.name())
+        self.model.first().map_or("mos1", Mos1Model::name)
     }
     fn len(&self) -> usize {
         self.names.len()
@@ -714,7 +870,13 @@ impl Mos1s {
         for i in 0..self.len() {
             let m = &self.model[i];
             let dv = &self.derived[i];
-            let vt = thermal_voltage(m.temperature.unwrap_or(ctx.temp));
+            let early = matches!(m.channel, ChannelModel::EarlyBsim(_));
+            let junction_temp = if early {
+                crate::REFTEMP
+            } else {
+                m.temperature.unwrap_or(ctx.temp)
+            };
+            let vt = thermal_voltage(junction_temp);
             let mut at = self.at[i];
             if !CHARGES_ONLY && m.rd > 0.0 {
                 out.resistor(
@@ -751,9 +913,7 @@ impl Mos1s {
                 let (vgs, l1) = limit_step(vgs_a, s[0], s[0] - vto);
                 let (vds, l2) = limit_step(vds_a, s[1], s[1]);
                 let peak = dv.iss.max(dv.isd);
-                let vc = if m.temperature.is_none_or(|t| t == ctx.temp)
-                    && peak.to_bits() == common_is.to_bits()
-                {
+                let vc = if junction_temp == ctx.temp && peak.to_bits() == common_is.to_bits() {
                     common_vcrit
                 } else {
                     vcrit(peak, vt)
@@ -798,53 +958,105 @@ impl Mos1s {
                 }
             };
             let vth = (sarg - sqrt_phi) * m.gamma + vto;
-            let (ids, vgst, vdsat) = m.channel.evaluate(
-                vgs_e - vth,
-                vds_e,
-                sarg,
-                vbs_e,
-                m.gamma,
-                dv.beta,
-                m.lambda,
-                dv.width,
-                dv.length,
-                m.mobility,
-                m.surface_states,
-                vt,
-            );
+            let (ids, vgst, vdsat, bsim) = match &m.channel {
+                ChannelModel::EarlyBsim(model) => {
+                    let bias = model.bias(
+                        vgs_e,
+                        vto - m.phi - m.gamma * sqrt_phi,
+                        vds_e,
+                        vbs_e,
+                        m.phi,
+                        m.gamma,
+                        dv.beta,
+                        dv.length,
+                        vt,
+                    );
+                    if !bias.id.v.is_finite() || !bias.id.d.iter().all(|g| g.is_finite()) {
+                        out.error = Some(Diagnostic::error(
+                            "E-ANALYSIS",
+                            format!(
+                                "{}: BSIM channel current or derivative exceeds numerical range",
+                                self.names[i]
+                            ),
+                        ));
+                        return;
+                    }
+                    (bias.id, bias.overdrive, bias.sat, Some(bias))
+                }
+                ChannelModel::Classical(model) => {
+                    let (ids, vgst, vdsat) = model.evaluate(
+                        vgs_e - vth,
+                        vds_e,
+                        sarg,
+                        vbs_e,
+                        m.gamma,
+                        dv.beta,
+                        m.lambda,
+                        dv.width,
+                        dv.length,
+                        m.mobility,
+                        m.surface_states,
+                        vt,
+                    );
+                    (ids, vgst, vdsat, None)
+                }
+            };
             // Current flowing from drain to source (n-normalized).
             let ids = if reverse { -ids } else { ids };
 
             // Bulk junctions (current flowing from bulk into drain / source).
-            let ibd = ideal_current(vbd, dv.isd, vt) + vbd * ctx.gmin;
-            let ibs = ideal_current(vbs, dv.iss, vt) + vbs * ctx.gmin;
+            let junction = |v: Dual<4>, saturation: f64| {
+                // Early BSIM reverse-bias admittance retains the zero-bias
+                // slope (1.03866 pS including GMIN for a 1 fA junction).
+                if early && v.v < 0. {
+                    v * (saturation / vt + ctx.gmin)
+                } else {
+                    ideal_current(v, saturation, vt) + v * ctx.gmin
+                }
+            };
+            let ibd = junction(vbd, dv.isd);
+            let ibs = junction(vbs, dv.iss);
             let qbd = depletion_charge(vbd, dv.cbd, m.pb, m.mj, m.fc)
-                + depletion_charge(vbd, dv.cbd_sw, m.pb, m.mjsw, m.fc);
+                + depletion_charge(vbd, dv.cbd_sw, m.pbsw, m.mjsw, m.fc);
             let qbs = depletion_charge(vbs, dv.cbs, m.pb, m.mj, m.fc)
-                + depletion_charge(vbs, dv.cbs_sw, m.pb, m.mjsw, m.fc);
+                + depletion_charge(vbs, dv.cbs_sw, m.pbsw, m.mjsw, m.fc);
 
-            // Meyer gate capacitances, incrementally integrated from the accepted state.
-            let (mut cgs, mut cgd, cgb) = meyer(
-                if vgst > 0. { vdsat } else { vgst },
-                vds_e.v,
-                m.phi,
-                dv.cox_total,
-            );
-            if reverse {
-                std::mem::swap(&mut cgs, &mut cgd);
-            }
-            let caps = [cgs + dv.cgs_ov, cgd + dv.cgd_ov, cgb + dv.cgb_ov];
             let vgd = vgs - vds;
             let vgb = vgs - vbs;
-            let ctrl = [vgs, vgd, vgb];
-            let mut qg = [Dual::<4>::cst(0.0); 3];
-            for k in 0..3 {
-                let c_avg = 0.5 * (caps[k] + acc[9 + k]);
-                qg[k] = (ctrl[k] - acc[3 + k]) * c_avg + acc[6 + k];
-                s[3 + k] = ctrl[k].v;
-                s[6 + k] = qg[k].v;
-                s[9 + k] = caps[k];
-            }
+            let (qg, meyer_caps) = if let Some(bias) = bsim {
+                let (mut qs, mut qd) = bias.charges(dv.cox_total);
+                if reverse {
+                    std::mem::swap(&mut qs, &mut qd);
+                }
+                let q = [
+                    qs + dv.cgs_ov * vgs,
+                    qd + dv.cgd_ov * vgd,
+                    bias.depletion(qs + qd, dv.cox_total) + dv.cgb_ov * vgb,
+                ];
+                (q, None)
+            } else {
+                // Meyer gate capacitances, incrementally integrated from the accepted state.
+                let (mut cgs, mut cgd, cgb) = meyer(
+                    if vgst > 0. { vdsat } else { vgst },
+                    vds_e.v,
+                    m.phi,
+                    dv.cox_total,
+                );
+                if reverse {
+                    std::mem::swap(&mut cgs, &mut cgd);
+                }
+                let caps = [cgs + dv.cgs_ov, cgd + dv.cgd_ov, cgb + dv.cgb_ov];
+                let ctrl = [vgs, vgd, vgb];
+                let mut qg = [Dual::<4>::cst(0.0); 3];
+                for k in 0..3 {
+                    let c_avg = 0.5 * (caps[k] + acc[9 + k]);
+                    qg[k] = (ctrl[k] - acc[3 + k]) * c_avg + acc[6 + k];
+                    s[3 + k] = ctrl[k].v;
+                    s[6 + k] = qg[k].v;
+                    s[9 + k] = caps[k];
+                }
+                (qg, Some(caps))
+            };
             if let Some(values) = out.outputs.get_mut(i) {
                 values.extend([
                     ("id", (ids.v - ibd.v) * sgn),
@@ -866,10 +1078,41 @@ impl Mos1s {
                     ("vth", sgn * (vgs_e.v - vgst)),
                     ("von", sgn * (vgs_e.v - vgst)),
                     ("vdsat", sgn * vdsat),
-                    ("cgg", caps.iter().sum()),
-                    ("cgs", caps[0]),
-                    ("cgd", caps[1]),
                 ]);
+                if let Some(caps) = meyer_caps {
+                    values.extend([
+                        ("cgg", caps.iter().sum()),
+                        ("cgs", caps[0]),
+                        ("cgd", caps[1]),
+                    ]);
+                } else {
+                    // R7 BSIM outputs use intrinsic charge (without overlaps)
+                    // and its signed derivatives on the physical terminals.
+                    let [qs, qd, qb] = [
+                        qg[0] - dv.cgs_ov * vgs,
+                        qg[1] - dv.cgd_ov * vgd,
+                        qg[2] - dv.cgb_ov * vgb,
+                    ];
+                    for (r, q) in [-qd, qs + qd + qb, -qs, -qb].into_iter().enumerate() {
+                        let q = q * sgn;
+                        crate::observables::terminal_charge(values, r, q.v, q.d);
+                    }
+                    values.extend([
+                        ("qbd", qbd.v),
+                        ("qbs", qbs.v),
+                        ("capbd", qbd.d[3] * sgn),
+                        ("capbs", qbs.d[3] * sgn),
+                    ]);
+                }
+                if m.level == 9 {
+                    values.extend([
+                        ("cd", (ids.v - ibd.v) * sgn),
+                        ("vgs", vgs.v),
+                        ("vds", vds.v),
+                        ("vbs", vbs.v),
+                        ("vbd", vbd.v),
+                    ]);
+                }
             }
             let [qgs, qgd, qgb] = qg;
 

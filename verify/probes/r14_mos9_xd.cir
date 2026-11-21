@@ -1,0 +1,16 @@
+MOS9 drain family versus NSUB with fixed MOS3 control
+* Provenance: original Sansho R14 circuit.
+* sweep: nsub 1e16 2e16 4e16
+.param probe=2e16
+* The 44.2 parser rejects XD on the model card. Sweep a supported input.
+Vd d 0 1.5
+Vg g 0 1.4
+Vb b 0 -.25
+M1 d g 0 b dev w=4u l=1.2u
+Ecopy ctrlref 0 d 0 1
+M0 ctrlref g 0 b base w=4u l=1.2u
+.model dev nmos(level=9 vto=0.65 kp=65u phi=.7 gamma=.4 theta=.12 vmax=9e4  xj=.14u nsub={probe})
+.model base nmos(level=3 vto=0.65 kp=65u phi=.7 gamma=.4 theta=.12 vmax=9e4 nsub=2e16 xj=.14u)
+.dc Vd .02 2.82 .05 Vg .8 2 .4
+.save i(Vd) i(Ecopy)
+.end

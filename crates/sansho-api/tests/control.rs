@@ -395,7 +395,12 @@ fn digital_control_lists_nodes_and_prints_strengths() {
     );
     success(&o);
     assert!(o.transcript.lines.iter().any(|s| s == "bus digital"));
-    assert!(o.transcript.lines.iter().any(|s| s == "0e0 bus 1r"));
+    assert!(
+        o.transcript
+            .lines
+            .iter()
+            .any(|s| s == "0.000000e+00 bus 1r")
+    );
 }
 
 #[test]
@@ -409,9 +414,58 @@ fn showmod_lists_current_model_parameters_without_an_analysis() {
     assert_eq!(
         out.transcript.lines,
         [
-            ".model clock d_osc (duty_cycle=2.5e-1 cntl_array=[0 2] freq_array=[1 3])",
+            ".model clock d_osc (duty_cycle=2.500000e-01 cntl_array=[0.000000e+00 2.000000e+00] freq_array=[1.000000e+00 3.000000e+00])",
             "done",
         ]
     );
     assert!(out.results.analyses.is_empty());
+}
+
+#[test]
+fn batch_precision_distinguishes_print_wrdata_measurement_and_echo() {
+    let dir = Dir::new();
+    let opts = ControlOptions {
+        output_dir: Some(dir.0.clone()),
+        ..Default::default()
+    };
+    let o = script(
+        "",
+        "set numdgt=4\ndc v1 0 1 .5\nlet z=v(out)+j(-v(out))\nset wr_vecnames\nwrdata fields z\nprint col z > columns\nmeas dc endpoint find i(v1) at=1\necho $&endpoint\nset numdgt=-6\nprint col z > defaults\nset numdgt=3\nprint line 9.9999e99",
+        &opts,
+    );
+    success(&o);
+    let file = fs::read_to_string(dir.0.join("fields")).unwrap();
+    assert_eq!(
+        file.lines().nth(2),
+        Some(" 5.0000e-01  2.5000e-01 -2.5000e-01 ")
+    );
+    assert_eq!(
+        file.lines().next(),
+        Some(" v-sweep     z           z          ")
+    );
+    let defaults = fs::read_to_string(dir.0.join("defaults")).unwrap();
+    assert_eq!(
+        defaults.lines().nth(2),
+        Some("1\t5.000000e-01\t2.500000e-01,\t-2.50000e-01\t")
+    );
+    let cols = fs::read_to_string(dir.0.join("columns")).unwrap();
+    assert_eq!(
+        cols.lines().nth(2),
+        Some("1\t5.0000e-01\t2.5000e-01,\t-2.500e-01\t")
+    );
+    assert!(
+        o.transcript
+            .lines
+            .iter()
+            .any(|s| s == "endpoint            =  -5.000000e-04")
+    );
+    assert!(o.transcript.lines.iter().any(|s| s == "-0.0005"));
+    assert!(
+        o.transcript
+            .lines
+            .last()
+            .unwrap()
+            .ends_with(" = 1.000e+100")
+    );
+    assert_eq!(o.transcript.prints[0].columns[0][1], (0.25, -0.25));
 }

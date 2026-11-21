@@ -1,0 +1,11 @@
+TEXP0 at elevated ambient temperature
+* Provenance: original Sansho R14 circuit.
+* sweep: texp0 0 1.5 3
+.param probe=0
+Vd d 0 1
+Vg g 0 6
+M1 d g 0 pw temp=87
+.model pw vdmos(vto=1 kp=3 mu=0 rd=.24 rq=0 vq=1 texp0={probe})
+.dc Vd .2 3 .1
+.save i(Vd)
+.end

@@ -30,7 +30,7 @@ pub use number::parse_number;
 pub use parser::{parse, parse_parameters, parse_with, prepare_parameters};
 pub use preproc::{FsLoader, NoFiles, SourceLoader};
 pub use sansho_diag::{Diagnostic, Severity, Span};
-pub use writer::{write, write_analysis, write_measure, write_model};
+pub use writer::{write, write_analysis, write_measure, write_model, write_model_with};
 
 use serde::Serialize;
 

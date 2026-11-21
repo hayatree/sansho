@@ -484,3 +484,23 @@ Run `cargo test -p sansho-engine --test xspice_library` for the Sansho measureme
 | r13_real | Digital levels converted to real values, scaled, sampled on a separate clock and ramped onto an analog output. |
 
 Additional tests cover both magnetic modes, passive devices, meters, PWM, bidirectional drive, AC interpolation, grid files, delayed waveforms, real-driver summation and port inversion. All ten batch decks pass the ngspice 44.2 cached comparison at their original tolerances. [R13e timing laws and open sampling questions](../docs/xspice.md#r13e-measured-laws)
+
+## R14 classical models
+
+Run `cargo test -p sansho-engine --test r14_models` for the Sansho-only circuit checks. The 44.2 cache gives nine passes and two known coarse-grid supply-current differences in the BSIM1 and BSIM2 inverters. The BSIM1 last-step means agree within 0.34 µA, and both 1 ps BSIM2 integration methods pass. See the [current and charge measurements](../docs/r14-models.md#bsim1-and-bsim2). Run `cargo run --release -q -p sansho-verify --features jit -- --cached -v verify/decks/r14_*.cir` to see individual scores. [Reference regeneration](probes/README.md#r14b-reference-runs)
+
+| Deck | Quantity checked |
+|---|---|
+| [r14_jfet2_output](decks/r14_jfet2_output.cir) | Drain and gate currents across reversal, linear operation and pinch-off at four gate biases. |
+| [r14_jfet2_transfer](decks/r14_jfet2_transfer.cir) | Gate transfer across cutoff at 0.2 V and 2 V drain bias. |
+| [r14_jfet2_amplifier](decks/r14_jfet2_amplifier.cir) | Loaded common-source gate and drain pulse response with finite gate capacitance, feedback and heating poles. |
+| [r14_mos9_output](decks/r14_mos9_output.cir) | Short-channel drain family with body bias, XL, XW and DELVTO. |
+| [r14_bsim1_output](decks/r14_bsim1_output.cir) | Level-four output conductance in the linear and saturated regions at five gate voltages. |
+| [r14_bsim1_transfer](decks/r14_bsim1_transfer.cir) | Level-four weak-to-strong inversion transfer at three body voltages. |
+| [r14_bsim1_inverter](decks/r14_bsim1_inverter.cir) | Complementary level-four charging and discharging edges, input and supply current with a 40 fF load. |
+| [r14_bsim2_output](decks/r14_bsim2_output.cir) | Level-five output knees with linear and quadratic transverse-field mobility terms. |
+| [r14_bsim2_transfer](decks/r14_bsim2_transfer.cir) | Level-five inversion transition and body-dependent threshold. |
+| [r14_bsim2_inverter](decks/r14_bsim2_inverter.cir) | Complementary level-five inverter edges and supply current with the same load and input. |
+| [r14_vdmos_thermal](decks/r14_vdmos_thermal.cir) | Junction rise, electrical drain drop and supply current through a gate pulse with TEXP0 = 2.7 and TEXP1 = −0.8. |
+
+All eleven current circuits pass the bitwise one- and two-worker waveform replay test. The R14 probe index gives each varied parameter, the measured terminals and the distinguishing response. [Probe index](probes/README.md#r14-classical-models)

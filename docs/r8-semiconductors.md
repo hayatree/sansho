@@ -38,9 +38,9 @@ For a standalone diode the multiplier applied to RS, TT or M is `1 + a·ΔT + b�
 
 TCV defaults to zero and adjusts the positive breakdown voltage before avalanche-knee matching, `BV(T) = BV − TCV·ΔT`. Its units are V/K. A positive TCV moves the reverse terminal voltage toward zero as temperature rises above TNOM. At fixed reverse current, rematching the knee contributes a small additional shift. With BV = 6.2 V, IBV = 1 mA and TCV = 0.0007 V/K, an 80 K rise reduces BV by 56 mV. At 1 mA the matched knee predicts a +56.002876 mV terminal shift, agreeing with the maintainer’s 100 °C measurement. Sansho and ngspice 44.2 both ignore TBV1 and TBV2 with a warning. Alternate temperature selectors remain unsupported. [Paired-diode measurements and predictions](../verify/probes/README.md#diode-breakdown-under-temp)
 
-## Further model gaps
+## Junction FET level two
 
-JFET level 2 requires the Parker–Skellern current, charge, temperature and dispersion laws and their level-two parameter definitions. A level-two NJF/PJF card gives E-ELAB-MODEL. The available offline references did not establish the level-two current and dispersion equations well enough to implement and test them.
+R14 adds the dispersive JFET2 implementation and separate probes for the uncertain parameter mappings. [Equations and verification status](r14-models.md#junction-fet-level-2)
 
 ## R9 power-law MOSFET
 
@@ -48,9 +48,9 @@ For MOS level 6 the saturation voltage is KV·u^NV and the saturation current be
 
 ## R9 VDMOS extensions
 
-KSUBTHRES sets the softplus voltage scale (default 0.1 V). Its gate intercept is the polarity-normalized VTO − TCVTH·(T − TNOM) + SUBSHIFT. The measured SUBSHIFT translation is one volt per volt. Varying PHI alone gives identical 55 °C transfers. Sansho reports PHI, TEXP0 and TEXP1 as unused.
+KSUBTHRES sets the softplus voltage scale (default 0.1 V). Its gate intercept is the polarity-normalized VTO − TCVTH·(T − TNOM) + SUBSHIFT. The measured SUBSHIFT translation is one volt per volt. Varying PHI alone gives identical 55 °C transfers. PHI gives an ignored-parameter warning. R14 makes both drain resistance exponents configurable. [TEXP0 and TEXP1](r14-models.md#vdmos-drain-resistance)
 
-The drain access branch uses `RD + RQ·(T/TNOM)^0.3·u/(VQ + u)`, where u is the magnitude of the **external** drain–source voltage. The finite-RS drain sweeps distinguish that voltage from either intrinsic terminal drop. The paired temperature sweeps confirm the exponent from 0 to 90 °C. The branch equation also handles RD = 0 at zero bias, and its thermal voltage noise density squared is 4kTR.
+With positive RD and omitted exponents the isothermal drain access branch uses `RD + RQ·(T/TNOM)^0.3·u/(VQ + u)`, where u is the magnitude of the **external** drain–source voltage. The finite-RS drain sweeps distinguish that voltage from either intrinsic terminal drop. The paired temperature sweeps confirm the exponent from 0 to 90 °C. RD = 0 disables the branch even for nonzero RQ. Its thermal voltage noise density squared is 4kTR when present.
 
 ### Thermal terminals
 
