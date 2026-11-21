@@ -6,10 +6,13 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd -P)"
 image="${SANSHO_NGSPICE_PSS_IMAGE:-sansho-ngspice-pss:latest}"
-if docker build -q -t "$image" "$here" >/dev/null 2>&1; then
+if out="$(docker build --progress=plain -t "$image" "$here" 2>&1)"; then
   echo "built $image"
   docker run --rm --entrypoint cat "$image" /opt/ngspice-pss/BUILDINFO
 else
-  echo "build failed (output withheld by policy); rerun later or report the failure only" >&2
+  # Show only the recipe's own status line and download/apt errors; never
+  # configure, compiler or make output.
+  printf '%s\n' "$out" | grep -E 'ngspice-pss build:|curl: \([0-9]+\)|gzip:|^#[0-9]+ [0-9.]+ E: ' | sed -E 's/^#[0-9]+ [0-9.]+ //' >&2 || true
+  echo "build failed (other output withheld by policy)" >&2
   exit 1
 fi

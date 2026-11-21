@@ -20,16 +20,17 @@ RUN apt-get update \
 RUN set -eu; \
     src=/tmp/ngspice-src; mkdir -p "$src"; cd "$src"; \
     curl -fsSL -o ngspice.tar.gz \
-      "https://sourceforge.net/projects/ngspice/files/ng-spice-rework/${NGSPICE_VERSION}/ngspice-${NGSPICE_VERSION}.tar.gz/download"; \
+      "https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/old-releases/${NGSPICE_VERSION}/ngspice-${NGSPICE_VERSION}.tar.gz"; \
     sha=$(sha256sum ngspice.tar.gz | cut -d' ' -f1); \
     tar -xzf ngspice.tar.gz; rm ngspice.tar.gz; \
     cd "ngspice-${NGSPICE_VERSION}"; \
     flags="--prefix=/opt/ngspice-pss --enable-pss --enable-cider --disable-debug --without-x"; \
-    if ./configure $flags >/dev/null 2>&1 \
-       && make -j"$(nproc)" >/dev/null 2>&1 \
-       && make install >/dev/null 2>&1; then status=ok; else status=failed; fi; \
+    status=ok; \
+    ./configure $flags >/dev/null 2>&1 || status="configure exit $?"; \
+    if [ "$status" = ok ]; then make -j"$(nproc)" >/dev/null 2>&1 || status="make exit $?"; fi; \
+    if [ "$status" = ok ]; then make install >/dev/null 2>&1 || status="make install exit $?"; fi; \
     cd /; rm -rf "$src"; \
-    if [ "$status" != ok ]; then echo "ngspice-pss build: FAILED (log withheld by policy)"; exit 1; fi; \
+    if [ "$status" != ok ]; then echo "ngspice-pss build: FAILED at $status (log withheld by policy)"; exit 1; fi; \
     rm -rf /opt/ngspice-pss/include /opt/ngspice-pss/share/man /opt/ngspice-pss/share/info; \
     printf 'ngspice %s\ntarball sha256 %s\nconfigure %s\nbuilt %s\n' \
       "$NGSPICE_VERSION" "$sha" "$flags" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /opt/ngspice-pss/BUILDINFO; \
