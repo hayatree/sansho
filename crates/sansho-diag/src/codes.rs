@@ -71,10 +71,12 @@ pub const CODES: &[CodeInfo] = &[
     e(
         "E-CIDER-MODEL",
         "Invalid numerical semiconductor structure",
-        "A level-one numerical model has an invalid mesh, spatial region, dopant profile, material constant or contact.",
+        "A numerical device model has an invalid mesh, spatial region, dopant profile, material constant or contact.",
         &[
-            "Use increasing x.mesh positions and positive spacing, area and temperature. Cover the complete mesh with silicon domains.",
-            "For NBJT, place the base contact in the opposite-doped region between like-doped end contacts.",
+            "Use increasing mesh coordinates and positive spacing, area, width and absolute temperature. Level one requires 3–4096 silicon vertices. The two-dimensional limit is 1024 tensor-product vertices with at least two on each axis.",
+            "For a planar device, give every terminal an electrode on the active mesh. Use disjoint vertices for different terminals. Mesh indices start at one. Check the IDs of regions, materials, interfaces and contacts.",
+            "A failed planar equilibrium solve produces this diagnostic during elaboration. Check gate work function in eV, interface charge in C/cm², doping in cm⁻³ and mesh spacings in µm.",
+            "For level-one NBJT, place the base contact in the opposite-doped region between like-doped end contacts.",
         ],
     ),
     e(
@@ -456,7 +458,7 @@ pub const CODES: &[CodeInfo] = &[
         "The selected device equation or analysis mode is unavailable, or the deck requests an external XSPICE process or shared library.",
         &[
             "See docs/bsim3.md and docs/bsim4.md for the available MOS selectors.",
-            "Use level-one NUMD or NBJT for one-dimensional silicon. Level two and NUMOS are reserved for two-dimensional numerical devices. See docs/cider.md.",
+            "NUMD and NBJT accept levels one and two. NUMOS selects the planar solver. Unknown CIDER cards and unsupported physical models give this diagnostic. See docs/cider.md.",
             "Use a built-in model in place of d_process, d_cosim or a library loaded with codemodel. See docs/xspice.md.",
         ],
     ),

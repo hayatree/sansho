@@ -1,0 +1,119 @@
+Majority and minority mobility selectors in neutral n and p slabs
+* Provenance: original Sansho fixture, ngspice 44 manual chapter 26.
+* sweep: density 1e15 1e16 1e17
+.param probe=1e15
+Vnbase nbase 0 dc 0 ac 1
+Dnbase nbase 0 mnbase
+.model mnbase numd level=2
++ options resistor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=1 n=5
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.1 n=22
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.h=1 y.l=0
++ electrode num=2 ix.l=5 y.l=0
++ doping uniform n.type conc={probe} domains=1
++ method ac.analysis=direct
++ end
+Vnmaj nmaj 0 dc 0 ac 1
+Dnmaj nmaj 0 mnmaj
+.model mnmaj numd level=2
++ options resistor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=1 n=5
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.1 n=22
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.h=1 y.l=0
++ electrode num=2 ix.l=5 y.l=0
++ doping uniform n.type conc={probe} domains=1
++ method ac.analysis=direct
++ mobility mat=1 electron majority mumax=700
++ end
+Vnmin nmin 0 dc 0 ac 1
+Dnmin nmin 0 mnmin
+.model mnmin numd level=2
++ options resistor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=1 n=5
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.1 n=22
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.h=1 y.l=0
++ electrode num=2 ix.l=5 y.l=0
++ doping uniform n.type conc={probe} domains=1
++ method ac.analysis=direct
++ mobility mat=1 electron minority mumax=700
++ end
+Vpbase pbase 0 dc 0 ac 1
+Dpbase pbase 0 mpbase
+.model mpbase numd level=2
++ options resistor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=1 n=5
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.1 n=22
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.h=1 y.l=0
++ electrode num=2 ix.l=5 y.l=0
++ doping uniform p.type conc={probe} domains=1
++ method ac.analysis=direct
++ end
+Vpmaj pmaj 0 dc 0 ac 1
+Dpmaj pmaj 0 mpmaj
+.model mpmaj numd level=2
++ options resistor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=1 n=5
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.1 n=22
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.h=1 y.l=0
++ electrode num=2 ix.l=5 y.l=0
++ doping uniform p.type conc={probe} domains=1
++ method ac.analysis=direct
++ mobility mat=1 hole majority mumax=200
++ end
+Vpmin pmin 0 dc 0 ac 1
+Dpmin pmin 0 mpmin
+.model mpmin numd level=2
++ options resistor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=1 n=5
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.1 n=22
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.h=1 y.l=0
++ electrode num=2 ix.l=5 y.l=0
++ doping uniform p.type conc={probe} domains=1
++ method ac.analysis=direct
++ mobility mat=1 hole minority mumax=200
++ end
+.ac lin 1 1k 1k
+.save i(vnbase) i(vnmaj) i(vnmin) i(vpbase) i(vpmaj) i(vpmin)
+.end

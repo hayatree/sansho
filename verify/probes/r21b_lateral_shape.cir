@@ -1,0 +1,126 @@
+Omitted lateral implant compared with explicit shapes at a displaced peak
+* Provenance: original Sansho fixture, ngspice 44 manual chapter 26.
+* sweep: ratio 0.25 0.5 1
+.param probe=0.25
+Vomitted omitted 0 dc 0 ac 1
+Domitted omitted 0 momitted
+.model momitted numd level=2
++ options diode defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=32
++ y.mesh loc=0 n=1
++ y.mesh loc=1 n=3
++ region num=1 mat=1
++ material num=1 silicon tn=2n tp=3n
++ electrode num=1 ix.h=1
++ electrode num=2 ix.l=32
++ doping uniform n.type conc=1e15
++ doping exponential n.type conc=2e16 x.l=0.8 x.h=1.6 y.h=0.25 y.l=0
++ + char.length=0.25 location=0.1 ratio.lat={probe}
++ method ac.analysis=direct
++ end
+Vrotate rotate 0 dc 0 ac 1
+Drotate rotate 0 mrotate
+.model mrotate numd level=2
++ options diode defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=32
++ y.mesh loc=0 n=1
++ y.mesh loc=1 n=3
++ region num=1 mat=1
++ material num=1 silicon tn=2n tp=3n
++ electrode num=1 ix.h=1
++ electrode num=2 ix.l=32
++ doping uniform n.type conc=1e15
++ doping exponential lat.rotate n.type conc=2e16 x.l=0.8 x.h=1.6 y.h=0.25 y.l=0
++ + char.length=0.25 location=0.1 ratio.lat={probe}
++ method ac.analysis=direct
++ end
+Vunif unif 0 dc 0 ac 1
+Dunif unif 0 munif
+.model munif numd level=2
++ options diode defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=32
++ y.mesh loc=0 n=1
++ y.mesh loc=1 n=3
++ region num=1 mat=1
++ material num=1 silicon tn=2n tp=3n
++ electrode num=1 ix.h=1
++ electrode num=2 ix.l=32
++ doping uniform n.type conc=1e15
++ doping exponential lat.unif n.type conc=2e16 x.l=0.8 x.h=1.6 y.h=0.25 y.l=0
++ + char.length=0.25 location=0.1 ratio.lat={probe}
++ method ac.analysis=direct
++ end
+Vlin lin 0 dc 0 ac 1
+Dlin lin 0 mlin
+.model mlin numd level=2
++ options diode defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=32
++ y.mesh loc=0 n=1
++ y.mesh loc=1 n=3
++ region num=1 mat=1
++ material num=1 silicon tn=2n tp=3n
++ electrode num=1 ix.h=1
++ electrode num=2 ix.l=32
++ doping uniform n.type conc=1e15
++ doping exponential lat.lin n.type conc=2e16 x.l=0.8 x.h=1.6 y.h=0.25 y.l=0
++ + char.length=0.25 location=0.1 ratio.lat={probe}
++ method ac.analysis=direct
++ end
+Vgauss gauss 0 dc 0 ac 1
+Dgauss gauss 0 mgauss
+.model mgauss numd level=2
++ options diode defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=32
++ y.mesh loc=0 n=1
++ y.mesh loc=1 n=3
++ region num=1 mat=1
++ material num=1 silicon tn=2n tp=3n
++ electrode num=1 ix.h=1
++ electrode num=2 ix.l=32
++ doping uniform n.type conc=1e15
++ doping exponential lat.gauss n.type conc=2e16 x.l=0.8 x.h=1.6 y.h=0.25 y.l=0
++ + char.length=0.25 location=0.1 ratio.lat={probe}
++ method ac.analysis=direct
++ end
+Verfc erfc 0 dc 0 ac 1
+Derfc erfc 0 merfc
+.model merfc numd level=2
++ options diode defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=32
++ y.mesh loc=0 n=1
++ y.mesh loc=1 n=3
++ region num=1 mat=1
++ material num=1 silicon tn=2n tp=3n
++ electrode num=1 ix.h=1
++ electrode num=2 ix.l=32
++ doping uniform n.type conc=1e15
++ doping exponential lat.erfc n.type conc=2e16 x.l=0.8 x.h=1.6 y.h=0.25 y.l=0
++ + char.length=0.25 location=0.1 ratio.lat={probe}
++ method ac.analysis=direct
++ end
+Vexp exp 0 dc 0 ac 1
+Dexp exp 0 mexp
+.model mexp numd level=2
++ options diode defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=32
++ y.mesh loc=0 n=1
++ y.mesh loc=1 n=3
++ region num=1 mat=1
++ material num=1 silicon tn=2n tp=3n
++ electrode num=1 ix.h=1
++ electrode num=2 ix.l=32
++ doping uniform n.type conc=1e15
++ doping exponential lat.exp n.type conc=2e16 x.l=0.8 x.h=1.6 y.h=0.25 y.l=0
++ + char.length=0.25 location=0.1 ratio.lat={probe}
++ method ac.analysis=direct
++ end
+.ac lin 1 1k 1k
+.save i(vomitted) i(vrotate) i(vunif) i(vlin) i(vgauss) i(verfc) i(vexp)
+.end

@@ -4,6 +4,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Add two-dimensional NUMD/NBJT and four-terminal NUMOS with silicon/oxide meshes, electrodes, surface mobility and interface charge. Eight acceptance circuits cover diode C–V, NPN characteristics, MOS transfer/output, gate AC and a loaded inverter transient. [Geometry, analytic checks and open calibration choices](docs/cider.md#two-dimensional-devices)
+
 - Add one-dimensional numerical silicon diodes and bipolar transistors with CIDER input cards, DC, frequency-dependent terminal admittance, carrier-storage transient and temperature. R20c resolves the silicon densities of states, transport and recombination parameters, and the bias-dependent NBJT base access. All six R20 acceptance decks pass against ngspice 44.2. [Equations and measured mesh convergence](docs/cider.md)
 
 - Add shooting-Newton periodic steady state for autonomous oscillators and fixed-frequency driven circuits. The CLI, batch controls, session API and MCP expose one cycle and its harmonic spectrum. Six analytic decks cover RC, RLC, diode rectification, a sustained LC tank, a CMOS ring and a Van der Pol oscillator. [Algorithm and limits](docs/analyses.md#periodic-steady-state)

@@ -1,5 +1,5 @@
 //! Intrinsic CIDER electrode G, C and Y measurements.
-//! Provenance: ngspice 44 manual §§26.10, 26.17–26.18 and small-signal Dirichlet elimination.
+//! Provenance: ngspice 44 manual §§26.10, 26.17–26.19 and small-signal Dirichlet elimination.
 
 use sansho_devices::{Slots, cider::Numerical};
 use sansho_diag::Diagnostic;
@@ -9,6 +9,7 @@ pub(crate) fn element(kind: &str, key: &str) -> Option<(u8, usize, usize)> {
     let count = match kind {
         "numd" => 2,
         "nbjt" => 3,
+        "numos" => 4,
         _ => return None,
     };
     let &[p, i, j] = key.as_bytes() else {
@@ -88,7 +89,7 @@ impl PortSolve {
         (current.re, current.im)
     }
     /// Impose a unit voltage on each independent terminal and collect its reaction currents.
-    pub fn matrix(&mut self, slots: &Slots, frequency: f64) -> Result<[[c64; 3]; 3], Diagnostic> {
+    pub fn matrix(&mut self, slots: &Slots, frequency: f64) -> Result<[[c64; 4]; 4], Diagnostic> {
         let omega = std::f64::consts::TAU * frequency;
         let y = |k: usize| c64::new(slots.g[k], omega * slots.c[k]);
         self.values.fill(c64::default());
@@ -101,7 +102,7 @@ impl PortSolve {
         self.lu
             .factor(&self.values)
             .map_err(crate::small_signal::solver)?;
-        let mut result = [[c64::default(); 3]; 3];
+        let mut result = [[c64::default(); 4]; 4];
         for j in 0..self.ports {
             let mut v = vec![c64::default(); self.size];
             v[j] = 1.0.into();

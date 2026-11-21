@@ -1,8 +1,9 @@
-//! Fully coupled one-dimensional silicon drift–diffusion elements.
+//! Fully coupled silicon drift–diffusion elements.
 //! Provenance: Scharfetter & Gummel (1969), Selberherr (1984), Gates (1993),
 //! and ngspice 44 manual chapter 26. Equations and parameter sources in docs/cider.md.
 
 mod cards;
+mod equilibrium;
 use crate::{
     CHARGE, DeviceGroup, EvalCtx, Node, SlotOffsets, Slots, StampBuilder, StampLayout, StateRef,
     Unknowns, dual::Dual, model::ModelParams, volt,
@@ -46,8 +47,6 @@ fn end_ports(bipolar: bool) -> [usize; 2] {
 }
 
 const EPS_SI: f64 = 11.7 * 8.8541878128e-14;
-type D = Dual<6>;
-const ZERO: D = D::cst(0.);
 
 #[derive(Debug)]
 struct Vertex {
@@ -59,13 +58,19 @@ struct Vertex {
     tau: [f64; 2],
     volume: f64,
     scale: [f64; 3],
-    contact: bool,
+    port: Option<usize>,
+    active: bool,
+    fixed: f64,
+    traps: Vec<cards::SurfaceTrap>,
 }
 
 #[derive(Debug)]
 struct Edge {
     ends: [usize; 2],
     length: f64,
+    dielectric: f64,
+    conducting: f64,
+    surface: Option<cards::Surface>,
 }
 
 #[derive(Debug)]
@@ -76,7 +81,7 @@ struct Base {
     mobility_geometry: f64,
 }
 
-/// One numerical device. Each vertex has an electrostatic and two quasi-Fermi potentials.
+/// Numerical silicon/oxide device. Carrier unknowns belong to vertices touching silicon.
 #[derive(Debug)]
 pub struct Numerical {
     name: String,
@@ -85,8 +90,11 @@ pub struct Numerical {
     edges: Vec<Edge>,
     base: Option<Base>,
     vt: f64,
-    eps: f64,
-    area: f64,
+    ports: usize,
+    surface_params: [[f64; 3]; 2],
+    transmob: bool,
+    // Extrusion factor: area in cm² for a line, width in cm for a planar section.
+    extrusion: f64,
     srh: bool,
     auger: [f64; 2],
     fieldmob: bool,
@@ -108,11 +116,19 @@ impl Numerical {
     ) -> Result<Self, Diagnostic> {
         let s = Structure::bind(card, warnings)?;
         let bipolar = card.kind == "nbjt";
-        if pins.len() != if bipolar { 3 } else { 2 } {
+        let mos = card.kind == "numos";
+        let ports = if mos {
+            4
+        } else if bipolar {
+            3
+        } else {
+            2
+        };
+        if pins.len() != ports {
             return Err(invalid("incorrect numerical device terminal count"));
         }
         if (bipolar && (s.option("diode", 0.) != 0. || s.option("resistor", 0.) != 0.))
-            || (!bipolar && s.option("bipolar", 0.) != 0.)
+            || (!bipolar && !mos && s.option("bipolar", 0.) != 0.)
         {
             return Err(invalid("incompatible structure type"));
         }
@@ -120,7 +136,20 @@ impl Numerical {
         let nominal = s.option("tnom", nominal) + 273.15;
         let mask_area = s.option("defa", 1.);
         let factor = inst.get("area", 1.);
-        let area = 1e4 * mask_area * factor;
+        let area = if s.plane.is_some() {
+            if mos {
+                inst.get("l", 1.);
+            }
+            let mask_length = s.option("defl", 1.);
+            let default_width = s.option("defw", mask_area / mask_length);
+            let width_factor = inst.get("w", 1.);
+            if mask_length <= 0. || default_width <= 0. || width_factor <= 0. {
+                return Err(invalid("mask dimensions and width factor must be positive"));
+            }
+            100. * default_width * width_factor * factor
+        } else {
+            1e4 * mask_area * factor
+        };
         if factor <= 0. || mask_area <= 0. {
             return Err(invalid("area must be positive"));
         }
@@ -168,7 +197,7 @@ impl Numerical {
             )).with_span(card.span));
         }
         let [left, right] = end_ports(bipolar);
-        let mut points = Vec::with_capacity(s.x.len());
+        let mut points = Vec::with_capacity(s.net.len());
         let mut edges = Vec::new();
         for (i, &net) in s.net.iter().enumerate() {
             let dop = s.impurities[i];
@@ -184,7 +213,7 @@ impl Numerical {
                 0.
             };
             let ni = ni * (narrowing / (2. * vt)).exp();
-            let mu = mobility(&s, dop, temp / 300.)?;
+            let mu = mobility(&s, net, dop, temp / 300.)?;
             let tau = if s.enabled("conctau") {
                 std::array::from_fn(|k| {
                     lifetimes[k] / (1. + dop / s.material(["srh.nref", "srh.pref"][k], 1e17))
@@ -198,45 +227,127 @@ impl Numerical {
             {
                 return Err(invalid("invalid silicon mobility, doping or lifetime"));
             }
-            let end = i + 1 == s.x.len();
-            let contact = i == 0 || end;
-            let nodes = if end {
-                [pins[right]; 3]
-            } else if i == 0 {
-                [pins[left]; 3]
+            let (port, volume, active, fixed) = if let Some(plane) = &s.plane {
+                let pt = &plane.vertices[i];
+                (pt.port, pt.volume, pt.active, pt.fixed)
             } else {
-                [None; 3]
+                let end = i + 1 == s.x.len();
+                let port = if i == 0 {
+                    Some(left)
+                } else if end {
+                    Some(right)
+                } else {
+                    None
+                };
+                (
+                    port,
+                    0.5 * (s.x[(i + 1).min(s.x.len() - 1)] - s.x[i.saturating_sub(1)]),
+                    true,
+                    0.,
+                )
             };
-            let volume = 0.5 * (s.x[(i + 1).min(s.x.len() - 1)] - s.x[i.saturating_sub(1)]);
+            let electrode = port.and_then(|k| pins[k]);
+            let nodes = if volume > 0. {
+                [electrode; 3]
+            } else {
+                [electrode, None, None]
+            };
+            let psi0 = if let Some((plane, k)) = s.plane.as_ref().zip(port).filter(|_| volume == 0.)
+            {
+                // Vacuum-referenced work function of intrinsic Si minus that of the gate.
+                s.material("affinity", 4.05) + vt * (nc / ni).ln() - plane.work_functions[k]
+            } else {
+                vt * (net / (2. * ni)).asinh()
+            };
             points.push(Vertex {
                 nodes,
                 ni,
                 net,
-                psi0: vt * (net / (2. * ni)).asinh(),
+                psi0,
                 mu,
                 tau,
                 volume,
                 scale: [1.; 3],
-                contact,
+                port,
+                active,
+                fixed,
+                traps: s
+                    .plane
+                    .as_ref()
+                    .map_or_else(Vec::new, |plane| plane.vertices[i].traps.clone()),
             });
-            if i > 0 {
+            if s.plane.is_none() && i > 0 {
                 edges.push(Edge {
                     ends: [i - 1, i],
                     length: s.x[i] - s.x[i - 1],
+                    dielectric: eps,
+                    conducting: 1.,
+                    surface: None,
                 })
             }
         }
-        equilibrium(&mut points, &edges, vt, eps)?;
-        for p in points.iter_mut().filter(|p| !p.contact) {
+        if let Some(plane) = &s.plane {
+            for f in &plane.faces {
+                let surface = f.layers.iter().copied().find(|sf| {
+                    let density = sf
+                        .interface
+                        .map(|i| points[i].net.abs())
+                        .into_iter()
+                        .fold(ni, f64::max);
+                    let layer = if sf.layer > 0. {
+                        sf.layer
+                    } else {
+                        (eps * vt / (CHARGE * density)).sqrt()
+                    };
+                    s.enabled("surfmob") && sf.depth <= layer
+                });
+                edges.push(Edge {
+                    ends: f.ends,
+                    length: f.length,
+                    dielectric: f.dielectric,
+                    conducting: f.conducting,
+                    surface,
+                });
+            }
+            equilibrium::planar(&mut points, &edges, vt)?;
+        } else {
+            equilibrium(&mut points, &edges, vt, eps)?;
+        }
+        let mut weights = vec![[0.; 2]; points.len()];
+        if s.plane.is_some() {
+            for e in &edges {
+                for i in e.ends {
+                    weights[i][0] += e.dielectric / e.length;
+                    weights[i][1] += e.conducting / e.length;
+                }
+            }
+        }
+        for (i, p) in points
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, p)| p.active && p.port.is_none())
+        {
             let n = p.ni * (p.psi0 / vt).exp();
             let h = p.ni * (-p.psi0 / vt).exp();
-            p.scale = [
-                p.volume / (area * eps),
-                p.volume / (area * CHARGE * p.mu[0] * n),
-                p.volume / (area * CHARGE * p.mu[1] * h),
-            ];
+            if s.plane.is_some() {
+                p.scale[0] = 1. / (area * weights[i][0]);
+                if p.volume > 0. {
+                    // One fixed density scale for the carrier rows remains well
+                    // conditioned when the channel inverts under gate bias.
+                    p.scale[1] = 1.
+                        / (weights[i][1] * area * CHARGE * p.mu[0] * n.max(p.ni).max(p.net.abs()));
+                    p.scale[2] = 1.
+                        / (weights[i][1] * area * CHARGE * p.mu[1] * h.max(p.ni).max(p.net.abs()));
+                }
+            } else {
+                p.scale = [
+                    p.volume / (area * eps),
+                    p.volume / (area * CHARGE * p.mu[0] * n),
+                    p.volume / (area * CHARGE * p.mu[1] * h),
+                ];
+            }
         }
-        let base = if bipolar {
+        let base = if bipolar && s.plane.is_none() {
             let boundary = s.net[0].signum();
             if s.net[0] == 0.
                 || s.net[s.net.len() - 1] == 0.
@@ -295,7 +406,9 @@ impl Numerical {
             name: instance.name.clone(),
             off: matches!(
                 instance.kind,
-                ElementKind::Diode { off: true, .. } | ElementKind::Bjt { off: true, .. }
+                ElementKind::Diode { off: true, .. }
+                    | ElementKind::Bjt { off: true, .. }
+                    | ElementKind::Mosfet { off: true, .. }
             ),
             vsat,
             sg_field: s
@@ -307,8 +420,10 @@ impl Numerical {
             edges,
             base,
             vt,
-            eps,
-            area,
+            ports,
+            surface_params: s.surface_params,
+            transmob: s.enabled("transmob"),
+            extrusion: area,
             srh: s.enabled("srh"),
             auger: if s.enabled("auger") && s.enabled("srh") {
                 auger
@@ -320,20 +435,28 @@ impl Numerical {
         })
     }
 
-    fn edge_nodes(&self, e: &Edge) -> [Node; 6] {
-        edge_nodes(e, |i| self.points[i].nodes)
-    }
-
     fn declare(&self, b: &mut StampBuilder<'_>, nodes: impl Fn(usize) -> [Node; 3], base: Node) {
         for e in &self.edges {
             let fields = edge_nodes(e, &nodes);
-            if self.points[e.ends[0]].contact || self.points[e.ends[1]].contact {
-                b.charge_core(&fields);
+            let extra;
+            let fields = if let Some(sf) = &e.surface {
+                extra = surface_nodes(fields, sf.stencil.map(|i| nodes(i)[0]));
+                extra.as_slice()
             } else {
-                b.core(&fields);
+                fields.as_slice()
+            };
+            if e.ends.iter().any(|&i| self.points[i].port.is_some()) {
+                b.charge_core(fields);
+            } else {
+                b.core(fields);
             }
         }
-        for i in 1..self.points.len() - 1 {
+        for (i, _) in self
+            .points
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.port.is_none() && p.volume > 0.)
+        {
             b.core(&nodes(i));
         }
         if let Some(contact) = &self.base {
@@ -345,44 +468,55 @@ impl Numerical {
     /// Independent electrodes for intrinsic admittance extraction, including grounded
     /// or externally shorted terminals. Slot order is identical to the circuit stamp.
     pub fn isolated_layout(&self) -> (usize, usize, StampLayout) {
-        let ports = if self.base.is_some() { 3 } else { 2 };
-        let [left, right] = end_ports(self.base.is_some());
-        let size = ports + 3 * (self.points.len() - 2);
+        let ports = self.ports;
+        let mut size = ports;
+        let nodes = self
+            .points
+            .iter()
+            .map(|p| {
+                let mut n = [None; 3];
+                if p.active {
+                    for v in n.iter_mut().take(if p.volume > 0. { 3 } else { 1 }) {
+                        *v = p.port.or_else(|| {
+                            size += 1;
+                            Some(size - 1)
+                        });
+                    }
+                }
+                n
+            })
+            .collect::<Vec<_>>();
         let unknowns = Unknowns::default();
         let mut b = StampBuilder::new(&unknowns);
-        self.declare(
-            &mut b,
-            |i| {
-                if i == 0 {
-                    [Some(left); 3]
-                } else if i + 1 == self.points.len() {
-                    [Some(right); 3]
-                } else {
-                    std::array::from_fn(|k| Some(ports + 3 * (i - 1) + k))
-                }
-            },
-            Some(1),
-        );
+        self.declare(&mut b, |i| nodes[i], Some(1));
         (ports, size, b.finish())
     }
 
-    fn edge(&self, e: &Edge, v: [D; 6]) -> ([D; 6], [D; 6]) {
+    fn edge<const N: usize>(
+        &self,
+        e: &Edge,
+        v: [Dual<N>; N],
+        normal: Dual<N>,
+    ) -> ([Dual<N>; N], [Dual<N>; N]) {
         let [i, j] = e.ends;
         let (l, r) = (&self.points[i], &self.points[j]);
         let psi = [v[0] + l.psi0, v[3] + r.psi0];
         let dpsi = psi[1] - psi[0];
         let field = dpsi / e.length;
-        let mut f = [ZERO; 6];
-        let mut q = [ZERO; 6];
-        let flux = -dpsi * (self.eps * self.area / e.length);
+        let mut f = [Dual::cst(0.); N];
+        let mut q = [Dual::cst(0.); N];
+        let flux = -dpsi * (e.dielectric * self.extrusion / e.length);
         for (k, p, sign) in [(0, l, 1.), (3, r, -1.)] {
-            if p.contact {
+            if p.port.is_some() {
                 q[k] = sign * flux
             } else {
                 f[k] = sign * p.scale[0] * flux
             }
         }
-        let mut generation = ZERO;
+        if e.conducting == 0. {
+            return (f, q);
+        }
+        let mut generation = Dual::cst(0.);
         for k in 1..=2 {
             let sign = if k == 1 { 1. } else { -1. };
             let band = sign * dpsi / self.vt + (r.ni / l.ni).ln();
@@ -396,6 +530,16 @@ impl Numerical {
                 -sign * right * bernoulli(band) * du.exp_m1()
             };
             let mu = (l.mu[k - 1] + r.mu[k - 1]) * 0.5;
+            let mu = if e.surface.is_some() {
+                let [mus, theta_a, theta_b] = self.surface_params[k - 1];
+                if self.transmob {
+                    mus / (1. + abs(normal) * theta_a + normal.sq() * theta_b)
+                } else {
+                    Dual::cst(mus)
+                }
+            } else {
+                Dual::cst(mu)
+            };
             let mobility = if self.fieldmob {
                 let t = field * (mu / self.vsat[k - 1]);
                 if self.sg_field[k - 1] {
@@ -406,9 +550,11 @@ impl Numerical {
                     mu / (1. + abs(t))
                 }
             } else {
-                D::cst(mu)
+                mu
             };
-            let current = diffusion * mobility * (CHARGE * self.vt * self.area / e.length);
+            let current = diffusion
+                * mobility
+                * (CHARGE * self.vt * self.extrusion * e.conducting / e.length);
             f[k] += current * l.scale[k];
             f[k + 3] += -current * r.scale[k];
             if self.avalanche && field.v.abs() > 1. {
@@ -421,12 +567,48 @@ impl Numerical {
             }
         }
         for (k, p) in [(0, l), (3, r)] {
-            if !p.contact {
+            if p.port.is_none() {
                 f[k + 1] += generation * p.scale[1];
                 f[k + 2] += -generation * p.scale[2]
             }
         }
         (f, q)
+    }
+
+    fn port_names(&self) -> &'static [&'static str] {
+        match self.ports {
+            4 => &["id", "ig", "is", "ib"],
+            3 => &["ic", "ib", "ie"],
+            _ => &["id", ""],
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn stamp_edge<const N: usize>(
+        &self,
+        e: &Edge,
+        nodes: [Node; N],
+        indices: [usize; N],
+        x: &[f64],
+        state: &[f64],
+        at: &mut SlotOffsets,
+        out: &mut Slots,
+    ) {
+        let act = nodes.map(|n| volt(x, n));
+        let lin = indices.map(|i| state[i]);
+        let v = std::array::from_fn(|k| Dual::var(lin[k], k));
+        let normal = if let Some(sf) = e.surface {
+            let [a, b, c, d] = sf.stencil.map(|i| self.points[i].psi0);
+            let [l, r] = e.ends.map(|i| self.points[i].psi0);
+            let center = v[0] + v[3] + (l + r);
+            ((v[6] + v[7] + (a + b) - center) * sf.normal_weights[0]
+                + (v[8] + v[9] + (c + d) - center) * sf.normal_weights[1])
+                * 0.5
+        } else {
+            Dual::cst(0.)
+        };
+        let (f, q) = self.edge(e, v, normal);
+        out.core(at, &f, &q, &act, &lin);
     }
 
     fn cell(&self, p: &Vertex, v: [Dual<3>; 3]) -> ([Dual<3>; 3], [Dual<3>; 3]) {
@@ -438,11 +620,15 @@ impl Numerical {
             rate += 1. / (p.tau[1] * (n + p.ni) + p.tau[0] * (h + p.ni))
         }
         let excess = p.ni * p.ni * ((v[2] - v[1]) / self.vt).exp_m1();
-        let charge = CHARGE * self.area * p.volume;
-        let recomb = rate * excess * charge;
+        let charge = CHARGE * self.extrusion * p.volume;
+        let mut recomb = rate * excess * charge;
+        for trap in &p.traps {
+            let denominator = (n + p.ni) / trap.sp + (h + p.ni) / trap.sn;
+            recomb += excess * (CHARGE * self.extrusion * trap.length) / denominator;
+        }
         (
             [
-                charge * p.scale[0] * (n - h - p.net),
+                charge * p.scale[0] * (n - h - p.net) - self.extrusion * p.fixed * p.scale[0],
                 -recomb * p.scale[1],
                 recomb * p.scale[2],
             ],
@@ -453,6 +639,15 @@ impl Numerical {
             ],
         )
     }
+}
+
+fn surface_nodes<T: Copy>(edge: [T; 6], normal: [T; 4]) -> [T; 10] {
+    let [a, b, c, d, e, f] = edge;
+    let [g, h, i, j] = normal;
+    [a, b, c, d, e, f, g, h, i, j]
+}
+fn edge_nodes_indices(e: &Edge) -> [usize; 6] {
+    std::array::from_fn(|i| 3 * e.ends[i / 3] + i % 3)
 }
 
 fn edge_nodes(e: &Edge, nodes: impl Fn(usize) -> [Node; 3]) -> [Node; 6] {
@@ -471,7 +666,7 @@ fn abs<const N: usize>(x: Dual<N>) -> Dual<N> {
         x
     }
 }
-fn bernoulli(x: D) -> D {
+fn bernoulli<const N: usize>(x: Dual<N>) -> Dual<N> {
     if x.v.abs() < 1e-3 {
         1. - x * 0.5 + x.sq() * (1. / 12. - x.sq() / 720.)
     } else if x.v > 50. {
@@ -481,12 +676,16 @@ fn bernoulli(x: D) -> D {
     }
 }
 
-fn mobility(s: &Structure, dop: f64, t: f64) -> Result<[f64; 2], Diagnostic> {
+fn mobility(s: &Structure, net: f64, dop: f64, t: f64) -> Result<[f64; 2], Diagnostic> {
     let t = if s.enabled("tempmob") { t } else { 1. };
     let mut result = [0.; 2];
     for (k, mu) in result.iter_mut().enumerate() {
-        // The 1-D transport pair stays fixed across polarity reversals.
-        let p = &s.mobility[k][k];
+        let class = if s.plane.is_some() {
+            usize::from(if k == 0 { net < 0. } else { net >= 0. })
+        } else {
+            k
+        };
+        let p = &s.mobility[k][class];
         let min = p.get("mumin", 0.);
         let max = p.get("mumax", 0.);
         let reference = p.get("ntref", 0.);
@@ -548,7 +747,11 @@ fn equilibrium(p: &mut [Vertex], e: &[Edge], vt: f64, eps: f64) -> Result<(), Di
 
 impl DeviceGroup for Numerical {
     fn type_name(&self) -> &'static str {
-        if self.base.is_some() { "nbjt" } else { "numd" }
+        match self.ports {
+            4 => "numos",
+            3 => "nbjt",
+            _ => "numd",
+        }
     }
     fn len(&self) -> usize {
         1
@@ -564,18 +767,32 @@ impl DeviceGroup for Numerical {
             .points
             .iter_mut()
             .enumerate()
-            .filter(|(_, p)| !p.contact)
+            .filter(|(_, p)| p.active && p.port.is_none())
         {
-            p.nodes = ["psi", "fn", "fp"]
-                .map(|k| Some(u.alloc_operator_state(&self.name, &format!("{k}{i}"))))
+            for (k, name) in ["psi", "fn", "fp"]
+                .iter()
+                .enumerate()
+                .take(if p.volume > 0. { 3 } else { 1 })
+            {
+                p.nodes[k] = Some(u.alloc_operator_state(&self.name, &format!("{name}{i}")));
+            }
         }
     }
     fn output_charges(&self, _: usize, name: &str) -> Vec<(usize, f64)> {
-        match name {
-            "id" | "ie" => vec![(0, 1.)],
-            "ic" => vec![(6 * (self.edges.len() - 1) + 3, 1.)],
-            _ => Vec::new(),
+        let mut result = Vec::new();
+        let mut offset = 0;
+        for e in &self.edges {
+            for (k, i) in e.ends.into_iter().enumerate() {
+                if self.points[i]
+                    .port
+                    .is_some_and(|p| self.port_names()[p] == name)
+                {
+                    result.push((offset + 3 * k, 1.));
+                }
+            }
+            offset += if e.surface.is_some() { 10 } else { 6 };
         }
+        result
     }
     fn state_len(&self) -> usize {
         self.points.len() * 3
@@ -606,12 +823,22 @@ impl DeviceGroup for Numerical {
             }
         }
         for e in &self.edges {
-            let act = self.edge_nodes(e).map(|n| volt(x, n));
-            let lin = std::array::from_fn(|i| state.current[3 * e.ends[i / 3] + i % 3]);
-            let (f, q) = self.edge(e, std::array::from_fn(|i| D::var(lin[i], i)));
-            out.core(&mut at, &f, &q, &act, &lin)
+            let nodes = edge_nodes(e, |i| self.points[i].nodes);
+            let indices = edge_nodes_indices(e);
+            if let Some(sf) = e.surface {
+                let nodes = surface_nodes(nodes, sf.stencil.map(|i| self.points[i].nodes[0]));
+                let indices = surface_nodes(indices, sf.stencil.map(|i| 3 * i));
+                self.stamp_edge(e, nodes, indices, x, state.current, &mut at, out);
+            } else {
+                self.stamp_edge(e, nodes, indices, x, state.current, &mut at, out);
+            }
         }
-        for (i, p) in self.points.iter().enumerate().filter(|(_, p)| !p.contact) {
+        for (i, p) in self
+            .points
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.port.is_none() && p.volume > 0.)
+        {
             let act = p.nodes.map(|n| volt(x, n));
             let lin = std::array::from_fn(|k| state.current[i * 3 + k]);
             let (f, q) = self.cell(p, std::array::from_fn(|k| Dual::var(lin[k], k)));
@@ -638,17 +865,26 @@ impl DeviceGroup for Numerical {
             );
         }
         if let Some(values) = out.outputs.first_mut() {
-            let first = out.f[1] + out.f[2];
-            if self.base.is_some() {
-                let last = 6 * (self.edges.len() - 1);
-                values.extend([
-                    ("ie", first),
-                    ("ib", out.f[at.f - 3]),
-                    ("ic", out.f[last + 4] + out.f[last + 5]),
-                ]);
-            } else {
-                values.push(("id", first))
+            let mut currents = [0.; 4];
+            let mut offset = 0;
+            for e in &self.edges {
+                for (k, i) in e.ends.into_iter().enumerate() {
+                    if let Some(port) = self.points[i].port {
+                        currents[port] += out.f[offset + 3 * k + 1] + out.f[offset + 3 * k + 2];
+                    }
+                }
+                offset += if e.surface.is_some() { 10 } else { 6 };
             }
+            if self.base.is_some() {
+                currents[1] = out.f[at.f - 3];
+            }
+            values.extend(
+                self.port_names()
+                    .iter()
+                    .copied()
+                    .zip(currents)
+                    .filter(|(name, _)| !name.is_empty()),
+            );
         }
     }
 }

@@ -14,6 +14,12 @@ use sansho_output::{Quantity, Variable};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn currents(nl: &Netlist) -> impl Iterator<Item = String> + '_ {
+    let numos: BTreeSet<_> = nl
+        .models
+        .iter()
+        .filter(|m| m.kind == "numos")
+        .map(|m| m.name.as_str())
+        .collect();
     let nbjt: BTreeSet<_> = nl
         .models
         .iter()
@@ -30,6 +36,9 @@ pub(crate) fn currents(nl: &Netlist) -> impl Iterator<Item = String> + '_ {
             Some(b'q') if e.kind.model().is_some_and(|m| nbjt.contains(m)) => &["ic", "ib", "ie"],
             Some(b'q') => &["ic", "ib", "ie", "is"],
             Some(b'j' | b'z') => &["id", "ig", "is"],
+            Some(b'm') if e.kind.model().is_some_and(|m| numos.contains(m)) => {
+                &["id", "ig", "is", "ib"]
+            }
             Some(b'm') if matches!(e.kind, sansho_netlist::ElementKind::Vdmos { .. }) => {
                 &["id", "ig", "is", "ibd"]
             }
@@ -153,6 +162,7 @@ fn quantity(kind: &str, dev: &str, p: &str) -> Option<Quantity> {
         "vgs" | "vgd" if matches!(kind, "mesfet" | "jfet2") => Voltage,
         "i1" | "i2" if matches!(kind, "urc" | "ltra" | "tline") => Current,
         "v1" | "v2" if matches!(kind, "ltra" | "tline") => Voltage,
+        "id" | "ig" | "is" | "ib" if kind == "numos" => Current,
         "id" if kind == "numd" => Current,
         "ic" | "ib" | "ie" if kind == "nbjt" => Current,
         "capcur" if kind == "diode" => Current,
@@ -377,8 +387,9 @@ impl Probes {
                         } else {
                             let row = match field.parameter.as_str() {
                                 "id" | "ic" => 0,
-                                "ib" => 1,
-                                "ie" => 2,
+                                "ib" if ckt.groups[group.index].type_name() == "numos" => 3,
+                                "ib" | "ig" => 1,
+                                "ie" | "is" => 2,
                                 _ => return Err(diagnostic(&field.parameter)),
                             };
                             ports.current(row, &group.slots, &ckt.layouts[group.index], cols, k, f)

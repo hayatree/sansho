@@ -1,0 +1,27 @@
+Rectangular junction admittance at three reverse biases
+* Provenance: original Sansho fixture, ngspice 44 manual chapter 26.
+V1 a 0 dc 0 ac 1
+V2 b 0 dc -0.2 ac 1
+V3 c 0 dc -0.4 ac 1
+Dzero a 0 pn
+Dmid b 0 pn
+Dreverse c 0 pn
+.model pn numd level=2
++ options diode defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=32
++ y.mesh loc=0 n=1
++ y.mesh loc=1 n=3
++ region num=1 mat=1
++ material num=1 silicon tn=2n tp=3n
++ electrode num=1 ix.h=1
++ electrode num=2 ix.l=32
++ doping uniform p.type conc=1e16
++ doping uniform n.type conc=2e16 x.low=1.2
++ models srh
++ method ac.analysis=direct
++ end
+.options itl1=150 itl2=100
+.ac dec 2 1k 10meg
+.save i(v1) i(v2) i(v3)
+.end

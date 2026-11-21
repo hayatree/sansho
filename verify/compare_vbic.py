@@ -127,7 +127,7 @@ def expand(template, value):
                             source, flags=re.MULTILINE)
     if changes != 1:
         raise ValueError(f"{template}: expected one probe assignment")
-    if template.stem.startswith("r20b_"):
+    if template.stem.startswith(("r20b_", "r21_", "r21b_")):
         body = body.replace("{probe}", value)
     return body
 
@@ -269,7 +269,7 @@ def main():
     parser.add_argument("--out", type=Path, help="directory for native comparison raws")
     args = parser.parse_args()
     round_name = args.pattern[:3]
-    out = args.out or (ROOT / "out" / round_name if round_name in {"r16", "r17", "r18"} else OUT)
+    out = args.out or (ROOT / "out" / round_name if round_name in {"r16", "r17", "r18", "r21"} else OUT)
     counts = Counter()
     templates = sorted((ROOT / "probes").glob(args.pattern + ".cir"))
     if not templates:

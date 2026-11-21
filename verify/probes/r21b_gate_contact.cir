@@ -1,0 +1,101 @@
+Omitted gate work function against explicit electrode energies
+* Provenance: original Sansho fixture, ngspice 44 manual chapter 26.
+* sweep: gatebias -0.9 -0.45 0.05
+.param probe=-0.9
+Vomitted omitted 0 dc {probe} ac 1
+Domitted omitted 0 momitted
+.model momitted numd level=2
++ options capacitor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2 n=3
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=3
++ y.mesh width=0.8 h.start=0.002 h.max=0.05 ratio=1.35
++ material num=1 silicon
++ material num=2 oxide
++ domain num=1 mat=1 y.l=0
++ domain num=2 mat=2 y.h=0
++ electrode num=1 iy.h=1
++ electrode num=2 y.l=0.8
++ doping uniform p.type conc=1e16 domains=1
++ method ac.analysis=direct
++ end
+Vaffinity affinity 0 dc {probe} ac 1
+Daffinity affinity 0 maffinity
+.model maffinity numd level=2
++ options capacitor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2 n=3
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=3
++ y.mesh width=0.8 h.start=0.002 h.max=0.05 ratio=1.35
++ material num=1 silicon
++ material num=2 oxide
++ domain num=1 mat=1 y.l=0
++ domain num=2 mat=2 y.h=0
++ electrode num=1 iy.h=1
++ electrode num=2 y.l=0.8
++ contact num=1 workf=4.05
++ doping uniform p.type conc=1e16 domains=1
++ method ac.analysis=direct
++ end
+Vmetal metal 0 dc {probe} ac 1
+Dmetal metal 0 mmetal
+.model mmetal numd level=2
++ options capacitor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2 n=3
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=3
++ y.mesh width=0.8 h.start=0.002 h.max=0.05 ratio=1.35
++ material num=1 silicon
++ material num=2 oxide
++ domain num=1 mat=1 y.l=0
++ domain num=2 mat=2 y.h=0
++ electrode num=1 iy.h=1
++ electrode num=2 y.l=0.8
++ contact num=1 workf=4.1
++ doping uniform p.type conc=1e16 domains=1
++ method ac.analysis=direct
++ end
+Vintrinsic intrinsic 0 dc {probe} ac 1
+Dintrinsic intrinsic 0 mintrinsic
+.model mintrinsic numd level=2
++ options capacitor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2 n=3
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=3
++ y.mesh width=0.8 h.start=0.002 h.max=0.05 ratio=1.35
++ material num=1 silicon
++ material num=2 oxide
++ domain num=1 mat=1 y.l=0
++ domain num=2 mat=2 y.h=0
++ electrode num=1 iy.h=1
++ electrode num=2 y.l=0.8
++ contact num=1 workf=4.6129
++ doping uniform p.type conc=1e16 domains=1
++ method ac.analysis=direct
++ end
+Vppoly ppoly 0 dc {probe} ac 1
+Dppoly ppoly 0 mppoly
+.model mppoly numd level=2
++ options capacitor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2 n=3
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=3
++ y.mesh width=0.8 h.start=0.002 h.max=0.05 ratio=1.35
++ material num=1 silicon
++ material num=2 oxide
++ domain num=1 mat=1 y.l=0
++ domain num=2 mat=2 y.h=0
++ electrode num=1 iy.h=1
++ electrode num=2 y.l=0.8
++ contact num=1 workf=5.29
++ doping uniform p.type conc=1e16 domains=1
++ method ac.analysis=direct
++ end
+.ac lin 1 1meg 1meg
+.save i(vomitted) i(vaffinity) i(vmetal) i(vintrinsic) i(vppoly)
+.end

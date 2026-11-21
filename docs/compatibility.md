@@ -94,7 +94,7 @@ Sansho uses the manual's order. The dedicated SFFM deck records this known diffe
 | .control / .endc, .csparam and Nutmeg | Partial | Batch analyses, bounded control flow, plot and vector algebra, measurements, circuit alterations and confined file output. Scientific text fields support NUMDGT. API and MCP return structured transcripts. [Commands and differences](control.md) |
 | Digital XSPICE | Partial | Twelve-state and real events, bidirectional and sampled-real bridges, PWM, state machines, RAM and multi-output LUTs in OP/DC/transient. Raw comparisons use DAC voltages. [Digital timing and limits](xspice.md#digital-nodes-and-bridges) |
 | External XSPICE models | Excluded | `d_process`, `d_cosim` and `codemodel` require external execution or shared-library loading and produce `E-UNSUPPORTED`. [Security policy](xspice.md#excluded-external-models) |
-| CIDER | Provisional | Level-one silicon NUMD and NBJT with a fully coupled 1-D drift–diffusion mesh, OP/DC, AC, transient and temperature. Terminal G, C and Y matrices are available. NUMOS and level two give E-UNSUPPORTED. [Cards, equations and verification](cider.md) |
+| CIDER | Provisional | Level-one and level-two NUMD/NBJT, and four-terminal NUMOS. Coupled OP/DC, AC, transient, temperature and terminal G/C/Y. Planar silicon/oxide devices include gate work functions, interface charge and surface transport. All eight R21 decks pass against 44.2. Interface charge and surface transport retain probe discrepancies. [Cards, equations and verification](cider.md) |
 | OSDI / pre_osdi | Not supported | Native simulation loads VA source through .hdl. OSDI appears in the external verification workflow. |
 
 ## Numerical differences

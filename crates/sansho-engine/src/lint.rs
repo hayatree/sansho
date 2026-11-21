@@ -47,10 +47,19 @@ fn unused_models(nl: &Netlist, out: &mut Vec<Diagnostic>) {
 }
 
 fn default_geometry(nl: &Netlist, opts: &SimOptions, out: &mut Vec<Diagnostic>) {
+    let numerical: HashSet<_> = nl
+        .models
+        .iter()
+        .filter(|m| m.kind == "numos")
+        .map(|m| m.name.as_str())
+        .collect();
     for e in &nl.elements {
-        let ElementKind::Mosfet { params, .. } = &e.kind else {
+        let ElementKind::Mosfet { params, model, .. } = &e.kind else {
             continue;
         };
+        if numerical.contains(model.as_str()) {
+            continue;
+        }
         let has = |k: &str| params.iter().any(|(n, _)| n == k);
         let mut missing = Vec::new();
         if !has("l") && opts.defl.is_none() {

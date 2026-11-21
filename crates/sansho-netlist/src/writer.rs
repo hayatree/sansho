@@ -360,8 +360,16 @@ pub fn write_model(m: &crate::ModelCard) -> String {
 
 /// Write a model listing using the caller's numeric display precision.
 pub fn write_model_with(m: &crate::ModelCard, num: impl Fn(f64) -> String) -> String {
-    if matches!(m.kind.as_str(), "numd" | "nbjt") {
-        let mut line = format!(".model {} {} level=1", m.name, m.kind);
+    if matches!(m.kind.as_str(), "numd" | "nbjt" | "numos") {
+        let mut line = format!(
+            ".model {} {} level={}",
+            m.name,
+            m.kind,
+            m.params
+                .iter()
+                .find(|(k, _)| k == "level")
+                .map_or(1., |p| p.1)
+        );
         for card in &m.cider {
             let _ = write!(line, "\n+ {}", card.join(" "));
         }

@@ -1,0 +1,105 @@
+Bulk, surface and transverse-field mobility in the same nMOS cross section
+* Provenance: original Sansho fixture, ngspice 44 manual chapter 26.
+* sweep: drain 0.025 0.05 0.1
+.param probe=0.025
+Vg g 0 0.6
+Vd1 d1 0 {probe}
+M1 d1 g 0 0 channel1
+Vd2 d2 0 {probe}
+M2 d2 g 0 0 channel2
+Vd3 d3 0 {probe}
+M3 d3 g 0 0 channel3
+.model channel1 numos
++ options mosfet defw=5u
++ x.mesh loc=0 n=1
++ x.mesh loc=0.4 n=3
++ x.mesh loc=2.4 n=13
++ x.mesh loc=2.8 n=15
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.002 n=3
++ y.mesh loc=0.008 n=4
++ y.mesh loc=0.022 n=5
++ y.mesh loc=0.052 n=6
++ y.mesh loc=0.12 n=7
++ y.mesh loc=0.28 n=8
++ y.mesh loc=0.65 n=10
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.l=15 iy.l=2 iy.h=7
++ electrode num=2 iy.h=1
++ electrode num=3 ix.h=1 iy.l=2 iy.h=7
++ electrode num=4 iy.l=10
++ contact num=2 workf=4.5
++ doping uniform p.type conc=1e16 domains=1
++ doping uniform n.type conc=1e18 x.h=0.39 y.l=0 y.h=0.12 domains=1
++ doping uniform n.type conc=1e18 x.l=2.41 y.l=0 y.h=0.12 domains=1
++ interface domain=1 neighbor=2 layer.width=0.04
++ models fieldmob
++ end
+.model channel2 numos
++ options mosfet defw=5u
++ x.mesh loc=0 n=1
++ x.mesh loc=0.4 n=3
++ x.mesh loc=2.4 n=13
++ x.mesh loc=2.8 n=15
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.002 n=3
++ y.mesh loc=0.008 n=4
++ y.mesh loc=0.022 n=5
++ y.mesh loc=0.052 n=6
++ y.mesh loc=0.12 n=7
++ y.mesh loc=0.28 n=8
++ y.mesh loc=0.65 n=10
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.l=15 iy.l=2 iy.h=7
++ electrode num=2 iy.h=1
++ electrode num=3 ix.h=1 iy.l=2 iy.h=7
++ electrode num=4 iy.l=10
++ contact num=2 workf=4.5
++ doping uniform p.type conc=1e16 domains=1
++ doping uniform n.type conc=1e18 x.h=0.39 y.l=0 y.h=0.12 domains=1
++ doping uniform n.type conc=1e18 x.l=2.41 y.l=0 y.h=0.12 domains=1
++ interface domain=1 neighbor=2 layer.width=0.04
++ models fieldmob surfmob
++ end
+.model channel3 numos
++ options mosfet defw=5u
++ x.mesh loc=0 n=1
++ x.mesh loc=0.4 n=3
++ x.mesh loc=2.4 n=13
++ x.mesh loc=2.8 n=15
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.002 n=3
++ y.mesh loc=0.008 n=4
++ y.mesh loc=0.022 n=5
++ y.mesh loc=0.052 n=6
++ y.mesh loc=0.12 n=7
++ y.mesh loc=0.28 n=8
++ y.mesh loc=0.65 n=10
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.l=15 iy.l=2 iy.h=7
++ electrode num=2 iy.h=1
++ electrode num=3 ix.h=1 iy.l=2 iy.h=7
++ electrode num=4 iy.l=10
++ contact num=2 workf=4.5
++ doping uniform p.type conc=1e16 domains=1
++ doping uniform n.type conc=1e18 x.h=0.39 y.l=0 y.h=0.12 domains=1
++ doping uniform n.type conc=1e18 x.l=2.41 y.l=0 y.h=0.12 domains=1
++ interface domain=1 neighbor=2 layer.width=0.04
++ models fieldmob surfmob transmob
++ end
+.options itl1=150 itl2=100
+.dc Vg 0.4 1.2 0.1
+.save i(vd1) i(vd2) i(vd3)
+.end

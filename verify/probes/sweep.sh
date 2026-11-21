@@ -79,7 +79,7 @@ for deck in "$@"; do
         # CIDER continuation cards have their own input grammar. Give both
         # simulators the same literal values, including integer mesh indices.
         literal=()
-        if [[ $stem == r20b_* ]]; then
+        if [[ $stem == r20b_* || $stem == r21_* || $stem == r21b_* ]]; then
             literal=(-e "s/{probe}/$value/g")
         fi
         sed "${literal[@]}" -e "s/^\.param probe=.*/.param probe=$value/" \

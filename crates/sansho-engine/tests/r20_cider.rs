@@ -130,7 +130,7 @@ fn card_continuation_area_temperature_and_diagnostics() {
     let current = -r.real("i(v1)").unwrap()[0];
     let predicted = sansho_devices::CHARGE * 1e16 * 1340. * 2e-6 * 0.01 / 1e-4;
     assert!((current / predicted - 1.).abs() < 1e-6);
-    for kind in ["numd level=2", "nbjt level=2", "numos"] {
+    for kind in ["numd level=3", "nbjt level=3"] {
         assert!(
             parse(&deck.replace(".model m numd", &format!(".model m {kind}")))
                 .unwrap_err()

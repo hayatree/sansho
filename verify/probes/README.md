@@ -960,3 +960,64 @@ python3 -B verify/compare_vbic.py --pattern 'r20b_*' --out verify/out/r20b/nativ
 [Effective parameter extraction, switch ratios and deck scores](../../docs/cider.md#r20b-measurements-against-ngspice-442)
 
 R20c replays all 180 settings and adds no probe. The measured laws, bounds and ten remaining differences are recorded in the [R20c results](../../docs/cider.md#r20c-measurements-against-ngspice-442).
+
+## R21 planar numerical devices
+
+Each fixture varies one parameter across three independent runs. The sweep driver substitutes literal values into CIDER cards. There are eleven templates and 33 settings. The R21 acceptance decks in `verify/decks/` measure diode DC and three-bias C–V, NBJT Gummel and output curves, NUMOS transfer and output curves, gate admittance and a resistively loaded inverter transient. Use a CIDER-enabled ngspice 44.2 build with the Sparse solver for reference collection.
+
+| Probe | Settings | Observable |
+|---|---|---|
+| `r21_mesh` | 2, 4, 8 transverse vertices | Complex diode admittance at constant section height. A uniform extrusion should give the same result at all three settings. |
+| `r21_vertical_mesh` | Final index at 0.08 µm of 5, 11, 23 | Accumulation capacitance with silicon surface spacings of 40, 10 and 4 nm at constant oxide thickness. |
+| `r21_width` | W = 0.5, 1, 3 | Both conductance and capacitance scale with the extruded width. |
+| `r21_workfunction` | 4.6, 4.8, 5.0 eV | MOS capacitor gate current at fixed bias and 100 kHz measures the flatband shift. |
+| `r21_interface_charge` | −2 × 10⁻⁸, 0, +2 × 10⁻⁸ C/cm² | Same capacitor and operating point. Compare the shift with a work-function change of −Qf/Cox. |
+| `r21_lateral_doping`, `r21_rotated_doping` | Lateral ratio 0.25, 0.5, 1 | Conductance of a unipolar slab with a local Gaussian implant. The first uses an erfc lateral multiplier and the second elliptical contours. |
+| `r21_surface_mobility` | Electron MUS = 300, 600, 900 cm²/(V·s) | Drain current versus gate bias at fixed 50 mV drain bias, fixed layer depth and fixed critical fields. |
+| `r21_transverse_field` | Electron EC.A = 10⁵, 3 × 10⁵, 9 × 10⁵ V/cm | Same channel with MUS held at 600 cm²/(V·s). Compare the gate dependence with the MUS series. |
+| `r21_surface_defaults` | Drain bias 25, 50, 100 mV | Three gate sweeps compare bulk transport, default surface mobility and default surface mobility with transverse-field degradation. Parallel-field mobility is enabled in all three. |
+| `r21_surface_layer` | Depth 0.002, 0.008, 0.04 µm | At fixed mobility parameters, successive settings include more silicon edges in the surface model. |
+
+Run the native settings offline from the repository root.
+
+```sh
+cargo build --offline --release -p sansho-cli
+python3 -B verify/compare_vbic.py --pattern 'r21_*' --native-only
+```
+
+Collect reference raws and logs with the existing sweep driver, then compare the saved settings.
+
+```sh
+verify/probes/sweep.sh verify/probes/r21_*.cir
+python3 -B verify/compare_vbic.py --pattern 'r21_*' --out verify/out/r21/native
+```
+
+## R21b follow-up experiments
+
+The eleven templates below contain 40 settings. Each setting runs natively. New 44.2 reference raws are needed for comparison. Use a CIDER-enabled 44.2 executable with Sparse and retain both components of AC source currents. [Measured laws and outstanding differences](../../docs/cider.md#r21b-measurements-against-ngspice-442)
+
+| Template | Sweep | What to compare |
+|---|---|---|
+| `r21b_gate_end` | Side contacts start at 0, 0.002, 0.008 µm below the oxide | Full and explicitly inset oxide in the same gate-admittance run. The inferred end-cell convention predicts equal currents only with the contacts at the interface. |
+| `r21b_oxide` | Oxide thickness 10, 20, 40 nm | Compare omitted ε with explicit 3.9 ε₀ and 7.8 ε₀ in accumulation. Plot 1/C against thickness to separate oxide and silicon contributions. |
+| `r21b_gate_contact` | Gate bias −0.9, −0.45, +0.05 V | Compare the omitted contact with fixed work functions 4.05, 4.1, 4.6129 and 5.29 eV. The last is the manual’s ideal p+ poly gate. |
+| `r21b_numos_contact` | Work function 4.05, 4.1, 4.6129, 5.29 eV | Match the omitted NUMOS drain-current curve to the horizontally shifted explicit curves. This checks the MOSFET structure separately from the capacitor structure. |
+| `r21b_sheet_units` | Qf = −10¹¹, −2 × 10⁻⁸, 0, +2 × 10⁻⁸, +10¹¹ | Compare Si-first, oxide-first and clean capacitors. Compare the large signed settings with uncharged work-function controls equivalent to ±10¹¹ elementary charges/cm². The small inputs test the manual’s C/cm² scale. |
+| `r21b_surface_depth` | Layer.Width = 0, 2 × 10⁻⁶, 0.002, 0.0225, 0.0725, 0.2 | In the 0.1 µm neutral n slab, invert the parallel conductance to measure active depth. Compare both interface orders with the omitted-width and bulk controls. MUS is 300 and bulk μ is 1340 cm²/(V·s). |
+| `r21b_surface_ecb` | EC.B = 10⁶, 10¹⁰, 10¹², 10²⁴ | Compare Id(Vg) with the effectively linear control (EC.B = 10³⁰). These settings distinguish E²/EC.B from (E/EC.B)² and an inactive coefficient. |
+| `r21b_surface_mesh` | First silicon interval 0.0005, 0.002, 0.006 µm | Compare transverse-field on/off at fixed layer width. The paired ratio detects dependence on the normal-field stencil as the first interval changes. |
+| `r21b_surface_hole` | Hole MUS = 120, 240, 480 cm²/(V·s) | Compare omitted hole surface parameters in a p-channel device with explicit MUS, 1/EC.A = 3.07 × 10⁻⁶ cm/V and a negligible quadratic term. |
+| `r21b_bulk_class` | Uniform concentration 10¹⁵, 10¹⁶, 10¹⁷ cm⁻³ | Extract μ from the real low-frequency slab admittance. Each polarity has an omitted, majority-override and minority-override branch. |
+| `r21b_lateral_shape` | Ratio.Lat = 0.25, 0.5, 1 | Compare the omitted lateral implant against rotation and all five separable profiles. A displaced exponential primary breaks the zero-offset Gaussian degeneracy. |
+
+The native recessed-contact control gives 18.39744 fF for both footprints at zero recess. At 2 nm recess the full and inset values are 21.71061 and 18.39744 fF. At lateral ratio 0.5 the explicit rotate, uniform, linear, Gaussian, erfc and exponential branches give 245.131, 144.290, 164.721, 188.552, 183.058 and 213.005 µS. These predictions give distinct comparisons from a single oracle run. For the charge-number test the clean, positive-sheet-equivalent and negative-sheet-equivalent controls give 12.25658, 10.33017 and 15.23812 fF at 1 MHz.
+
+Collect the oracle settings on the reference host and replay with a current release build from the repository root.
+
+```sh
+verify/probes/sweep.sh verify/probes/r21b_*.cir
+cargo build --offline --release -p sansho-cli
+python3 -B verify/compare_vbic.py --pattern 'r21b_*' --out verify/out/r21b/followup
+```
+
+For a native-only run use `python3 -B verify/compare_vbic.py --pattern 'r21b_*' --native-only`. To reproduce the original probe comparisons, use `--pattern 'r21_*' --out verify/out/r21b/native`.

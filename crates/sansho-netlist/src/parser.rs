@@ -1885,6 +1885,7 @@ impl Parser {
                 ElementKind::Diode { .. } => &["d", "numd"],
                 ElementKind::Bjt { .. } => &["npn", "pnp", "nbjt"],
                 ElementKind::Va { .. } | ElementKind::CodeModel { .. } => &[],
+                ElementKind::Mosfet { .. } => &["nmos", "pmos", "numos"],
                 _ => &["nmos", "pmos"],
             };
             let code = if matches!(e.kind, ElementKind::Switch { .. }) {
@@ -2042,7 +2043,10 @@ impl Parser {
                 };
                 level = l;
             }
-            if level != 1. || kind == "numos" {
+            if kind == "numos" {
+                level = 2.;
+            }
+            if level != 1. && level != 2. {
                 self.err(
                     "E-UNSUPPORTED",
                     format!("unsupported numerical device {kind} level {level}"),

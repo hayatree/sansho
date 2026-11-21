@@ -1,0 +1,87 @@
+Neutral parallel conducting sheets measure the active surface thickness
+* Provenance: original Sansho fixture, ngspice 44 manual chapter 26.
+* sweep: width 0 2e-6 0.002 0.0225 0.0725 0.2
+.param probe=0
+Vbulk bulk 0 dc 0 ac 1
+Dbulk bulk 0 mbulk
+.model mbulk numd level=2
++ options resistor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=1 n=5
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.1 n=22
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.h=1 y.l=0
++ electrode num=2 ix.l=5 y.l=0
++ doping uniform n.type conc=1e16 domains=1
++ method ac.analysis=direct
++ end
+Vautomatic automatic 0 dc 0 ac 1
+Dautomatic automatic 0 mautomatic
+.model mautomatic numd level=2
++ options resistor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=1 n=5
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.1 n=22
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.h=1 y.l=0
++ electrode num=2 ix.l=5 y.l=0
++ doping uniform n.type conc=1e16 domains=1
++ method ac.analysis=direct
++ mobility mat=1 electron mus=300
++ models surfmob
++ end
+Vsi si 0 dc 0 ac 1
+Dsi si 0 msi
+.model msi numd level=2
++ options resistor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=1 n=5
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.1 n=22
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.h=1 y.l=0
++ electrode num=2 ix.l=5 y.l=0
++ doping uniform n.type conc=1e16 domains=1
++ method ac.analysis=direct
++ mobility mat=1 electron mus=300
++ models surfmob
++ interface domain=1 neighbor=2 layer.width={probe}
++ end
+Vox ox 0 dc 0 ac 1
+Dox ox 0 mox
+.model mox numd level=2
++ options resistor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=1 n=5
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.1 n=22
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.h=1 y.l=0
++ electrode num=2 ix.l=5 y.l=0
++ doping uniform n.type conc=1e16 domains=1
++ method ac.analysis=direct
++ mobility mat=1 electron mus=300
++ models surfmob
++ interface domain=2 neighbor=1 layer.width={probe}
++ end
+.ac lin 1 1k 1k
+.save i(vbulk) i(vautomatic) i(vsi) i(vox)
+.end

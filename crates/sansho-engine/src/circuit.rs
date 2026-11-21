@@ -1527,11 +1527,16 @@ fn native_groups<'a>(
         }
     }
     for e in elements {
-        if matches!(e.kind, ElementKind::Diode { .. } | ElementKind::Bjt { .. })
-            && let Some(card) = e.kind.model().and_then(|name| model_cache.card(name))
-            && matches!(card.kind.as_str(), "numd" | "nbjt")
+        if matches!(
+            e.kind,
+            ElementKind::Diode { .. } | ElementKind::Bjt { .. } | ElementKind::Mosfet { .. }
+        ) && let Some(card) = e.kind.model().and_then(|name| model_cache.card(name))
+            && matches!(card.kind.as_str(), "numd" | "nbjt" | "numos")
         {
             let (pins, params) = match &e.kind {
+                ElementKind::Mosfet {
+                    d, g, s, b, params, ..
+                } => (vec![node(d), node(g), node(s), node(b)], params),
                 ElementKind::Diode { p, n, params, .. } => (vec![node(p), node(n)], params),
                 ElementKind::Bjt {
                     c,
