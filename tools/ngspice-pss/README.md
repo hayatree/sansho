@@ -31,3 +31,10 @@ SANSHO_NGSPICE_IMAGE=sansho-ngspice-pss:latest tools/ngspice/ngspice.sh -b deck.
 ```
 
 `ngspice.sh` never auto-builds this image. It exits with an error if the image is missing.
+
+## Recorded build
+
+Built 2026-11-21 23:12 UTC by the project owner in their own terminal. The ngspice 44.2
+tarball had SHA-256 `e7dadfb7bd5474fd22409c1e5a67acdec19f77e597df68e17c5549bc1390d7fd`.
+Configure flags: `--enable-pss --enable-cider --disable-debug --without-x`. Only the status
+lines and `BUILDINFO` were seen. No source or build log was viewed.
