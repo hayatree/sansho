@@ -98,6 +98,11 @@ tooling. Upstream legal texts in the notice inventory retain their attribution.
 
 Reference simulators (ngspice) are only ever executed as external programs on our own decks
 (`tools/ngspice`, `sansho-verify`); their sources are not read.
+The PSS oracle image (`tools/ngspice-pss`) is compiled from the ngspice 44.2 release tarball
+with `--enable-pss`. Download, build and deletion of the source happen inside one Docker build
+step. No image layer keeps the source, the build log is discarded unread, and the source never
+enters the working tree or any agent session. The image is used only to produce reference
+waveforms for `.pss`. The Sansho PSS implementation was written before the image existed (R19).
 
 ### Planned references (for upcoming work)
 

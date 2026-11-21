@@ -1,0 +1,33 @@
+# PSS-enabled ngspice oracle (Docker)
+
+The Debian `ngspice` package used by `tools/ngspice` is built without the experimental
+periodic-steady-state analysis, so it silently ignores `.pss`. This image compiles the
+ngspice 44.2 release with `--enable-pss` (ngspice 44 manual §28.1.8) so that Sansho's `.pss`
+results can be compared against a black-box reference.
+
+## Isolation procedure
+
+The clean-room rule is that nobody who writes Sansho code ever sees ngspice source. Building
+from source is allowed only under these conditions:
+
+1. A person builds the image by running `tools/ngspice-pss/build.sh` in their own terminal.
+   Do not run it from an agent session (Claude, Codex), and do not run it while a Codex round
+   is active.
+2. The tarball is downloaded, compiled and deleted inside one `RUN` step. No layer or
+   build-cache entry contains source, and the source is never written to the host.
+3. All configure, compiler and make output goes to `/dev/null`. If the build fails, report
+   only that it failed. Never open, paste or debug the log or the source.
+4. The runtime image holds only the installed executable, code models and init scripts.
+   `/opt/ngspice-pss/BUILDINFO` records the version, the tarball SHA-256, the configure
+   flags and the build time.
+5. The image only produces reference results. Sansho's PSS was implemented beforehand, from
+   the manual and the published literature (see `docs/PROVENANCE.md`).
+
+## Use
+
+```sh
+tools/ngspice-pss/build.sh                       # once, by a person
+SANSHO_NGSPICE_IMAGE=sansho-ngspice-pss:latest tools/ngspice/ngspice.sh -b deck.cir -r out.raw
+```
+
+`ngspice.sh` never auto-builds this image. It exits with an error if the image is missing.

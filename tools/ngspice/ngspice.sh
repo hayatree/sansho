@@ -5,6 +5,12 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 image="${SANSHO_NGSPICE_IMAGE:-sansho-ngspice:latest}"
 if [[ "${1:-}" != --compile-va ]] && ! docker image inspect "$image" >/dev/null 2>&1; then
+  if [[ "$image" != sansho-ngspice:latest ]]; then
+    # Never auto-build a non-default oracle (e.g. sansho-ngspice-pss): its recipe
+    # fetches source and must be built by a person via its own build.sh.
+    echo "ngspice.sh: image $image not found; build it first (see tools/ngspice-pss/README.md)" >&2
+    exit 2
+  fi
   docker build -q -t "$image" "$root/tools/ngspice" >/dev/null
 fi
 # A deck directory may carry its own .spiceinit (e.g. `set ngbehavior=hsa` for PDK
