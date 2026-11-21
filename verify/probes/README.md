@@ -684,7 +684,7 @@ NGSPICE=tools/ngspice/ngspice.sh verify/probes/sweep.sh verify/probes/r15b_vbic_
 python3 verify/compare_vbic.py --pattern 'r15b_vbic_*'
 ```
 
-The ten templates contain 34 settings. Sansho completes 29 and rejects the four nonbinary QBM values and negative RCI with `E-ELAB-PARAM`. Keep the 44.2 logs for the domain probes, including settings that produce no raw file.
+The ten templates contain 34 settings. R15c passes all 32 completed references, including the four nonbinary QBM values and negative RCI that 44.2 accepted silently. The two positive-TD Gear references aborted and remain partial. Together with the earlier suite this gives 219 passes and four partial references. [R15c measurements and open items](../../docs/vbic.md#r15c-follow-up-measurements)
 
 | Probe | Measurement to distinguish |
 |---|---|

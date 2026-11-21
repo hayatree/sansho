@@ -129,6 +129,13 @@ pub struct Model {
 impl Model {
     /// Bind a numeric card, retaining unused keys for the caller's diagnostic.
     pub fn from_params(p: &ModelParams, polarity: f64) -> Result<Self, Diagnostic> {
+        // The RCI impedance and reverse-noise measurements resolve finite
+        // intrinsic series resistance even when the card specifies zero.
+        let resistance = |name, omitted| match p.opt(&[name]) {
+            Some(r) if r == 0. || (name == "rci" && r < 0.) => 0.01,
+            Some(r) => r,
+            None => omitted,
+        };
         let xrb = p.get("xrb", 0.);
         let xrc = p.get("xrc", 0.);
         p.accept(&["level", "vers", "vref"]);
@@ -136,15 +143,15 @@ impl Model {
             polarity,
             tnom: p.opt(&["tnom", "tref"]),
             rcx: p.get("rcx", 0.),
-            rci: p.get("rci", 0.1),
+            rci: resistance("rci", 0.1),
             vo: p.get("vo", 0.),
             gamm: p.get("gamm", 0.),
             hrcf: p.get("hrcf", 0.),
-            rbx: p.get("rbx", 0.),
-            rbi: p.get("rbi", 0.1),
+            rbx: resistance("rbx", 0.),
+            rbi: resistance("rbi", 0.1),
             re: p.get("re", 0.),
             rs: p.get("rs", 0.),
-            rbp: p.get("rbp", 0.1),
+            rbp: resistance("rbp", 0.1),
             is_: p.get("is", 1e-16),
             nf: p.get("nf", 1.),
             nr: p.get("nr", 1.),
@@ -214,8 +221,8 @@ impl Model {
             rth: p.get("rth", 0.),
             cth: p.get("cth", 0.),
             xre: p.get("xre", 0.),
-            xrbi: p.get("xrbi", xrb),
-            xrbp: p.get("xrbp", xrb),
+            xrbi: p.get("xrbi", 0.),
+            xrbp: p.get("xrbp", 0.),
             xrbx: p.get("xrbx", xrb),
             xrci: p.get("xrci", 0.),
             xrcx: p.get("xrcx", xrc),
@@ -244,7 +251,7 @@ impl Model {
         };
         if !(0. ..1.).contains(&m.fc)
             || ![m.wbe, m.wsp].iter().all(|v| (0. ..=1.).contains(v))
-            || ![m.selft, m.qbm].iter().all(|v| matches!(v, 0. | 1.))
+            || !matches!(m.selft, 0. | 1.)
             || [
                 m.nf, m.nr, m.nei, m.nen, m.nci, m.ncn, m.nfp, m.ncip, m.ncnp, m.nbbe, m.pe, m.pc,
                 m.ps, m.nkf,

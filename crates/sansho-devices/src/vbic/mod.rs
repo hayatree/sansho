@@ -77,16 +77,27 @@ fn depletion(v: D, potential: D, grading: f64, fc: f64, aj: f64, vrt: f64, art: 
     };
     let knee = potential * fc;
     let cmax = (1. - fc).powf(-grading);
+    if vrt > 0. && aj > 0. && art > 0. {
+        // Bound the integration voltage between -VRT and FC*P. Smooth
+        // distances to both endpoints share the same voltage interval.
+        let span = knee + vrt;
+        let middle = (knee - vrt) * 0.5;
+        let limited = |u: D| {
+            let lo = ((u + vrt).sq() + (span * art).sq()).sqrt();
+            let hi = ((u - knee).sq() + (span * aj).sq()).sqrt();
+            middle + (u - middle) * span / (lo + hi)
+        };
+        let z = limited(v);
+        let z0 = limited(D::cst(0.));
+        let cmin = (1. + vrt / potential).powf(-grading);
+        let extension_cap = cmin + (cmax - cmin) * (z + vrt) / span;
+        return primitive(z) - primitive(z0) + (v - (z - z0)) * extension_cap;
+    }
     let integrated = |u: D| {
         let mut z = u;
         let mut extension = D::cst(0.);
         if vrt > 0. {
-            let a = u + vrt;
-            z = if aj > 0. && art > 0. {
-                (a + (a.sq() + art * art).sqrt()) * 0.5 - vrt
-            } else {
-                floor(u, -vrt)
-            };
+            z = floor(u, -vrt);
             extension = (u - z) * (1. + vrt / potential).powf(-grading);
         }
         let d = z - knee;
@@ -192,7 +203,7 @@ impl Instance {
         let inv = |p: f64| if p > 0. { 1. / p } else { 0. };
         let width = floor(1. + de_be * inv(m.ver) + dc_bc * inv(m.vef), 1e-4);
         let injection = forward * inv(m.ikf) / ratio.powf(m.xikf) + reverse * inv(m.ikr);
-        let qb = if m.qbm == 1. {
+        let qb = if m.qbm >= 0.5 {
             width * (1. + floor(1. + 4. * injection, 1e-12).powf(m.nkf)) * 0.5
         } else {
             (width + floor(width.powf(1. / m.nkf) + 4. * injection, 1e-12).powf(m.nkf)) * 0.5
@@ -269,24 +280,30 @@ impl Instance {
         ] {
             branch(&mut f, p, n, i * sign);
         }
-        // The collector noise sweep resolves forward transport shot noise,
-        // while the avalanche sweep excludes the net B-C branch as a source.
-        for (p, n, i) in [
-            (CI, EI, itf),
-            (BI, EI, bei),
-            (BX, EI, bex),
-            (BX, SI, parasitic),
-            (BX, BP, ibep),
-            (SI, BP, ibcp),
+        // R15b reverse drive isolates the pocket B-E shunt. The R15
+        // base readouts resolve both junction shunts in shot and flicker
+        // power. GMIN is per instance; the diode current scales with area.
+        let ibe_noise = bei.v * scale + gmin * be.v;
+        let ibep_noise = ibep.v * scale + gmin * bep.v;
+        for (p, n, current) in [
+            (CI, EI, itf.v * scale),
+            (BI, EI, ibe_noise),
+            (BX, EI, bex.v * scale),
+            (BX, SI, parasitic.v * scale),
+            (BX, BP, ibep_noise),
+            (SI, BP, ibcp.v * scale),
         ] {
-            noise(p, n, 2. * crate::CHARGE * i.v.abs() * scale, 0.);
+            noise(p, n, 2. * crate::CHARGE * current.abs(), 0.);
         }
-        // Each parallel copy generates flicker from its area-scaled current.
-        for (p, i) in [(BI, bei), (BX, bex)] {
+        for (p, n, current) in [
+            (BI, EI, ibe_noise),
+            (BX, EI, bex.v * scale),
+            (BX, BP, ibep_noise),
+        ] {
             noise(
                 p,
-                EI,
-                m.kfn * (i.v.abs() * self.area).powf(m.afn) * self.copies,
+                n,
+                m.kfn * (current.abs() / self.copies).powf(m.afn) * self.copies,
                 m.bfn,
             );
         }

@@ -4,7 +4,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
-- Add native level-four VBIC NPN and PNP devices with substrate transport, quasi-saturation, excess phase, a junction-temperature port and noise. Seven acceptance decks and isolated parameter sweeps cover the initial 1.2 card mapping. All seven decks and 187 complete black-box probe settings pass against ngspice 44.2. [Equations and open choices](docs/vbic.md)
+- Add native level-four VBIC NPN and PNP devices with substrate transport, quasi-saturation, excess phase, a junction-temperature port and noise. Seven acceptance decks and isolated parameter sweeps cover the initial 1.2 card mapping. All seven decks and 219 complete black-box probe settings pass against ngspice 44.2. [Equations and open choices](docs/vbic.md)
 
 - Add provisional JFET2, MOS9, BSIM1 and BSIM2 models with DC, charge, AC, temperature and noise. VDMOS accepts TEXP0 and TEXP1. Against ngspice 44.2 nine acceptance decks pass. The two inverter decks have quantified trapezoidal supply-current differences on coarse grids. [Equations, assumptions and probe index](docs/r14-models.md)
 - Match measured NUMDGT formatting for signed real and complex print fields, wrdata, measurement and echo output. [Batch number formatting](docs/control.md#batch-number-formatting)

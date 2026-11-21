@@ -39,7 +39,7 @@ Language and analysis conventions follow the manual. SFFM argument order, E-tabl
 | M, VDMOS | Partial | N-channel and p-channel power MOSFET, Miller charge, body diode, subthreshold smoothing, drain drift resistance, temperature, noise and UIC. THERMAL requires explicit junction and case nodes and uses RTHJC, CTHJ and RTHCA. The cached 44.2 sweeps confirm the RTHCA boundary, hot channel transfer and body-diode heat including RB. TEXP0 and TEXP1 configure the fixed and bias-dependent drain resistance exponents. CTHJC gives W-MODEL-IGNORED. [Parameters and limits](r8-semiconductors.md) |
 | Other built-in transistor families | Not supported | Includes BSIM-SOI and HICUM model cards. Independently supplied Verilog-A modules can implement some of these families. |
 | A, analog code models | Partial | All 34 manual §8.2 families, including coupled cores, nonlinear passives, meters, file tables and analog delay. All ten R13 batch decks pass against cached ngspice 44.2 waveforms. [Ports, parameters and limits](xspice.md) |
-| Q, level 4 | Native VBIC NPN/PNP, 3–5 terminals | DC, AC, noise, temperature and electrothermal transient. All seven R15 acceptance decks and 187 completed probe settings pass against ngspice 44.2. [Equations and coverage](vbic.md) |
+| Q, level 4 | Native VBIC NPN/PNP, 3–5 terminals | DC, AC, noise, temperature and electrothermal transient. All seven R15 acceptance decks and 219 completed probe settings pass against ngspice 44.2. [Equations and coverage](vbic.md) |
 | X, subcircuit instances | Supported | Nested flattening, parameters, local models and hierarchical names. |
 | Verilog-A via N and .hdl | Partial | Compiled analog subset with an interpreter and optional JIT. [Language coverage](verilog-a.md) |
 

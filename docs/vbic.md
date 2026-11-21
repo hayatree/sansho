@@ -1,6 +1,6 @@
 # Native VBIC bipolar transistor
 
-A level-four NPN or PNP card selects the native model for OP, DC (including a temperature axis), AC, noise and transient analysis. R15 targets the VBIC 1.2 interface in ngspice 44. Seven native acceptance decks, 64 probe templates and 189 individual probe runs exercise these equations. All acceptance waveforms replayed bit-for-bit with one and two workers. A 257-transistor test also exercises parallel assembly. R15b compares all 189 settings to cached ngspice 44.2 black-box measurements. All 187 completed references and all seven acceptance decks pass. Two reference transients aborted. The separate Verilog-A route remains available for cards targeting VBIC 1.3. [Acceptance decks](#acceptance-decks) · [Probe index](../verify/probes/README.md#r15-native-vbic)
+A level-four NPN or PNP card selects the native model for OP, DC (including a temperature axis), AC, noise and transient analysis. R15 targets the VBIC 1.2 interface in ngspice 44. All seven acceptance decks and 219 completed probe settings pass against cached ngspice 44.2 measurements in R15c. The original suite contributes 187 passes and two partial references. The ten R15b follow-up templates contribute 32 passes and two partial references. All four partial references are aborted TD transients. The acceptance waveforms also replay bit-for-bit with one and two workers. A 257-transistor test exercises parallel assembly. The separate Verilog-A route remains available for cards targeting VBIC 1.3. [Acceptance decks](#acceptance-decks) · [Probe index](../verify/probes/README.md#r15-native-vbic)
 
 ## Terminals and scaling
 
@@ -15,7 +15,7 @@ The omitted substrate connects to ground. The optional fifth pin represents junc
 
 Define `a = AREA·M`, defaulting both factors to one. Equations below describe one unit transistor. Sansho multiplies electrical current, stored charge, thermal conductance and thermal capacitance by a. This puts unit resistances in parallel and retains knee current densities. The noise section gives the separate AREA and M laws. AREA also accepts the positional spelling after the model. The junction ambient in °C is (instance TEMP or circuit temperature) + instance DTEMP + model DTEMP. TNOM and TREF name the extraction temperature. IC accepts a B–E/C–E tuple, and ICVBE and ICVCE can specify the voltages separately.
 
-The internal paths are C–RCX–CX–RCI–CI, B–RBX–BX–RBI–BI, E–RE–EI, S–RS–SI and CX–RBP–BP. RBI, RCI and RBP default to 0.1 Ω. A specified zero merges the two nodes in Sansho. Internal voltages below use NPN polarity, so each voltage difference and electrical branch current reverses sign for a PNP.
+The internal paths are C–RCX–CX–RCI–CI, B–RBX–BX–RBI–BI, E–RE–EI, S–RS–SI and CX–RBP–BP. Omitted RBI, RCI and RBP default to 0.1 Ω. Omitted RBX is an ideal connection. An explicit zero for any of these four resistances gives 0.01 Ω. A negative RCI also gives 0.01 Ω. The resulting finite branches participate in DC, AC and noise. Internal voltages below use NPN polarity, so each voltage difference and electrical branch current reverses sign for a PNP.
 
 ## Transport, base and substrate currents
 
@@ -24,8 +24,8 @@ Let `D(v,I,n) = I·expm1(v/(n·VT))` with `VT = kT/q`. In the native VBIC voltag
 ```text
 w = 1 + Je/VER + Jc/VEF
 h = F/IKF + R/IKR
-qb = (w + (w^(1/NKF) + 4h)^NKF)/2        for QBM=0
-qb = w·(1 + (1 + 4h)^NKF)/2               for QBM=1
+qb = (w + (w^(1/NKF) + 4h)^NKF)/2        for QBM < 0.5
+qb = w·(1 + (1 + 4h)^NKF)/2               for QBM ≥ 0.5
 If = F/qb                 Ir = R/qb
 ```
 
@@ -44,7 +44,16 @@ Iepi = (u/RCI) / sqrt(1 + (u/(VO + sqrt(d² + (0.1 V)²)/(2·HRCF)))²)
 
 Zero VO removes the high-field division. Zero HRCF removes the term containing its reciprocal. Each collector endpoint stores `QCO·(k−1)` against BI. Kull et al. supply the conductivity integral. The reverse-epi and VO sweeps resolve the high-field denominator in both current directions.
 
-For junction potential P and grading m, integrate `(1−v/P)^(−m)` and subtract the zero-bias integral. FC sets the forward join at `c = FC·P`. A nonpositive AJ continues the capacitance linearly above c. For positive AJ, use the smoothed lower voltage `z = c + (v−c−sqrt((v−c)²+4AJ²))/2`, integrate at z, and add `(v−z)·(1−FC)^(−m)`. A positive VRT introduces a lower join at −VRT with constant capacitance beyond reach-through for nonpositive AJ. Sansho smooths this lower join with ART for positive AJ. The combined AJ/ART shape awaits measurement. The reach-through option applies to the intrinsic B–C depletion charge (CJC), as specified in §27.5.2.
+For junction potential P and grading m, integrate `(1−v/P)^(−m)` and subtract the zero-bias integral. FC sets the forward join at `c = FC·P`. A nonpositive AJ continues the capacitance linearly above c. For positive AJ, use the smoothed lower voltage `z = c + (v−c−sqrt((v−c)²+4AJ²))/2`, integrate at z, and add `(v−z)·(1−FC)^(−m)`. A positive VRT introduces a lower join at −VRT with constant capacitance beyond reach-through for nonpositive AJ. For positive AJC, ART and VRT the two joins share the interval from l = −VRT to c. Let D = c−l, b = (c+l)/2, C(u) = (1−u/P)^(−m) and let J be its integral. The distances to both endpoints define a bounded integration voltage z. Interpolating the endpoint capacitances accounts for the voltage outside the integrated interval. Both voltage increments are referenced to zero bias.
+
+```text
+z(v) = b + (v−b)·D / (sqrt((v−l)² + (D·ART)²) + sqrt((v−c)² + (D·AJC)²))
+Δz = z(v)−z(0)
+Ce = C(l) + (C(c)−C(l))·(z(v)−l)/D
+Q/CJC = J(z(v))−J(z(0)) + (v−Δz)·Ce
+```
+
+At nominal temperature this expression gives the normalized B–C depletion charge. The reach-through option applies to the intrinsic B–C depletion charge (CJC), as specified in §27.5.2.
 
 CJE and its WBE fraction follow the two B–E junctions. CJC attaches to BI–CI, CJEP to BX–BP and CJCP to SI–BP. CBEO, CBCO and CCSO are linear external overlaps. BI–EI stores `TF_eff·If`, BI–CI stores `TR·R` and BX–BP stores `TR·Fp`. The forward transit time is
 
@@ -59,17 +68,19 @@ At nonpositive F, u is zero. Zero VTF removes the exponent. Section 27.5.2 lists
 
 For absolute temperature ratio r = T/Tnom and temperature change ΔT, define `L(I,x,E,n) = I·exp((x·log(r) + E·(r−1)/VT)/n)`. Transport uses XIS and EA, parasitic transport uses XIS and EAP. The ISRR multiplier uses XISR and DEAR. Ideal junctions use XII with EAIE, EAIC or EAIS. Recombination uses XIN with EANE, EANC or EANS. NF and NR receive the factor `1 + TNF·ΔT`, and AVC2 receives `1 + TAVC·ΔT`. VBBE uses the quadratic factor from TVBBE1/2, and NBBE the linear factor from TNBBE.
 
-Each lead resistance uses `Rnom·r^X`. XRB supplies the default for XRBX, XRBI and XRBP. XRC supplies the extrinsic exponent XRCX. XRCI defaults independently to zero. The emitter and substrate use XRE and XRS. VO and IKF use XVO and XIKF. GAMM scales by `r^XIS·exp(EA·(r−1)/VT)`. For each depletion junction Sansho uses the corresponding ideal activation energy E, `P(T) = E + r·(Pnom−E) − 3VT·log(r)`, and `C(T) = Cnom·(Pnom/P(T))^m`. The electrical, charge and temperature derivatives are evaluated together with forward-mode differentiation.
+Each lead resistance uses `Rnom·r^X`. XRB supplies the extrinsic exponent when XRBX is absent. XRBI and XRBP default independently to zero. XRC supplies the extrinsic exponent XRCX. XRCI defaults independently to zero. The emitter and substrate use XRE and XRS. VO and IKF use XVO and XIKF. GAMM scales by `r^XIS·exp(EA·(r−1)/VT)`. For each depletion junction Sansho uses the corresponding ideal activation energy E, `P(T) = E + r·(Pnom−E) − 3VT·log(r)`, and `C(T) = Cnom·(Pnom/P(T))^m`. The electrical, charge and temperature derivatives are evaluated together with forward-mode differentiation.
 
 Section 7.3.4 couples dissipated power to a parallel RTH/CTH. For junction rise θ, the current into the thermal pin is `a·(θ/RTH + CTH·dθ/dt − P)`. P sums voltage times static current over all physical electrical branches, including contact losses. Displacement currents, numerical GMIN shunts and phase-control rows contribute zero heat. At DC an unloaded junction reaches θ = P·RTH. All electrical branches see the resulting temperature at each Newton iterate.
 
-Shot spectra are one-sided `2q·|I|`. The collector source uses If, and the B–E junctions use their respective diode currents. Avalanche enters the DC current and small-signal gain. The measured base noise excludes shot noise proportional to the net avalanche-modified B–C current. Sansho also includes the parasitic transport and pocket junction sources. Each finite lead contributes `4kT·g`, with bias-dependent base conductance and the low-field conductance for the epitaxial lead. At BI–EI and BX–EI the device flicker power for each branch is `M·KFN·|AREA·Ibe|^AFN/f^BFN`, with Ibe evaluated per unit area. The two sources are independent in Sansho. No thermal-port fluctuation source or avalanche excess-noise factor has been fitted.
+Shot spectra are one-sided `2q·|I|`. The collector source uses forward transport If. The bias dependence of reverse transport, the B–C diode and avalanche enters the noise transfer through the small-signal equations. Each finite lead contributes `4kT·g`, with the modulated base conductance and the low-field conductance for the epitaxial lead.
+
+For the intrinsic B–E and pocket BX–BP noise sources, the instance current is `In = AREA·M·Idiode + GMIN·Vjunction`, with voltage and current in NPN polarity. Each contributes shot power `2q·|In|` and flicker power `M·KFN·|In/M|^AFN/f^BFN` across its own junction. The forward transport shot power uses the area-scaled current alone. Sansho also includes shot and flicker from the WBE-split extrinsic B–E current, and shot noise from parasitic transport and the SI–BP diode. Those additional source strengths have yet to be isolated.
 
 ## Outputs and diagnostics
 
 The Gummel–Poon output set is available as `@q1[ic]`, `ib`, `ie`, `is`, `gm`, `go`, `gpi`, `gmu`, `cpi` and `cmu`. Terminal currents include their charge derivatives in transient. The current sum cancels across the four electrical terminals even with internal lead drops. The conductances and capacitances describe intrinsic partial derivatives at the operating point. VBIC also exposes intrinsic `vbe`, `vbc` and dissipated power `p`.
 
-Both values of UNKNOWNFIT trigger an ignored-key warning in 44.2. All three explicit EBBE values are accepted silently. With IBBE=1 µA, increasing EBBE from zero to 1e−6 shifts i(Vb) at zero bias by −1 pA. Sansho matches both recognition and current. Numeric VERS and VREF are metadata. Independent AREAB and AREAC are outside the §27.5.2 instance interface. Invalid model selectors, nonpositive AREA/M or invalid emission coefficients give `E-ELAB-PARAM`. A nonpositive operating junction temperature or a request for higher-order DISTO derivatives gives `E-ANALYSIS`. [Diagnostic catalog](diagnostics.md)
+Both values of UNKNOWNFIT trigger an ignored-key warning in 44.2. All three explicit EBBE values are accepted silently. With IBBE=1 µA, increasing EBBE from zero to 1e−6 shifts i(Vb) at zero bias by −1 pA. Sansho matches both recognition and current. Numeric VERS and VREF are metadata. Independent AREAB and AREAC are outside the §27.5.2 instance interface. Invalid SELFT, nonpositive AREA/M or invalid emission coefficients give `E-ELAB-PARAM`. A nonpositive operating junction temperature or a request for higher-order DISTO derivatives gives `E-ANALYSIS`. [Diagnostic catalog](diagnostics.md)
 
 ## Acceptance decks
 
@@ -95,11 +106,23 @@ Both values of UNKNOWNFIT trigger an ignored-key warning in 44.2. All three expl
 | Temperature and heating | Both DTEMP offsets add to an explicit TEMP. Isolating RCX and RCI in the XRC=2 experiment gives a worst collector error of 0.47 µA with the exponent on RCX and 37.8 µA with it on RCI. The measured ideal/recombination, reverse transport and hot-breakdown sweeps support the corresponding temperature maps. Junction-capacitance sweeps agree from −20 to 85 °C. With the fifth pin omitted, changing RTH from 0 to 500 K/W leaves the entire reference Gummel curve identical. Connected, externally loaded and disabled heating, and electrical/thermal AREA and M scaling pass the pulse comparisons. |
 | White and flicker noise | The RCI sweep distinguishes the forward transport shot source from the previous combination of net transport and net B–C shot noise. At RCI=2 Ω the output density is 3.51317 nV/√Hz. At AFN=1.4, four times AREA and four copies give 1.407 and 1.203 nV/√Hz respectively at 1 Hz. The white floor scales in power with AREA·M. |
 
+### R15c follow-up measurements
+
+| Probe | Observation and inference |
+|---|---|
+| QBM domain | Each log reports seven DC rows with no parameter warning. The current vectors for −1, 0 and 0.49 are identical, as are those for 0.51, 1 and 2. At the final bias the collector magnitudes are 600.744 and 364.395 µA respectively. Sansho uses 0.5 as the transition and assigns equality to the upper branch. The probes bracket the transition and leave equality unmeasured. |
+| RCI domain | All four logs report nine AC rows without warnings. At 10 GHz the real part of the reciprocal collector transfer admittance is 0.110 Ω for RCI=−1 and 0, 0.200 Ω for 0.1 and the omitted control, and 1.100 Ω for 1. Subtracting the common 0.100 Ω intrinsic base resistance gives the effective RCI directly. |
+| Explicit zero base resistances | The reverse-noise input transfer resolves 0.020 Ω total across the intrinsic collector and base leads. The earlier RBX=0 base-noise transfer and the small XRB dependence of the RBX=0 temperature trace support a finite 0.010 Ω access lead. In the earlier RBP=0 run at Vc=0.02 V, reconstructing BX, SI and CI from measured terminal currents and lead drops gives a substrate-current residual of 178 pA with BP at CX and 0.016 pA with a 0.010 Ω pocket lead. |
+| Reverse noise and flicker | At VBE=0 and IBCI=0, reverse transport is about 2.57 µA. A full reverse transport shot term alone would give about 0.91 nV/√Hz through the 1 kΩ readout. The measurement is 1.865 pV/√Hz. With A the measured gain, subtracting `A²·4kT·0.020 Ω` from the output power leaves the shot equivalent of 0.62 pA through 1 kΩ at all three IBCI settings. This equals GMIN times the 0.62 V pocket bias. The earlier base readouts at Vb=0.70 V and Vc=2 V also resolve the intrinsic 0.70 pA and pocket 1.30 pA terms. At AFN=0.7 including both predicts the measured 0.01136% increase in flicker power. Varying AREA and M resolves the per-instance GMIN term. |
+| ART | Dividing the quadrature current by 2πf·CJC gives normalized capacitances 0.901276, 0.865278 and 0.837328 at junction biases −0.4, −0.5 and −0.6 V with ART=0.4. Differentiating the two-sided charge law reproduces all nine capacitances across ART=0.01, 0.1 and 0.4. The largest complex current error is 3.6 fA. |
+| XRB | At 87 °C, increasing XRB from 0 to 2 changes the access-resistance transistor's collector current from 202.753 to 152.970 µA. The 500 Ω intrinsic-resistance device changes by only 1.37 nA, consistent with its explicitly zero RBX. The substrate-current trace is identical across all three settings. |
+| QTF, TR, HRCF and heat | The nonunit-width probe confirms `TF·(1+QTF·w)` in high injection. The isolated pocket charge follows `TR·Fp` through 10 GHz. Zero HRCF leaves VO as the high-field limiting voltage. With a 200 Ω thermal shunt, RTH=0 gives exactly zero rise at every bias. Positive RTH of 100 and 500 K/W gives peak rises of 0.04964 and 0.10670 K. |
+
 ### Remaining differences
 
-- The 200 ps TD reference steps from −8.204 µA at the operating point to picoamps at the first transient sample. It aborts at 2.00054 ns. The 1 ns reference aborts at 2.96875 ps. Both logs name the internal branch and a 3.125e−23 s timestep. Sansho completes both runs with continuous initial transport. Neither trace establishes a delayed turn-on waveform.
+- The original 200 ps and 1 ns TD references abort at 2.00054 ns and 2.96875 ps. The Gear follow-ups also abort at the internal Q1 branch, at 2.300 ns (241 points) and 2.225 ns (233 points), with a 1.25e−23 s timestep. On the available 200 ps Gear prefix the largest current difference is 244 nA against a reference peak of 35.0 nA. Sansho completes the 14 ns Gear simulations. The nonzero-TD turn-on and settling waveform remains unverified.
 - The output deck retains a 0.706 mV worst base-voltage deviation at Vc=0.17 V. Interpolation between adaptive thermal timesteps leaves a 5.09 µA collector difference on the pulse edge. Small DC and AC residuals persist around nonlinear operating points.
-- Reverse-only noise, the separate pocket sources, and flicker correlations with split base drive need independent readouts. AC cannot distinguish an additive equilibrium constant in QCO. Parasitic TR and the QTF width factor require probes that excite those terms separately.
-- The existing sweeps do not isolate positive AJC with ART, zero HRCF deep in the high-field regime, shared XRB precedence, all parasitic activation energies, or hot GAMM. External heating with zero RTH, untested card aliases, small-signal output conventions and invalid parameter domains remain open. Sansho retains its stated parameter checks and exponential/positive-domain continuations outside the measured range.
+- The exact QBM tie, positive resistances below 0.01 Ω, other negative lead resistances and other untested parameter domains remain open. The XRB sweep tests the default mapping. Precedence when both XRB and XRBX appear on a card remains unmeasured.
+- Separate noise measurements would be needed for WBE-split base drive, conducting pocket junctions and parasitic transport. AC leaves the additive equilibrium charge in QCO undetermined. Other open items include parasitic activation energies, hot GAMM, untested aliases and small-signal output conventions.
 
-The parameter table and terminal conventions come from ngspice 44 §§7.3.1, 7.3.4 and 27.5.2. The physical basis is C. C. McAndrew et al., “VBIC95, the vertical bipolar inter-company model,” IEEE JSSC 31(10), 1996, and “BJT modeling with VBIC, basics and V1.3 updates,” MSM 2003. Epitaxial transport follows G. M. Kull et al., IEEE TED 32 (1985). R15b uses the original project probes and cached black-box outputs as its numerical evidence. [Probe comparison and next measurements](../verify/probes/README.md#r15b-comparison)
+The parameter table and terminal conventions come from ngspice 44 §§7.3.1, 7.3.4 and 27.5.2. The physical basis is C. C. McAndrew et al., “VBIC95, the vertical bipolar inter-company model,” IEEE JSSC 31(10), 1996, and “BJT modeling with VBIC, basics and V1.3 updates,” MSM 2003. Epitaxial transport follows G. M. Kull et al., IEEE TED 32 (1985). R15b and R15c use the original project probes and their cached black-box outputs. [Probe comparisons](../verify/probes/README.md#r15b-comparison)

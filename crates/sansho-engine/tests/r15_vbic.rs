@@ -72,23 +72,35 @@ Vb b 0 .69 ac 1
 Hread out 0 Vb 1k
 Rload out 0 1k
 Q1 c b 0 n area=2 m=2
-.model n npn(level=4 ibei=1e-18 ibci=0 rbi=0 rci=0 kfn=1e-15 afn=1.2 bfn=.8)
+.model n npn(level=4 ibei=1e-18 ibci=0 rbi=10 rci=0 kfn=1e-15 afn=1.2 bfn=.8)
+.op
+.save @q1[vbe]
 .noise v(out) Vb lin 2 1 100
 ",
     )
     .unwrap();
     let run = sansho_engine::run(&deck).unwrap();
-    let plot = &run.results.analyses[0];
-    // Thermal voltage from the independent default-card Gummel slope at 27 °C.
-    let ib = 1e-18 * (0.69_f64 / (300.15 * 8.617_347_89e-5)).exp_m1();
+    let vbe = run.results.analyses[0].real("@q1[vbe]").unwrap()[0];
+    let plot = &run.results.analyses[1];
+    let vt = 300.15 * 8.617_347_89e-5;
+    let diode = 4e-18 * (vbe / vt).exp_m1();
+    let ib = diode + 1e-12 * vbe;
+    let pocket = 1e-12 * (0.69_f64 - 1.).abs();
+    let r = 10. / 4.;
+    let g = (diode + 4e-18) / vt;
+    let transfer = 1. / (1. + r * g);
+    let johnson = 4. * sansho_devices::BOLTZMANN * 300.15 * r * g * g;
     for (&f, &read) in plot
         .scale_values
         .iter()
         .zip(plot.real("onoise_spectrum").unwrap())
     {
-        let expected = 2.
-            * 1e6
-            * (2. * sansho_devices::CHARGE * (2. * ib) + 1e-15 * (2. * ib).powf(1.2) / f.powf(0.8));
+        let noise = |i: f64| {
+            2. * sansho_devices::CHARGE * i + 2. * 1e-15 * (i / 2.).powf(1.2) / f.powf(0.8)
+        };
+        // The pocket source reaches the ideal base drive directly. The
+        // intrinsic base source and RBI's series voltage noise see feedback.
+        let expected = 1e6 * (noise(pocket) + transfer * transfer * (noise(ib) + johnson));
         assert!(
             (read * read / expected - 1.).abs() < 1e-7,
             "{read} vs {expected}"
