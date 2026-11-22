@@ -64,7 +64,7 @@ Ask the client to validate the divider, load it, simulate the operating point an
 | Devices | R, L, C, mutual inductance, independent and controlled sources, behavioral and polynomial sources, switches, lossless, lossy (TXL) and coupled (CPL) transmission lines, junction diodes, Gummel–Poon, VBIC and HICUM/L2 BJTs, JFETs, MESFETs, classical MOS levels, BSIM1–4, VDMOS and B4SOI |
 | Mixed-signal and numerical devices | Built-in XSPICE analog, hybrid and digital code models with event-driven digital nodes, and one- and two-dimensional CIDER numerical devices (NUMD, NBJT, NUMOS) |
 | Netlists and output | Includes, library sections, parameterized subcircuits, functions, conditional expansion, model bins, initial conditions, `.save`, `.meas`, a batch `.control` subset, ASCII/binary raw plots and JSON |
-| Statistical runs | Seeded Monte Carlo batches with per-instance mismatch, shared parameter draws, measurement statistics and single-run replay, scheduled one run per worker. An optional CUDA build batches diode evaluations across runs (`sansho mc --gpu`) |
+| Statistical runs | Seeded Monte Carlo batches with per-instance mismatch, shared parameter draws, measurement statistics and single-run replay, scheduled one run per worker. A CUDA source build (`--features gpu`) can batch diode evaluations across runs (`sansho mc --gpu`) |
 
 Support varies by model selector and analysis. The compatibility table distinguishes implemented forms, partial and provisional coverage, and gaps such as interactive Nutmeg commands and external-process XSPICE models. [ngspice compatibility](docs/compatibility.md) · [Analysis cards and outputs](docs/analyses.md)
 
