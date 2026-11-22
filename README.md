@@ -11,7 +11,7 @@ Sansho (山椒) takes its name from Japanese pepper. It runs analog circuit netl
 - **Large circuits.** In the documented 16-bit MOS1 multiplier transient benchmark, Sansho took 8.307 s with five workers, including setup, profiling and ASCII waveform output. The separately measured ngspice 44.2 default run took 82 s. Performance depends on the circuit. On the 1,000-stage BSIM4 inverter chain in the same table, the times were 0.349 s and 0.33 s, respectively. [Benchmark conditions and results](docs/performance.md#m5-2-wall-time-and-profile)
 - **Reproducible parallel runs.** Fixed device accumulation order makes results bit-identical across worker counts on the same build and platform. In the Monte Carlo validation, scalar JSON matched byte for byte with one and two workers on each of three decks of 200 samples. A seed and run index reproduce an individual draw. [Architecture](docs/architecture.md) · [Monte Carlo measurements](docs/monte-carlo.md#m5-5-validation-and-cost)
 - **Agent access.** The stdio MCP server can validate a deck, estimate its cost, simulate it and return measurements with units. An agent can request individual waveforms, alter parameters or run a sweep in the same session. Simulation jobs carry input and result hashes. [Diagnostics](docs/diagnostics.md)
-- **Compact models.** Built-in quasi-static models cover BSIM3v3.3 and silicon BSIM4.8.2. The Verilog-A analog subset supports user-supplied models through `.hdl` and `N` instances, with a register interpreter and optional Cranelift JIT. [BSIM3 coverage](docs/bsim3.md) · [BSIM4 coverage](docs/bsim4.md) · [Verilog-A coverage](docs/verilog-a.md)
+- **Compact models.** Built-in quasi-static models cover BSIM3v3.3, silicon BSIM4.8.2, B4SOI 4.4, VBIC and HICUM/L2. The Verilog-A analog subset supports user-supplied models through `.hdl` and `N` instances, with a register interpreter and optional Cranelift JIT. [BSIM3 coverage](docs/bsim3.md) · [BSIM4 coverage](docs/bsim4.md) · [BSIM-SOI coverage](docs/bsimsoi.md) · [VBIC](docs/vbic.md) · [HICUM](docs/hicum.md) · [Verilog-A coverage](docs/verilog-a.md)
 
 ## Install
 
@@ -60,12 +60,13 @@ Ask the client to validate the divider, load it, simulate the operating point an
 
 | Area | Available in v0.1 |
 | --- | --- |
-| Analyses | Operating point, nested DC and temperature sweeps, AC, adaptive trapezoidal and Gear transients, noise, transfer function, DC/AC sensitivity, Fourier and small lumped-circuit pole-zero analysis |
-| Devices | R, L, C, mutual inductance, independent and controlled sources, behavioral and polynomial sources, switches, lossless transmission lines, junction diodes, Gummel–Poon BJTs, JFETs and MOS models |
-| Netlists and output | Includes, library sections, parameterized subcircuits, functions, conditional expansion, model bins, initial conditions, `.save`, `.meas`, ASCII/binary raw plots and JSON |
-| Statistical runs | Seeded Monte Carlo batches with per-instance mismatch, shared parameter draws, measurement statistics and single-run replay |
+| Analyses | Operating point, nested DC and temperature sweeps, AC, adaptive trapezoidal and Gear transients, noise, transfer function, DC/AC sensitivity, Fourier, distortion, small lumped-circuit pole-zero analysis and shooting periodic steady state (`.pss`) |
+| Devices | R, L, C, mutual inductance, independent and controlled sources, behavioral and polynomial sources, switches, lossless, lossy (TXL) and coupled (CPL) transmission lines, junction diodes, Gummel–Poon, VBIC and HICUM/L2 BJTs, JFETs, MESFETs, classical MOS levels, BSIM1–4, VDMOS and B4SOI |
+| Mixed-signal and numerical devices | Built-in XSPICE analog, hybrid and digital code models with event-driven digital nodes, and one- and two-dimensional CIDER numerical devices (NUMD, NBJT, NUMOS) |
+| Netlists and output | Includes, library sections, parameterized subcircuits, functions, conditional expansion, model bins, initial conditions, `.save`, `.meas`, a batch `.control` subset, ASCII/binary raw plots and JSON |
+| Statistical runs | Seeded Monte Carlo batches with per-instance mismatch, shared parameter draws, measurement statistics and single-run replay, scheduled one run per worker. An optional CUDA build batches diode evaluations across runs (`sansho mc --gpu`) |
 
-Support varies by model selector and analysis. The compatibility table distinguishes implemented forms, partial coverage and gaps such as Nutmeg control scripts. [ngspice compatibility](docs/compatibility.md) · [Analysis cards and outputs](docs/analyses.md)
+Support varies by model selector and analysis. The compatibility table distinguishes implemented forms, partial and provisional coverage, and gaps such as interactive Nutmeg commands and external-process XSPICE models. [ngspice compatibility](docs/compatibility.md) · [Analysis cards and outputs](docs/analyses.md)
 
 ## Accuracy and verification
 
@@ -81,7 +82,7 @@ PDKs are installed separately. The SKY130 verification decks use the TT library 
 
 ## Roadmap
 
-Planned work includes GPU batch evaluation for Monte Carlo and corners. M6 covers periodic steady-state and harmonic balance (PSS/HB), the HSPICE dialect and Python bindings. [Architecture and roadmap](docs/architecture.md)
+Planned work includes GPU evaluation for more device families, harmonic balance, the HSPICE dialect and Python bindings. [Architecture and roadmap](docs/architecture.md)
 
 ## License
 
