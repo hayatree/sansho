@@ -1,6 +1,6 @@
 # Sansho v0.1.0 release audit
 
-Reviewed the `release-prep` working tree against base commit `2d0cec9` on 2026-11-22.
+Reviewed the `release-prep` working tree against base commit `24506bb` on 2026-11-22.
 This review replaces the 2026-11-20 audit of `bb73272`, which predated the R15–R22
 model rounds, the solver replacement, the GPU batch and the Monte Carlo throughput
 work. The review used tracked files, local Git history and the locked Cargo cache.
@@ -26,9 +26,11 @@ External simulator source and local PDK/model trees were excluded from inspectio
   tarball, and the recipe deletes the source inside the build. Sansho's PSS was
   implemented before that image existed. [PSS oracle](PROVENANCE.md#algorithms-and-references)
 - The B4SOI parameter-check log and a Python bytecode file had been committed by
-  mistake. Both were removed and are now covered by ignore rules. A BSIM3 check
-  log that was removed earlier remains in history. Both logs are ngspice
-  output for original decks and contain no source code.
+  mistake. Both were removed and are now covered by ignore rules. The bytecode
+  embedded a local absolute path, so it was also removed from the history on
+  2026-11-23. The two parameter-check logs, one for BSIM3 and one for B4SOI,
+  remain in history. They are ngspice output for original decks and contain no
+  source code or local paths.
 
 ## Dependencies and privacy
 
