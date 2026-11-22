@@ -241,7 +241,13 @@ fn canonical_cards_and_raw_plots_round_trip() {
     sansho_output::write_raw_ascii(&run.results, &mut raw).unwrap();
     let decoded = sansho_output::read_raw_ascii(std::str::from_utf8(&raw).unwrap()).unwrap();
     assert_eq!(decoded.analyses.len(), 6);
-    for (before, after) in run.results.analyses.iter().zip(&decoded.analyses) {
+    for (before, after) in run
+        .results
+        .into_raw_output()
+        .analyses
+        .iter()
+        .zip(&decoded.analyses)
+    {
         assert_eq!(
             (before.kind, &before.variables, &before.scale, before.len()),
             (after.kind, &after.variables, &after.scale, after.len())

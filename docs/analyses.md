@@ -11,7 +11,7 @@ with `get_waveform`. The CLI writes all plots to one raw file with `sansho run d
 | `.dc src1 start stop step [src2 start stop step]` | DC solutions versus independent source value, nominal resistor value or ambient temperature (`temp`) on either axis. The outer loop advances src2. Each complete inner sweep follows the previous one in the same plot, with the inner value as scale. |
 | `.ac dec\|oct\|lin n start stop` | Complex node voltages and branch currents versus frequency in Hz. Sources use their AC magnitude and phase. |
 | `.tran step stop [start [maxstep]] [uic]` | Node voltages and branch currents versus time in seconds. The integrator adapts its internal step. |
-| `.pss gfreq tstab oscnob psspoints harms [sciter [steadycoeff]] [driven] [uic]` | One period of time samples and a complex peak-amplitude spectrum. |
+| `.pss gfreq tstab oscnob psspoints harms [sciter [steadycoeff]] [driven] [uic]` | One period and its one-sided spectrum. Autonomous runs report real magnitudes and signed DC. Driven runs report complex peak phasors. |
 | `.sp dec\|oct\|lin n start stop [donoise]` | One complex frequency plot of the scattering, admittance and impedance matrices. |
 | `.disto dec\|oct\|lin n start stop [f2overf1]` | Two harmonic plots for one tone or three intermodulation plots for two tones. |
 | `.noise v(out[,ref]) source dec\|oct\|lin n start stop [interval]` | A noise spectrum and a separate plot of integrated RMS noise. |
@@ -139,7 +139,16 @@ Sansho exposes `onoise.<instance>` spectra and `onoise_total.<instance>` RMS val
 every run. These names are Sansho extensions. The session/MCP summary ranks contributors
 by integrated output noise. A positive summary interval prints device densities
 on the CLI at the first point and every interval thereafter. Zero suppresses this
-point-by-point listing. The interval has no effect on integration.
+point-by-point listing. Batch raw files for a zero or omitted interval contain
+only the two spectra and two integrated totals. The interval has no effect on integration.
+A positive interval samples the batch spectrum at point 0 and every interval
+thereafter. Integration still uses every analysis frequency. The detailed
+spectrum lists generator densities, their device density and finally the two
+circuit densities. The integrated plot pairs output and input RMS values at
+each position. The R22d captures establish the diode labels `rs`, `id` and
+`1overf`, and the resistor labels `thermal` and `1overf`. An inactive
+generator contributes zero. Other families currently export device totals.
+[Noise output conventions](https://nmg.gitlab.io/ngspice-manual/analysesandoutputcontrol_batchmode/analyses/noise_noiseanalysis.html)
 
 | Device | Independent generators |
 |---|---|
@@ -215,8 +224,11 @@ AC sensitivity stores complex derivatives versus frequency. It solves the nomina
 forward and adjoint equations with one LU per frequency. For each parameter a
 positive and negative perturbation re-establish the bias and linearization.
 Contracting the matrix difference with the nominal solutions includes the bias
-dependence of conductances and capacitances. The AC source amplitudes and phases
-stay fixed when differentiating a source's DC value. Two extra bias solves per
+dependence of conductances and capacitances. The excitation derivative is projected through the same adjoint for AC magnitude
+and phase. Passive instance sensitivities include multiplicity, scale, temperature
+and its quadratic coefficients. AC includes independent resistor AC resistance and
+capacitor IC. The reference status for implicit default parameters is recorded in the
+[verification notes](../verify/README.md#r22d-cached-results). [Sensitivity output conventions](https://nmg.gitlab.io/ngspice-manual/analysesandoutputcontrol_batchmode/analyses/sens_dcorsmall-signalacsensitivityanalysis.html) Two extra bias solves per
 parameter can make this analysis expensive for large models.
 
 ## Periodic steady state
@@ -224,7 +236,7 @@ parameter can make this analysis expensive for large models.
 The autonomous card follows the ngspice 44 manual §§1.2.8 and 11.3.12. For
 example, `.pss 4k 2m out 256 10 25 1e-7 uic` starts a tank from its device
 and node initial conditions, estimates its frequency at node `out`, and reports
-ten harmonics. For a circuit driven by a 1 kHz source, use
+DC and nine AC harmonics. For a circuit driven by a 1 kHz source, use
 `.pss 1k 0 out 128 5 8 1e-9 driven`. The Sansho keyword `driven` fixes the
 period at `1/gfreq` and keeps the phase of the external excitation. The source
 itself must specify a compatible periodic waveform.
@@ -264,26 +276,46 @@ and Fourier sums have a fixed order.
 normalization unspecified. Sansho divides each absolute endpoint mismatch by
 the larger of that coordinate's peak-to-peak swing and its absolute voltage
 or current tolerance. The mean must be at most `steadycoeff` (default 0.001).
-This controls periodic closure. Integration accuracy also depends on the mesh.
-The number of equal steps per shot is the largest of 512, eight times `harms`,
-and `ceil(2π/√reltol)`. Linear autonomous shooting rounds up to an odd step count to resolve algebraic perturbations. Tighten `reltol` and check frequency and amplitude
-again for sharp edges, stiff networks or high harmonics. The shooting mesh has
-no adaptive event location. The usual adaptive controls apply to stabilization.
+When the autonomous iteration budget expires, Sansho returns the completed shot with
+the smallest residual. A residual above the requested coefficient produces
+`W-CONV-PSS` with the shot number, frequency and residual. An unresolved
+oscillation or a failed stage solve still produces an error.
 
-**Results.** The manual describes time samples and monitor harmonics and leaves
-the literal plot names, endpoint convention and complex normalization unspecified.
-Sansho uses the following conventions in ASCII and binary raw files, the session
-API, MCP and the control command `pss`.
+The internal mesh has at least 512 equal steps and at least eight per requested
+harmonic. For a second-order integrator the leading dispersion term scales as
+`(ωh)²`. Sansho targets `ωh ≤ √reltol` at the highest reported autonomous
+harmonic, or at the fundamental for driven and DC-only output. Additional
+harmonic refinement stops at the mesh limit. Linear autonomous shooting uses
+an odd number of steps to resolve algebraic perturbations. When iterations
+are available, autonomous Newton corrections continue until the residual also
+falls below `(2π/steps)²`, the order of the fundamental's mesh error.
+The adaptive transient controls apply during stabilization.
 
-| Raw plot | Control name | Scale and vectors |
+**Raw output.** Both domains use the same ordered node voltages and MNA branch
+currents. ASCII and binary raw, the session API and control plots expose the same
+samples. For an explicit `ltank#branch` monitor the 44.2 LC capture contains two
+`i(ltank)` columns. The first is zero in both domains. The second contains the
+physical current. Sansho reproduces the pair and resolves name-based waveform
+lookup to the physical column.
+
+| Autonomous raw plot | Control name | Scale and values |
 |---|---|---|
-| `Periodic Steady State (time domain)` | `pss1`, … | Real voltages and branch currents at `kT/N`, for `k = 0 … N−1`, relative to the start of the shot. Linear interpolation of the converged shot gives `N = max(psspoints, 2 × harms + 1)` time samples. |
-| `Periodic Steady State (frequency domain)` | `pssfreq1`, … | The same signals as complex, cosine-reference peak phasors at `h/T` Hz for `h = 1 … harms`. The coefficient is twice the mean of the internal samples times `exp(−j2πhk/steps)`. A unit sine starting at zero gives `−j` at the fundamental. |
+| `Time Domain Periodic Steady State Analysis` | `pss1`, … | Real samples at `start + kT/N` for `k = 0 … N`, including the actual shot endpoint. Sansho uses `N = max(psspoints, 2 × harms + 1)`. |
+| `Frequency Domain Periodic Steady State Analysis` | `pssfreq1`, … | Real values in `harms` bins. Bin zero is the signed arithmetic mean. Bin `h > 0` is twice the absolute value of the normalized discrete Fourier coefficient at `h/T` Hz. The transform takes the first `N` printed samples. |
 
-The harmonic table gives frequency, peak magnitude and phase in degrees for
-`oscnob`. The session and MCP waveform query defaults to linear magnitude for
-the spectrum. The DC level is the mean of a period. Increasing `psspoints`
-changes only time-domain sampling.
+The time origin is the final shooting iteration's absolute circuit time. The tight LC capture starts at iteration 25's clock (7.223489643 ms) and uses iteration 21's frequency (5027.894962 Hz).
+In the 44.2 VdP capture it is 0.1067351188 s, with the output already falling
+at 1.95123 V. Different solvers can select different starting phases. Sansho
+places its rising-crossing seed at the corresponding cycle at or after
+stabilization, then advances the clock by each trial period. The terminal
+sample can differ from the first sample by the closure residual.
+
+The Sansho `driven` extension shares the two domain titles. It retains its
+source-referenced, endpoint-exclusive `kT/N` time grid and its complex peak
+phasors at `1/T` through `harms/T`, computed on the internal shooting mesh.
+A unit sine starting at zero has a fundamental phasor of `−j`. The printed
+monitor table includes magnitude and phase in degrees for both modes. The raw
+reader also accepts the earlier Sansho PSS plot titles.
 
 **Scope.** The implementation supports deterministic lumped circuits with a
 smooth charge/flux description. For classical Meyer MOS capacitances it uses
@@ -303,16 +335,33 @@ at most 16,777,216 harmonic-by-mesh-point products per signal. Stabilization
 accepts up to one million guessed periods. PSS outputs cover node voltages and
 MNA branch currents.
 
-**Verification.** The cached ngspice 44.2 build lacks PSS. Run
-`cargo run --release -p sansho-verify -- --cached --out target/verify-pss verify/pss-decks -v`
-to print the independent comparisons. At 1 kHz the measured complex phasor
-errors are 1.73 µV (RC) and 56.85 µV (series RLC). The diode reservoir output
-differs by at most 82.4 µV from the final period of a 20 ms transient. Against
-rising crossings in independent transients, the sustained LC tank differs by
-0.0641 Hz at 5.028 kHz and the CMOS ring by 88.9 Hz at 40.395 MHz. The
-half peak-to-peak amplitudes differ by 21.1 µV and 1.77 µV respectively.
-The Van der Pol circuit at μ = 1 gives 2.00848 V for the expected amplitude
-of about 2 V. [Analytic acceptance decks](../verify/pss-decks)
+**Verification.** The analytic suite covers RC and RLC phasors, a rectifier's
+final transient period, the LC and ring transient crossing frequencies, and the
+Van der Pol amplitude and period. The R22 suite compares signed DC, odd
+harmonics, fundamental frequency and the RMS waveform difference on each
+physical vector. A single fractional shift derived from the fundamental of
+`v(out)` aligns every vector, preserving their relative phases. The frequency
+budget is `f × steadycoeff / (2π)`, corresponding to a phase discrepancy of
+`steadycoeff` radians per period. Bin and waveform budgets use the reference
+full scale times the closure coefficient plus 1 µV or 1 pA. The waveform
+budget also includes one eighth of the largest sampled second difference to
+allow for linear interpolation. These are comparison budgets, independent of
+the simulator's internal convergence test. A complete reference accompanied
+by a non-convergence log is reported as KNOWN with measured differences.
+
+A mesh study of the μ = 1 VdP circuit gave 150.074480, 150.075683 and
+150.075984 Hz at 512, 1,024 and 2,048 steps. Doubling the mesh reduced the
+leading frequency error by a factor of four. The dimensionless period
+6.663287 corresponds to 150.076081 Hz. The R22 deck gives 150.075858 Hz at
+the default tolerance, compared with 150.076953 Hz from the 44.2 capture.
+
+```sh
+cargo run --release -p sansho-verify -- --cached -v --out target/verify-pss verify/pss-decks
+cargo run --release -p sansho-verify -- --cached -v verify/pss-ng-decks
+```
+
+The standard ngspice image lacks PSS. The dedicated 44.2 image and instructions
+for filling the reference cache are described in the [PSS oracle guide](../tools/ngspice-pss/README.md).
 
 ## Fourier
 

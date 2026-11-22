@@ -312,13 +312,60 @@ fn compare_analysis(
     tol: &Tolerances,
     out: &mut DeckReport,
 ) {
+    if reference.scale.as_ref().map(|s| &s.name) != ours.scale.as_ref().map(|s| &s.name) {
+        out.problems.push(format!(
+            "{:?}: scale differs: {:?} vs {:?}",
+            reference.kind, reference.scale, ours.scale
+        ));
+        return;
+    }
+    for i in 0..reference.variables.len().max(ours.variables.len()) {
+        let expected = reference
+            .variables
+            .get(i)
+            .map(|v| vector_name(reference.kind, &v.name));
+        let computed = ours
+            .variables
+            .get(i)
+            .map(|v| vector_name(ours.kind, &v.name));
+        if !expected
+            .zip(computed)
+            .is_some_and(|(r, o)| r.eq_ignore_ascii_case(o))
+        {
+            out.problems.push(format!(
+                "{:?}: vector {} expected {}, got {} ({} reference columns, {} computed)",
+                reference.kind,
+                i + usize::from(reference.scale.is_some()),
+                expected.unwrap_or("<end>"),
+                computed.unwrap_or("<end>"),
+                reference.variables.len(),
+                ours.variables.len()
+            ));
+            return;
+        }
+    }
+    if matches!(
+        reference.kind,
+        AnalysisKind::Noise | AnalysisKind::IntegratedNoise
+    ) && let Some((r, o)) = reference
+        .variables
+        .iter()
+        .zip(&ours.variables)
+        .find(|(r, o)| r.quantity != o.quantity)
+    {
+        out.problems.push(format!(
+            "{:?} {}: expected {:?}, got {:?}",
+            reference.kind, r.name, r.quantity, o.quantity
+        ));
+        return;
+    }
     if reference.kind == AnalysisKind::Pz {
         if let Err(error) = compare_roots(reference, ours, tol, out) {
             out.problems.push(error);
         }
         return;
     }
-    if reference.kind == AnalysisKind::Sp
+    if matches!(reference.kind, AnalysisKind::Sp | AnalysisKind::Noise)
         && (reference.scale_values.len() != ours.scale_values.len()
             || reference
                 .scale_values
@@ -326,7 +373,8 @@ fn compare_analysis(
                 .zip(&ours.scale_values)
                 .any(|(&r, &o)| !r.is_finite() || !o.is_finite() || (r - o).abs() > 1e-9 * r.abs()))
     {
-        out.problems.push("Sp: frequency grids differ".into());
+        out.problems
+            .push(format!("{:?}: frequency grids differ", reference.kind));
         return;
     }
     let start = out.vars.len();
@@ -337,33 +385,15 @@ fn compare_analysis(
             (true, _) => tol.rtol_tran,
             _ => tol.rtol,
         };
-        let name = vector_name(reference.kind, &var.name);
-        let Some(oi) = ours
-            .variables
-            .iter()
-            .position(|v| vector_name(ours.kind, &v.name).eq_ignore_ascii_case(name))
-        else {
-            if name.starts_with('@')
-                || matches!(reference.kind, AnalysisKind::Sp | AnalysisKind::Tf)
-                || (reference.kind == AnalysisKind::IntegratedNoise
-                    && ["onoise_total", "inoise_total"]
-                        .iter()
-                        .any(|n| name.eq_ignore_ascii_case(n)))
-            {
-                out.problems
-                    .push(format!("{:?}: missing {name}", reference.kind));
-            }
-            continue;
-        };
         let atol = match var.quantity {
             // The oracle labels Cy as voltage. A voltage floor hides an all-zero matrix.
-            _ if ours.variables[oi].quantity == Quantity::CurrentNoisePower => f64::MIN_POSITIVE,
+            _ if ours.variables[vi].quantity == Quantity::CurrentNoisePower => f64::MIN_POSITIVE,
             Quantity::Current => tol.atol_i,
             _ => tol.atol_v,
         };
         let (diffs, scale): (Vec<f64>, f64) = match (&reference.data, &ours.data) {
             (Data::Real { columns: rc }, Data::Real { columns: oc }) => {
-                let (r, o) = (&rc[vi], &oc[oi]);
+                let (r, o) = (&rc[vi], &oc[vi]);
                 let full = r.iter().fold(0.0f64, |m, v| m.max(v.abs()));
                 let d = if reference.kind == AnalysisKind::Tran {
                     reference
@@ -387,7 +417,7 @@ fn compare_analysis(
                 (d, full)
             }
             (Data::Complex { columns: rc }, Data::Complex { columns: oc }) => {
-                let (r, o) = (&rc[vi], &oc[oi]);
+                let (r, o) = (&rc[vi], &oc[vi]);
                 if r.len() != o.len() {
                     out.problems.push(format!(
                         "{:?} {}: {} reference points vs {} points",
@@ -431,7 +461,7 @@ fn compare_analysis(
             );
         out.vars.push(VarReport {
             analysis: reference.kind,
-            name: name.to_owned(),
+            name: vector_name(reference.kind, &var.name).to_owned(),
             points: diffs.len(),
             max_abs,
             at: reference.scale_values.get(k).copied().unwrap_or(f64::NAN),
@@ -632,6 +662,7 @@ mod tests {
 
     fn tran(times: Vec<f64>, vals: Vec<f64>) -> SimResults {
         SimResults {
+            batch_raw: Default::default(),
             prints: Vec::new(),
             measures: Vec::new(),
             title: String::new(),
@@ -688,8 +719,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_reordered_extra_and_missing_columns_even_with_equal_values() {
+        let raw = "Plotname: Operating Point\nFlags: real\nNo. Variables: 2\nNo. Points: 1\nVariables:\n0 v(a) voltage\n1 v(b) voltage\nValues:\n0 0 0";
+        let reference = sansho_output::read_raw_ascii(raw).unwrap();
+        let mut ours = reference.clone();
+        ours.analyses[0].variables.swap(0, 1);
+        let tol = Tolerances::default();
+        assert!(!compare(&reference, &ours, &tol).pass());
+        ours.analyses[0].variables.remove(0);
+        assert!(!compare(&reference, &ours, &tol).pass());
+        assert!(!compare(&ours, &reference, &tol).pass());
+    }
+
+    #[test]
     fn matches_complex_root_multisets_per_family() {
         let plot = |roots: &[(&str, f64, f64)]| SimResults {
+            batch_raw: Default::default(),
             prints: Vec::new(),
             title: String::new(),
             measures: vec![],

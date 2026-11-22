@@ -115,10 +115,10 @@ fn seed(
     let (i, fraction, time) = crossings.next().ok_or_else(no_oscillation)?;
     let (_, _, previous) = crossings.next().ok_or_else(no_oscillation)?;
     let observed = time - previous;
-    let period = if (p.gfreq * observed - 1.).abs() > 0.1 {
-        observed
-    } else {
+    let period = if (0.9..=1.1).contains(&(p.gfreq * observed)) {
         period
+    } else {
+        observed
     };
     let x = values
         .iter()
@@ -126,7 +126,7 @@ fn seed(
         .collect();
     Ok(Seed {
         x,
-        time,
+        time: time + ((stop - time) / observed).ceil() * observed,
         period,
         phase: Some(level),
     })
@@ -343,7 +343,7 @@ fn shoot(
 
 fn correct(
     seed: &mut Seed,
-    shot: Shot,
+    shot: &Shot,
     probe: usize,
     amplitude: Option<usize>,
 ) -> Result<(), Diagnostic> {
@@ -396,39 +396,57 @@ fn plots(
     ckt: &Circuit,
     shot: Shot,
     points: usize,
-    harms: usize,
-    period: f64,
+    spec: &PssSpec,
+    seed: &Seed,
     probe: usize,
 ) -> (Vec<AnalysisResult>, PrintTable) {
-    let traces = shot.traces;
-    let steps = traces[0].len();
-    let mut spectrum = vec![Vec::with_capacity(harms); traces.len()];
-    for harmonic in 1..=harms {
-        let basis: Vec<_> = (0..steps)
-            .map(|i| (-TAU * harmonic as f64 * i as f64 / steps as f64).sin_cos())
+    let period = seed.period;
+    let autonomous = !spec.driven;
+    let steps = shot.traces[0].len();
+    let samples: Columns = shot
+        .traces
+        .iter()
+        .zip(&shot.end)
+        .map(|(v, &end)| {
+            let mut samples: Vec<_> = (0..points)
+                .map(|k| {
+                    let position = k as u64 * steps as u64;
+                    let index = (position / points as u64) as usize;
+                    let weight = (position % points as u64) as f64 / points as f64;
+                    v[index] + weight * (v.get(index + 1).copied().unwrap_or(end) - v[index])
+                })
+                .collect();
+            if autonomous {
+                samples.push(end);
+            }
+            samples
+        })
+        .collect();
+
+    // The oracle transforms the printed uniform grid, excluding its endpoint.
+    // Driven peak phasors retain the original internal-mesh quadrature.
+    let (signals, count) = if autonomous {
+        (&samples, points)
+    } else {
+        (&shot.traces, steps)
+    };
+    let mut spectrum = vec![Vec::with_capacity(spec.harmonics); signals.len()];
+    let first = usize::from(spec.driven);
+    let harmonics = first..first + spec.harmonics;
+    for harmonic in harmonics.clone() {
+        let basis: Vec<_> = (0..count)
+            .map(|i| (-TAU * harmonic as f64 * i as f64 / count as f64).sin_cos())
             .collect();
-        for (signal, col) in traces.iter().zip(&mut spectrum) {
+        let scale = if harmonic == 0 { 1. } else { 2. };
+        for (signal, col) in signals.iter().zip(&mut spectrum) {
             let (im, re) = signal
                 .iter()
                 .zip(&basis)
                 .fold((0., 0.), |(a, b), (&v, &(s, c))| (a + v * s, b + v * c));
-            col.push((2. * re / steps as f64, 2. * im / steps as f64));
+            col.push((scale * re / count as f64, scale * im / count as f64));
         }
     }
-    let samples = traces
-        .iter()
-        .zip(shot.end)
-        .map(|(v, end)| {
-            (0..points)
-                .map(|k| {
-                    let index = k * steps / points;
-                    let weight = (k * steps % points) as f64 / points as f64;
-                    v[index] + weight * (v.get(index + 1).copied().unwrap_or(end) - v[index])
-                })
-                .collect()
-        })
-        .collect();
-    let frequencies: Vec<_> = (1..=harms).map(|i| i as f64 / period).collect();
+    let frequencies: Vec<_> = harmonics.map(|i| i as f64 / period).collect();
     let name = &ckt.unknowns.names()[probe];
     let report = PrintTable {
         analysis: AnalysisKind::PssFreq,
@@ -446,14 +464,30 @@ fn plots(
                 .collect(),
         ],
     };
+    let frequency_data = if autonomous {
+        Data::Real {
+            columns: spectrum
+                .into_iter()
+                .map(|col| {
+                    col.into_iter()
+                        .enumerate()
+                        .map(|(h, (re, im))| if h == 0 { re } else { re.hypot(im) })
+                        .collect()
+                })
+                .collect(),
+        }
+    } else {
+        Data::Complex { columns: spectrum }
+    };
+    let start = if autonomous { seed.time } else { 0. };
     (
         vec![
             AnalysisResult {
                 kind: AnalysisKind::Pss,
                 events: Default::default(),
                 scale: Some(var("time", Quantity::Time)),
-                scale_values: (0..points)
-                    .map(|i| period * (i as f64 / points as f64))
+                scale_values: (0..points + usize::from(autonomous))
+                    .map(|i| start + period * (i as f64 / points as f64))
                     .collect(),
                 variables: variables(ckt),
                 data: Data::Real { columns: samples },
@@ -464,11 +498,17 @@ fn plots(
                 scale: Some(var("frequency", Quantity::Frequency)),
                 scale_values: frequencies,
                 variables: variables(ckt),
-                data: Data::Complex { columns: spectrum },
+                data: frequency_data,
             },
         ],
         report,
     )
+}
+
+pub(crate) struct Output {
+    pub plots: Vec<AnalysisResult>,
+    pub report: PrintTable,
+    pub warning: Option<Diagnostic>,
 }
 
 pub(crate) fn analyze(
@@ -476,7 +516,7 @@ pub(crate) fn analyze(
     nl: &Netlist,
     opts: &SimOptions,
     p: &PssSpec,
-) -> Result<(Vec<AnalysisResult>, PrintTable), Diagnostic> {
+) -> Result<Output, Diagnostic> {
     if !(p.gfreq.is_finite()
         && p.gfreq > 0.
         && p.tstab.is_finite()
@@ -494,17 +534,31 @@ pub(crate) fn analyze(
     let points = p
         .points
         .max(p.harmonics.saturating_mul(2).saturating_add(1));
+    // For a second-order integrator the leading relative dispersion error is
+    // proportional to (omega*h)^2. Resolve the highest exported oscillator
+    // harmonic to the same angular-step budget as the driven fundamental.
+    let highest = if p.driven {
+        1
+    } else {
+        p.harmonics.saturating_sub(1).max(1)
+    };
+    let fundamental_steps = TAU / opts.reltol.sqrt();
     let steps = MIN_STEPS
         .max(p.harmonics.saturating_mul(8))
-        .max((TAU / opts.reltol.sqrt()).ceil() as usize);
+        .max(fundamental_steps.ceil() as usize);
     // An odd number of midpoint steps avoids a unit multiplier for algebraic
     // perturbations that reverse sign on each step.
     let linear_oscillator = ckt.is_linear() && !p.driven;
+    let mesh_limit = 65536 - usize::from(linear_oscillator);
+    let refined = (fundamental_steps * highest as f64).ceil() as usize;
+    let steps = steps.max(refined.min(mesh_limit));
     let steps = if linear_oscillator { steps | 1 } else { steps };
     if ckt.dim() > 256
         || points > 65536
         || steps > 65536
-        || p.harmonics.saturating_mul(steps) > 16_777_216
+        || p.harmonics
+            .saturating_mul(if p.driven { steps } else { points })
+            > 16_777_216
     {
         return Err(error(
             "PSS exceeds the dense shooting or harmonic grid limit",
@@ -588,6 +642,14 @@ pub(crate) fn analyze(
     }
     let mut residual = f64::INFINITY;
     let mut amplitude = None;
+    let mut best: Option<(f64, usize, Seed, Shot)> = None;
+    // When budget permits, resolve closure down to the second-order mesh
+    // error so that premature Newton termination does not dominate dispersion.
+    let target = if p.driven {
+        p.steadycoeff
+    } else {
+        p.steadycoeff.min((TAU / steps as f64).powi(2))
+    };
     for iteration in 1..=p.iterations {
         let shot = shoot(ckt, &opts, &seed, steps, tp)?;
         let mut sum = 0.;
@@ -601,9 +663,22 @@ pub(crate) fn analyze(
             sum += (shot.end[i] - seed.x[i]).abs() / scale;
         }
         residual = sum / ckt.dim() as f64;
-        if residual <= p.steadycoeff {
-            return Ok(plots(ckt, shot, points, p.harmonics, seed.period, probe));
+        if !residual.is_finite() {
+            return Err(convergence("nonfinite PSS closure residual"));
         }
+        if residual <= target {
+            let (plots, report) = plots(ckt, shot, points, p, &seed, probe);
+            return Ok(Output {
+                plots,
+                report,
+                warning: None,
+            });
+        }
+        let mut next = Seed {
+            x: seed.x.clone(),
+            ..seed
+        };
+
         if iteration < p.iterations {
             if linear_oscillator && amplitude.is_none() {
                 amplitude = shot
@@ -618,8 +693,30 @@ pub(crate) fn analyze(
                     .max_by(|a, b| a.1.total_cmp(&b.1))
                     .map(|(i, _)| i);
             }
-            correct(&mut seed, shot, probe, amplitude)?;
+            correct(&mut next, &shot, probe, amplitude)?;
+            if !p.driven {
+                next.time += seed.period;
+            }
         }
+        if !p.driven && best.as_ref().is_none_or(|(score, ..)| residual < *score) {
+            best = Some((residual, iteration, seed, shot));
+        }
+        seed = next;
+    }
+    if let Some((residual, iteration, mut best_seed, shot)) = best {
+        // The 44.2 tight LC capture keeps shot 21's frequency and starts
+        // the output at shot 25's clock. Autonomous orbits are time invariant.
+        best_seed.time = seed.time;
+        let warning = (residual > p.steadycoeff).then(|| Diagnostic::warning("W-CONV-PSS", format!(
+            "Convergence not reached after {} shots. Returning shot {iteration} at {:.9e} Hz (mean normalized error {residual:e}, threshold {:e})",
+            p.iterations, best_seed.period.recip(), p.steadycoeff
+        )));
+        let (plots, report) = plots(ckt, shot, points, p, &best_seed, probe);
+        return Ok(Output {
+            plots,
+            report,
+            warning,
+        });
     }
     Err(convergence(format!(
         "PSS did not close after {} shots (mean normalized error {residual:e}, threshold {:e})",
@@ -706,10 +803,51 @@ mod tests {
         let nl = parse("lossless LC\nL1 x 0 1m\nC1 x 0 1u ic=3\n.pss 5.2k 1m x 128 3 10 1e-9 uic")
             .unwrap();
         let r = run(&nl).unwrap().results;
-        let f = r.analyses[1].scale_values[0];
-        let (re, im) = r.analyses[1].complex("v(x)").unwrap()[0];
+        let f = r.analyses[1].scale_values[1];
+        let peak = r.analyses[1].real("v(x)").unwrap()[1];
         assert!((f * TAU * 1e-9f64.sqrt() - 1.).abs() < 2e-5);
-        assert!((re.hypot(im) - 3.).abs() < 0.01);
+        assert!((peak - 3.).abs() < 0.01);
+    }
+
+    #[test]
+    fn unfinished_autonomous_shot_keeps_its_time_grid_and_signed_dc() {
+        let nl = parse("tank\nVbias bias 0 -2\nL1 x 0 1m\nC1 x 0 1u ic=3\n.pss 5.3k 1m l1#branch 15 4 1 1e-14 uic").unwrap();
+        let output = run(&nl).unwrap();
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|w| w.code == "W-CONV-PSS" && w.span.is_some())
+        );
+        let time = &output.results.analyses[0];
+        let freq = &output.results.analyses[1];
+        assert_eq!(time.len(), 16);
+        assert!(time.scale_values[0] >= 1e-3);
+        assert_eq!(freq.scale_values, [0., 5300., 10600., 15900.]);
+        assert!((freq.real("v(bias)").unwrap()[0] + 2.).abs() < 1e-12);
+        let branch = freq.real("i(l1)").unwrap();
+        assert!(branch[1] > 0.01);
+        assert_eq!(
+            freq.variables.iter().filter(|v| v.name == "i(l1)").count(),
+            2
+        );
+        let trace = time.real("i(l1)").unwrap();
+        let expected = trace[..15].iter().sum::<f64>() / 15.;
+        assert!((branch[0] - expected).abs() < 1e-12);
+        let mut raw = Vec::new();
+        sansho_output::write_raw_ascii(&output.results, &mut raw).unwrap();
+        let raw = String::from_utf8(raw).unwrap();
+        assert!(raw.contains("Plotname: Time Domain Periodic Steady State Analysis\nFlags: real"));
+        assert!(
+            raw.contains("Plotname: Frequency Domain Periodic Steady State Analysis\nFlags: real")
+        );
+
+        // 5.3 kHz was inside the ten-percent band, so the first shot kept
+        // the guess. An out-of-band guess uses the measured startup period.
+        let nl = parse("tank\nL1 x 0 1m\nC1 x 0 1u ic=3\n.pss 4k 1m x 15 4 1 1e-14 uic").unwrap();
+        let output = run(&nl).unwrap();
+        let f = output.results.analyses[1].scale_values[1];
+        assert!((f * TAU * 1e-9_f64.sqrt() - 1.).abs() < 0.01);
     }
 
     #[test]

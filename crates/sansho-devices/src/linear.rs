@@ -68,6 +68,9 @@ impl DeviceGroup for Resistors {
         emit(self.n[i], -g, 0.);
         Some((0., 0.))
     }
+    fn noise_components(&self) -> &'static [&'static str] {
+        &["thermal", "1overf"]
+    }
     fn noise(
         &self,
         _: &crate::EvalCtx,
@@ -76,13 +79,15 @@ impl DeviceGroup for Resistors {
         out: &mut Vec<crate::NoiseSource>,
     ) -> Result<(), Diagnostic> {
         for i in 0..self.len() {
-            out.push(crate::NoiseSource::branch(
+            let mut source = crate::NoiseSource::branch(
                 &self.names[i],
                 self.p[i],
                 self.n[i],
                 4. * crate::BOLTZMANN * self.noise_temp[i] * self.g[i].abs(),
                 0.,
-            ));
+            );
+            source.component = Some("thermal");
+            out.push(source);
         }
         Ok(())
     }

@@ -20,12 +20,10 @@ pub(super) fn check(case: &str, results: &SimResults) -> Result<DeckReport, Prob
     let v = time
         .real("v(out)")
         .ok_or_else(|| Problem::Failed("missing time-domain v(out)".into()))?;
-    let z = freq
-        .complex("v(out)")
-        .ok_or_else(|| Problem::Failed("missing harmonic v(out)".into()))?;
+    let autonomous = matches!(case, "lc" | "ring" | "vdp");
     let malformed = || Problem::Failed("invalid PSS grid, dimensions or nonfinite results".into());
-    let &(re, im) = z.first().ok_or_else(malformed)?;
-    let &f = freq.scale_values.first().ok_or_else(malformed)?;
+    let bin = usize::from(autonomous);
+    let &f = freq.scale_values.get(bin).ok_or_else(malformed)?;
     let (points, harmonics) = match case {
         "rc" | "rlc" => (128, 5),
         "rectifier" => (256, 12),
@@ -37,22 +35,34 @@ pub(super) fn check(case: &str, results: &SimResults) -> Result<DeckReport, Prob
             )));
         }
     };
-    if t.len() != points
-        || v.len() != points
-        || z.len() != harmonics
+    if t.len() != points + usize::from(autonomous)
+        || v.len() != t.len()
+        || (if autonomous { t[0] <= 0. } else { t[0] != 0. })
         || freq.len() != harmonics
         || !f.is_finite()
         || f <= 0.
-        || t.iter()
-            .enumerate()
-            .any(|(k, t)| !t.is_finite() || (t * f - k as f64 / points as f64).abs() > 1e-12)
+        || t.iter().enumerate().any(|(k, t)| {
+            !t.is_finite()
+                || ((*t - time.scale_values[0]) * f - k as f64 / points as f64).abs() > 1e-12
+        })
         || freq
             .scale_values
             .iter()
             .enumerate()
-            .any(|(k, s)| !s.is_finite() || (s / f - (k + 1) as f64).abs() > 1e-12)
+            .any(|(k, s)| !s.is_finite() || (s / f - (k + 1 - bin) as f64).abs() > 1e-12)
         || v.iter().any(|s| !s.is_finite())
-        || z.iter().any(|(r, i)| !r.is_finite() || !i.is_finite())
+        || (autonomous
+            && freq
+                .real("v(out)")
+                .is_none_or(|z| z.len() != harmonics || z.iter().any(|v| !v.is_finite())))
+    {
+        return Err(malformed());
+    }
+    let phasors = freq.complex("v(out)");
+    if !autonomous
+        && phasors.is_none_or(|z| {
+            z.len() != harmonics || z.iter().any(|(r, i)| !r.is_finite() || !i.is_finite())
+        })
     {
         return Err(malformed());
     }
@@ -72,6 +82,8 @@ pub(super) fn check(case: &str, results: &SimResults) -> Result<DeckReport, Prob
     };
     match case {
         "rc" | "rlc" => {
+            let z = phasors.ok_or_else(malformed)?;
+            let (re, im) = z[0];
             // Vout = -j / (a + jb), using a cosine reference for the sine source.
             let w = TAU * 1000.;
             let (a, b) = if case == "rc" {
@@ -103,7 +115,11 @@ pub(super) fn check(case: &str, results: &SimResults) -> Result<DeckReport, Prob
                 1e-9,
             );
         }
-        "vdp" => metric("limit-cycle amplitude (V)", amplitude(v), 2., 0.02),
+        "vdp" => {
+            metric("limit-cycle amplitude (V)", amplitude(v), 2., 0.02);
+            // Dimensionless period at mu=1, with one millisecond per time unit.
+            metric("frequency (Hz)", f, 1000. / 6.663287, 0.0005);
+        }
         _ => {
             let tran = plot(AnalysisKind::Tran)?;
             let times = &tran.scale_values;

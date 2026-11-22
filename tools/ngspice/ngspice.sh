@@ -8,7 +8,7 @@ if [[ "${1:-}" != --compile-va ]] && ! docker image inspect "$image" >/dev/null 
   if [[ "$image" != sansho-ngspice:latest ]]; then
     # Never auto-build a non-default oracle (e.g. sansho-ngspice-pss): its recipe
     # fetches source and must be built by a person via its own build.sh.
-    echo "ngspice.sh: image $image not found; build it first (see tools/ngspice-pss/README.md)" >&2
+    echo "ngspice.sh: cannot access local image $image (check Docker access and image availability)" >&2
     exit 2
   fi
   docker build -q -t "$image" "$root/tools/ngspice" >/dev/null
@@ -33,6 +33,34 @@ if [[ -n "${SANSHO_PROBE_DOCKER_MARKER:-}" ]]; then
   name="sansho-probe-${name##*/}"
   printf '%s\n' "$name" > "$SANSHO_PROBE_DOCKER_MARKER"
   args+=(--name "$name")
+fi
+if [[ "$image" == sansho-ngspice-pss:latest ]]; then
+  if [[ $# != 4 || $1 != -b || $3 != -r ]]; then
+    echo "PSS oracle requires -b deck.cir -r out.raw" >&2
+    exit 2
+  fi
+  if [[ -z "${SANSHO_PROBE_DOCKER_MARKER:-}" ]]; then
+    name="sansho-pss-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+    args+=(--name "$name")
+  fi
+  # The client and the container have separate lifetimes. Bound the client
+  # and forcibly remove the named container on timeout or interruption.
+  # This independent watchdog still acts if the wrapper or its client dies.
+  python3 -c 'import os, sys, time
+time.sleep(230)
+os.execlp("docker", "docker", "rm", "-f", sys.argv[1])' "$name" </dev/null >/dev/null 2>&1 &
+  watchdog=$!
+  cleanup_pss() {
+    docker rm -f "$name" >/dev/null 2>&1 || :
+    kill "$watchdog" 2>/dev/null || :
+    wait "$watchdog" 2>/dev/null || :
+  }
+  trap cleanup_pss EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  timeout -k 2s 235s docker run --pull=never "${args[@]}" "$image" "$@"
+  exit $?
 fi
 if [[ "${1:-}" == --compile-va ]]; then
   shift

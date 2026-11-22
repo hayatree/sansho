@@ -427,12 +427,12 @@ impl DeviceGroup for Bsim4s {
     }
     fn alloc_unknowns(&mut self, u: &mut Unknowns) {
         for d in &mut self.instances {
-            let mut node = |n: &str| Some(u.alloc_internal_node(&d.name, n));
             for (side, name) in ["drain", "source"].into_iter().enumerate() {
                 if d.model.network.external || d.model.network.diffusion[side] > 0. {
-                    d.inner[2 * side] = node(name);
+                    d.inner[2 * side] = Some(u.alloc_private_node(&d.name, name));
                 }
             }
+            let mut node = |n: &str| Some(u.alloc_internal_node(&d.name, n));
             if d.model.network.gate_mode != 0 {
                 d.inner[1] = node("gate");
             }

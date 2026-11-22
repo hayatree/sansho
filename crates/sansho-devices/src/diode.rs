@@ -294,6 +294,9 @@ impl DeviceGroup for Diodes {
             edges.push((self.ai[i], self.k[i], *v));
         }
     }
+    fn noise_components(&self) -> &'static [&'static str] {
+        &["rs", "id", "1overf"]
+    }
     fn noise(
         &self,
         ctx: &EvalCtx,
@@ -306,17 +309,19 @@ impl DeviceGroup for Diodes {
             let temp = m.temperature.unwrap_or(ctx.temp);
             let thermal = 4. * crate::BOLTZMANN * temp;
             let mut at = self.at[i];
-            let mut emit = |p, n, power, exp| {
-                out.push(crate::NoiseSource::branch(&self.names[i], p, n, power, exp))
+            let mut emit = |label, p, n, power, exp| {
+                let mut source = crate::NoiseSource::branch(&self.names[i], p, n, power, exp);
+                source.component = Some(label);
+                out.push(source);
             };
             let (p, n) = (self.ai[i], self.k[i]);
             if m.rs > 0. {
-                emit(self.a[i], p, thermal * self.area[i] / m.rs, 0.);
+                emit("rs", self.a[i], p, thermal * self.area[i] / m.rs, 0.);
                 at.f += 2;
             }
             let id = (slots.f[at.f] - ctx.gmin * (volt(x, p) - volt(x, n))).abs();
-            emit(p, n, 2. * crate::CHARGE * id, 0.);
-            emit(p, n, m.kf * id.powf(m.af), 1.);
+            emit("id", p, n, 2. * crate::CHARGE * id, 0.);
+            emit("1overf", p, n, m.kf * id.powf(m.af), 1.);
         }
         Ok(())
     }
@@ -338,7 +343,7 @@ impl DeviceGroup for Diodes {
     fn alloc_unknowns(&mut self, u: &mut Unknowns) {
         for i in 0..self.len() {
             if self.model[i].rs > 0.0 {
-                self.ai[i] = Some(u.alloc_internal_node(&self.names[i], "a"));
+                self.ai[i] = Some(u.alloc_private_node(&self.names[i], "a"));
             }
         }
     }

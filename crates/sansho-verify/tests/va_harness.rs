@@ -43,16 +43,19 @@ if [[ "$#" == 4 ]]; then
 Title: bias
 Plotname: DC transfer characteristic
 Flags: real
-No. Variables: 2
+No. Variables: 3
 No. Points: 2
 Variables:
-0 v-sweep voltage
+0 v(v-sweep) voltage
 1 v(p) voltage
+2 i(v1) current
 Values:
 0 0
   0
+  0
 1 1
   1
+  -1
 RAW
 else
     printf 'peak = 1\n'

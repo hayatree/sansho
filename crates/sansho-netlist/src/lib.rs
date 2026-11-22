@@ -23,7 +23,10 @@ mod xspice;
 pub use statistics::Sample;
 pub use xspice::{CodePort, SourceTable, analog_model, digital_code, digital_model};
 
-pub use expr::{Expr, eval as eval_expr, eval_const, parse_behavior, parse_expr};
+pub use expr::{
+    Expr, current_probe_branches, eval as eval_expr, eval_const, parse_behavior, parse_expr,
+    voltage_probe_nodes,
+};
 pub use lexer::{Lexed, Line, Token, lex, lex_source};
 pub use meas::parse_control_meas;
 pub use number::parse_number;

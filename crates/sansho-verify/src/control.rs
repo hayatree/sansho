@@ -362,6 +362,7 @@ mod tests {
             },
         };
         let mut r = SimResults {
+            batch_raw: Default::default(),
             title: "raw records".into(),
             analyses: vec![a.clone()],
             prints: vec![],

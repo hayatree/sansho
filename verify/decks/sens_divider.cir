@@ -1,5 +1,6 @@
 DC divider derivatives
 * Provenance: original R2 verification circuit.
+* sansho-verify: missing-sens v(rb:rsh) v(rb:narrow) v(rb:short) v(rb:tc1) v(rb:tc2) v(rb:tce) v(rb:kf) v(rb:af) v(rb:r) v(rb:bv_max) v(rb:lf) v(rb:wf) v(rb:ef) v(rb_l) v(rb_w) v(rb_tce) v(rb_bv_max) v(ra:rsh) v(ra:narrow) v(ra:short) v(ra:tc1) v(ra:tc2) v(ra:tce) v(ra:kf) v(ra:af) v(ra:r) v(ra:bv_max) v(ra:lf) v(ra:wf) v(ra:ef) v(ra_l) v(ra_w) v(ra_tce) v(ra_bv_max) v(vsig_z0) v(vsig_pwr) v(vsig_freq) v(vsig_phase)
 Vsig in 0 2
 Ra in out 3k
 Rb out 0 1k

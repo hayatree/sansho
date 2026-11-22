@@ -18,6 +18,7 @@ mod control_analytic;
 #[cfg(test)]
 mod digital_analytic;
 mod pss_analytic;
+mod pss_ng;
 mod reference;
 
 use reference::Problem;
@@ -102,6 +103,64 @@ fn known_rejection(text: &str, log: &str) -> Option<Problem> {
         .then(|| Problem::KnownRejection(format!("{reason} [reference diagnostic: {expected}]")))
 }
 
+/// Match the exact ordered inventory of absent sensitivity columns on an annotated deck.
+fn sensitivity_gap(
+    reference: &mut sansho_output::SimResults,
+    ours: &sansho_output::SimResults,
+    expected: &str,
+) -> Result<String, Problem> {
+    use sansho_output::AnalysisKind::Sens;
+    let ([r], [o]) = (reference.analyses.as_mut_slice(), ours.analyses.as_slice()) else {
+        return Err(Problem::Failed(
+            "missing-sens requires one sensitivity plot".into(),
+        ));
+    };
+    if r.kind != Sens || o.kind != Sens {
+        return Err(Problem::Failed(
+            "missing-sens requires sensitivity plots".into(),
+        ));
+    }
+    let absent: Vec<_> = r
+        .variables
+        .iter()
+        .filter(|v| o.index_of(&v.name).is_none())
+        .collect();
+    let raw_names: Vec<_> = absent
+        .iter()
+        .map(|v| {
+            let prefix = if v.quantity == sansho_output::Quantity::Current {
+                "i"
+            } else {
+                "v"
+            };
+            format!("{prefix}({})", v.name)
+        })
+        .collect();
+    if !raw_names
+        .iter()
+        .map(String::as_str)
+        .eq(expected.split_whitespace())
+    {
+        return Err(Problem::Failed(format!(
+            "sensitivity coverage changed: expected missing {expected}, found {}",
+            raw_names.join(" ")
+        )));
+    }
+    for v in absent {
+        let name = &v.name;
+        let zero = r.real(name).is_some_and(|col| col.iter().all(|x| *x == 0.))
+            || r.complex(name)
+                .is_some_and(|col| col.iter().all(|x| *x == (0., 0.)));
+        if !zero {
+            return Err(Problem::Failed(format!(
+                "missing sensitivity {name} has nonzero reference values"
+            )));
+        }
+    }
+    r.retain_variables(|v| o.index_of(&v.name).is_some());
+    Ok(format!("Missing sensitivity vectors: {expected}"))
+}
+
 fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), Problem> {
     let deck = deck.canonicalize()?;
     let text = std::fs::read_to_string(&deck)?;
@@ -123,7 +182,14 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), 
         .map_or_else(|| "deck".into(), |s| s.to_string_lossy().into_owned());
     let ref_raw = cli.out.join(format!("{stem}.ref.raw"));
     let ours = match sansho_engine::run(&nl) {
-        Ok(o) => o.results,
+        Ok(o) => {
+            if directive(&text, "sansho-verify: pss-ng").is_some()
+                && let Some(warning) = o.warnings.iter().find(|w| w.code == "W-CONV-PSS")
+            {
+                return Err(Problem::Failed(warning.to_string()));
+            }
+            o.results.into_raw_output()
+        }
         Err(e) => {
             return Err(Problem::Failed(format!(
                 "simulation failed: {}",
@@ -148,6 +214,14 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), 
         && matches!(ref_raw.try_exists(), Ok(false))
     {
         return Err(Problem::Missing(ref_raw.display().to_string()));
+    }
+    if let Some(signal) = directive(&text, "sansho-verify: pss-ng") {
+        let [sansho_netlist::AnalysisCard::Pss { spec, .. }] = nl.analyses.as_slice() else {
+            return Err(Problem::Failed(
+                "PSS oracle decks require a single .pss analysis".into(),
+            ));
+        };
+        return pss_ng::verify(cli, &deck, &stem, &ours, spec, signal);
     }
     let error_log = cli.out.join(format!("{stem}.ref.error"));
     if cli.cached
@@ -191,11 +265,11 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), 
     };
     // Batch raw files contain the transient used by ngspice's Fourier report.
     // Compare amplitudes and distortion derived from that independent trajectory.
-    if !reference
+    let derive_fourier = !reference
         .analyses
         .iter()
-        .any(|a| a.kind == sansho_output::AnalysisKind::Four)
-    {
+        .any(|a| a.kind == sansho_output::AnalysisKind::Four);
+    if derive_fourier {
         for card in &nl.analyses {
             if let sansho_netlist::AnalysisCard::Four {
                 frequency, outputs, ..
@@ -205,27 +279,32 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), 
                     .iter()
                     .find(|a| a.kind == sansho_output::AnalysisKind::Tran)
             {
-                let mut harmonics = sansho_engine::fourier(tran, *frequency, outputs)
+                let harmonics = sansho_engine::fourier(tran, *frequency, outputs)
                     .map_err(|d| Problem::Failed(d.to_string()))?;
-                // Phase at a symmetry-forbidden harmonic is indeterminate.
-                if let sansho_output::Data::Real { columns } = &mut harmonics.data {
-                    let mut index = 0;
-                    columns.retain(|_| {
-                        let keep =
-                            harmonics.variables[index].quantity != sansho_output::Quantity::Phase;
-                        index += 1;
-                        keep
-                    });
-                    harmonics
-                        .variables
-                        .retain(|v| v.quantity != sansho_output::Quantity::Phase);
-                }
                 reference.analyses.push(harmonics);
             }
         }
     }
     let tol = Tolerances::from_deck(&text);
+    let gap = directive(&text, "sansho-verify: missing-sens")
+        .map(|list| sensitivity_gap(&mut reference, &ours, list))
+        .transpose()?;
     let mut report = compare(&reference, &ours, &tol);
+    if reference
+        .analyses
+        .iter()
+        .map(|a| a.kind)
+        .ne(ours.analyses.iter().map(|a| a.kind))
+    {
+        report.problems.push("batch plot order differs".into());
+    }
+    if derive_fourier {
+        // The complete derived header was compared. Phase at a
+        // symmetry-forbidden harmonic has no independent numerical reference.
+        report.vars.retain(|v| {
+            v.analysis != sansho_output::AnalysisKind::Four || !v.name.starts_with("phase(")
+        });
+    }
     if !ours.measures.is_empty() {
         let r = reference_measures(&prepared, &stem, &nl, cli)?;
         compare_measures(&r, &ours, &tol, &mut report);
@@ -236,6 +315,28 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), 
     } else {
         known_difference(&text).map(str::to_owned)
     };
+    if let Some(gap) = gap {
+        let known_value = directive(&text, "sansho-verify: known-sens-value");
+        if let Some(v) = report
+            .vars
+            .iter()
+            .find(|v| !v.pass() && Some(v.name.as_str()) != known_value)
+        {
+            report
+                .problems
+                .push(format!("unexpected sensitivity error in {}", v.name));
+        }
+        if report.measures.iter().any(|m| m.score > 1.) {
+            report
+                .problems
+                .push("unexpected measurement difference".into());
+        }
+        return Ok((
+            report,
+            Some(reason.map_or_else(|| gap.clone(), |r| format!("{r}. {gap}"))),
+            false,
+        ));
+    }
     Ok((report, reason, false))
 }
 
@@ -464,5 +565,29 @@ fn main() -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sansho_output::read_raw_ascii;
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn missing_sensitivity_annotation_only_accepts_the_listed_zeros() {
+        let raw = "Title: sensitivity\nPlotname: Sensitivity Analysis\nFlags: real\nNo. Variables: 3\nNo. Points: 1\nVariables:\n0 v(r:short) voltage\n1 v(r) voltage\n2 v(vin) voltage\nValues:\n0 0\n1\n2\n";
+        let reference = read_raw_ascii(raw).unwrap();
+        let mut ours = reference.clone();
+        ours.analyses[0].retain_variables(|v| v.name != "r:short");
+        let mut shared = reference.clone();
+        assert!(sensitivity_gap(&mut shared, &ours, "v(r:short)").is_ok());
+        assert!(compare(&shared, &ours, &Tolerances::default()).pass());
+        let mut nonzero = read_raw_ascii(&raw.replace("0 0\n1", "0 0.01\n1")).unwrap();
+        assert!(sensitivity_gap(&mut nonzero, &ours, "v(r:short)").is_err());
+        ours.analyses[0].variables.swap(0, 1);
+        assert!(!compare(&shared, &ours, &Tolerances::default()).pass());
+        ours.analyses[0].retain_variables(|v| v.name != "r");
+        assert!(sensitivity_gap(&mut reference.clone(), &ours, "v(r:short)").is_err());
     }
 }

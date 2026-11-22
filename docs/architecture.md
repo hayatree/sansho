@@ -576,17 +576,24 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
   - A behavioural voltage source adds a branch equation. A behavioural current
     source injects equal and opposite terminal currents. The expression parser
     expands parameters and `.func` in the instance scope and resolves `v(a,b)`
-    and `i(Vsense)` after flattening. Directional dual numbers differentiate
+    and `i(Vsense)` after flattening. Node numbering visits each element's
+    terminals first, then voltage probes in the expanded expression from left
+    to right. A differential probe registers its negative node first. A probe
+    can introduce a node with no device terminal. In the R22b operating point
+    with `.options rshunt=1e9`, that node measured 0 V. A voltage probe in a
+    `.param` declaration produces E-PARSE-EXPR even when the parameter is unused. Directional dual numbers differentiate
     against each distinct input for Newton and AC. `time` is in seconds and
     `temper` in °C. Comparisons and `u(x)` have zero small-signal gain.
     A conditional differentiates its selected arm. The Sansho expression dialect
     uses natural `ln` and `log`, decimal `log10`, and signed-magnitude `pwr`.
-    `E/G value={expr}` share these stamps. `E/G table={expr} (x,y)...`
-    and expression lookups `pwl(x,x0,y0,...)` interpolate linearly between
-    increasing constant coordinates and hold the end values outside the table.
-    The right-hand slope applies at interior knots. ngspice 44 smooths `E table`
-    breakpoints (observed as a black box; see `verify/decks/behavior_table_corners.cir`),
-    so values near interior knots differ by design.
+    An `E/G value={expr}` card expands at its original position into a
+    unity-gain controlled source followed by a B voltage source. The latter
+    drives `<name>_int1` relative to ground and exports `i(b<name>)`. An E/G TABLE uses another node for the
+    evaluated expression and an A PWL driver for the lookup voltage. Flat outer
+    segments clamp the transfer. End and interior knots have a quadratic blend
+    spanning one tenth of the shorter adjacent interval on either side.
+    Expression lookups `pwl(x,x0,y0,...)` interpolate linearly and use the
+    right-hand slope at an interior knot.
   - S and W devices use the model threshold plus or minus the magnitude of
     the hysteresis parameter. Between thresholds they retain the accepted
     state. An optional `on` or `off` sets the initial state there (default off).
@@ -617,8 +624,9 @@ See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and
     are in SI units. BSIM4 also scales the instance distances `sa`, `sb`,
     `sd` and `xgw`. Finger count and multiplicity are dimensionless.
 - `.save v(node) i(vsrc)` selects exported raw and API vectors across analysis cards. Multiple
-  cards accumulate selections. The independent scale and circuit ordering are preserved, and
-  `.save all` exports all vectors. Both deck measurements and later session measurements have
+  cards accumulate ordinary selections in first-request order after the independent scale,
+  then device-parameter requests in first-request order. Batch raw files omit solver-private
+  states and access nodes by default. Both deck measurements and later session measurements have
   access to the complete traces. Raw files use the ngspice format readable by Xschem.
 - Lossless T lines allocate an entering branch current per differential port.
   Each port equates its incident wave to the opposite outgoing wave after TD.

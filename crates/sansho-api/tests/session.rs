@@ -264,7 +264,7 @@ fn save_projects_results_and_preserves_measurement_inputs() {
             .iter()
             .map(|v| v.name.as_str())
             .collect::<Vec<_>>(),
-        ["v(in)", "i(v1)"]
+        ["i(v1)", "v(in)"]
     );
     assert!(
         s.waveform(&job.job_id, "v(out)", None, Reduce::Real, None, None, 20)
@@ -300,7 +300,7 @@ fn dialect_lint_and_failure_explanations() {
     for (card, code) in [
         ("K1 L1 L2 1.5", "E-COUPLING-K"),
         ("K1 L1 V1 0.5", "E-COUPLING-L"),
-        ("B1 b 0 V={v(missing)}", "E-BSOURCE-EXPR"),
+        ("B1 b 0 V={v(a,b,c)}", "E-BSOURCE-EXPR"),
         ("B1 b 0 V={i(no_branch)}", "E-BSOURCE-EXPR"),
         ("S1 a 0 b 0 absent", "E-SWITCH-MODEL"),
         ("W1 a 0 v99 m\n.model m csw", "E-SWITCH-MODEL"),

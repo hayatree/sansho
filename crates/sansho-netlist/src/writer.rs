@@ -630,7 +630,12 @@ pub fn write(nl: &Netlist) -> String {
                     ElementKind::Resistor { mult, .. } => *mult,
                     _ => 1.,
                 };
-                let _ = write!(l, "{name} {p} {n} {}", num(*value * mult));
+                let written = if matches!(e.kind, ElementKind::Capacitor { .. }) {
+                    value / ps.iter().find(|(k, _)| k == "m").map_or(1., |p| p.1)
+                } else {
+                    value * mult
+                };
+                let _ = write!(l, "{name} {p} {n} {}", num(written));
                 if let Some(model) = model {
                     let _ = write!(l, " {model}");
                 }

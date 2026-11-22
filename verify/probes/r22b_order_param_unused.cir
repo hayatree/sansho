@@ -1,0 +1,10 @@
+Unused parameter body containing a voltage probe
+* Provenance: original Sansho node-order probe for R22b.
+* Assume a lazy parameter definition introduces no node. If accepted,
+* expect first, middle, late. Record any parameter-evaluation diagnostic.
+.param unused={v(late)}
+Rf first 0 1k
+Rm middle 0 1k
+Rl late 0 1k
+.op
+.end

@@ -1,0 +1,10 @@
+AC, operating point, DC and transient batch plot precedence
+* Provenance: original R22d plot order permutation for black-box comparison.
+Vbias in 0 dc 0.3 ac 0.7
+R1 in out 2k
+R2 out 0 3k
+.tran 1u 3u
+.ac lin 2 1k 2k
+.dc Vbias 0 1 0.5
+.op
+.end

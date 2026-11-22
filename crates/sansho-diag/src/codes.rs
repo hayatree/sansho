@@ -574,10 +574,16 @@ pub const CODES: &[CodeInfo] = &[
     e(
         "E-CONV-PSS",
         "Periodic shooting did not converge",
-        "A transient stage or the periodic sensitivity system failed, or the mean normalized endpoint error exceeded steadycoeff at the shooting iteration limit.",
+        "A transient stage or the periodic sensitivity system failed, or driven shooting exhausted its iteration budget.",
         &[
             "Check the frequency guess and initial conditions. Allow more stabilization time or shooting iterations. Tighten reltol to refine the shooting grid for sharp transitions.",
         ],
+    ),
+    w(
+        "W-CONV-PSS",
+        "Autonomous shooting exhausted its iteration budget",
+        "The output comes from the completed shot with the smallest mean normalized endpoint mismatch.",
+        &["Increase sciter or extend stabilization and check the reported residual and frequency."],
     ),
     e(
         "E-PSS-NOOSC",

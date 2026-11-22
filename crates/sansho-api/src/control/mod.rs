@@ -205,6 +205,7 @@ pub fn execute(deck: &Netlist, options: &ControlOptions) -> ControlOutput {
         }
     }
     let results = SimResults {
+        batch_raw: Default::default(),
         title: deck.title.clone(),
         analyses,
         measures: state.transcript.measurements.clone(),
@@ -822,6 +823,7 @@ impl State<'_> {
                     }
                 }
                 let r = SimResults {
+                    batch_raw: Default::default(),
                     title: self.deck.title.clone(),
                     analyses: vec![a],
                     measures: self.transcript.measurements.clone(),

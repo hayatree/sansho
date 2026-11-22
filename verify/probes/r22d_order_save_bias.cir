@@ -1,0 +1,11 @@
+AC resistor observables and branch currents at distinct biases
+* Provenance: original R22d black-box test of mixed device saves.
+Vfirst alpha 0 dc 1 ac 2 90
+Rfirst alpha 0 1k
+Vlast beta 0 dc 3 ac 4
+Rlast beta 0 2k
+.save @rlast[i] i(vlast) @rfirst[i] v(alpha)
+.save @rfirst[i] i(vfirst) v(beta)
+.ac lin 3 100 300
+.op
+.end

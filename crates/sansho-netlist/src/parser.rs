@@ -885,6 +885,7 @@ impl Parser {
                     mult = v;
                 } else if (matches!(k.as_str(), "noisy" | "ac") && letter == "R")
                     || (k == "ic" && letter != "R")
+                    || (k == "scale" && matches!(letter, "C" | "R"))
                     || matches!(k.as_str(), "tc1" | "tc2" | "temp" | "dtemp")
                 {
                     params.push((k, v));
@@ -964,6 +965,9 @@ impl Parser {
             }
         }
         let value = if letter == "C" {
+            if mult != 1. {
+                params.push(("m".into(), mult));
+            }
             value * mult
         } else {
             value / mult

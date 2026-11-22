@@ -478,7 +478,7 @@ impl DeviceGroup for Bjts {
             let m = &self.model[i];
             for (k, r) in [m.rc, m.rb, m.re].into_iter().enumerate() {
                 if r > 0.0 {
-                    self.int[i][k] = Some(u.alloc_internal_node(&self.names[i], SUFFIX[k]));
+                    self.int[i][k] = Some(u.alloc_private_node(&self.names[i], SUFFIX[k]));
                 }
             }
             self.collector_contact[i] = self.int[i][0];

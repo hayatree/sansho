@@ -1,0 +1,11 @@
+Repeated mixed node and current saves on two cards
+* Provenance: original R22c circuit for black-box explicit column ordering.
+Vfirst alpha 0 dc 1 ac 2
+Rfirst alpha 0 1k
+Vlast beta 0 dc 3 ac 4
+Rlast beta 0 2k
+.save i(Vfirst) v(beta) @rfirst[i]
+.save v(alpha) i(Vfirst) i(Vlast)
+.op
+.ac lin 1 1k 1k
+.end

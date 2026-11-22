@@ -1,0 +1,12 @@
+Differential probes with opposing lexical and alphabetic orders
+* Provenance: original R22c circuit for black-box vector ordering.
+* Hypothesis: out lo_z hi_a aa zz tail, with the second argument of each pair first.
+Btest out 0 V={v(hi_a,lo_z)+v(zz,aa)+v(tail)+v(aa,hi_a)}
+Rout out 0 1k
+V1 hi_a 0 1
+V2 lo_z 0 2
+V3 zz 0 4
+V4 aa 0 8
+V5 tail 0 16
+.op
+.end

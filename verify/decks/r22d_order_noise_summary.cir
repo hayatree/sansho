@@ -1,0 +1,9 @@
+Device noise summary fields at alternate frequency points
+* Provenance: original R22d black-box test of a positive summary interval.
+* verify: rtol=1e-5 atol_v=1e-20 atol_i=1e-21
+Vsig in 0 dc 0.6 ac 1
+Rfeed in out 1k
+Ddet out 0 dj
+.model dj d(is=1e-14 rs=2 kf=1e-15 af=1)
+.noise v(out) Vsig lin 5 100 500 2
+.end

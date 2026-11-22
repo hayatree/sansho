@@ -340,6 +340,7 @@ impl State<'_> {
             }
             "write" => {
                 let r = SimResults {
+                    batch_raw: Default::default(),
                     title: self.deck.title.clone(),
                     analyses: vec![p.result(&selected)?],
                     prints: vec![],

@@ -481,6 +481,57 @@ fn num_text(v: f64) -> String {
     format!("{v:e}")
 }
 
+/// Lower an E/G TABLE to a PWL curve with flat outer segments. The black-box
+/// corner sweep gives a rounding width of one tenth of the shorter adjacent segment.
+fn table_model(name: &str, coordinates: &[Token], span: Span) -> Option<Vec<Token>> {
+    let (pairs, tail) = coordinates.as_chunks::<2>();
+    let mut x = Vec::with_capacity(pairs.len() + 2);
+    let mut y = Vec::with_capacity(pairs.len() + 2);
+    for [input, output] in pairs {
+        x.push(crate::parse_number(&input.text)?);
+        y.push(crate::parse_number(&output.text)?);
+    }
+    if !tail.is_empty() || x.is_empty() || x.windows(2).any(|w| w[0] >= w[1]) {
+        return None;
+    }
+    if x.len() == 1 {
+        x = vec![0., 1.];
+        y.push(y[0]);
+    } else {
+        let end = x.len() - 1;
+        x.push(x[end] + (x[end] - x[end - 1]));
+        x.insert(0, x[0] - (x[1] - x[0]));
+        y.push(y[end]);
+        y.insert(0, y[0]);
+    }
+    if !x.iter().chain(&y).all(|v| v.is_finite()) {
+        return None;
+    }
+    let mut words = vec![
+        ".model".into(),
+        name.into(),
+        "pwl".into(),
+        "input_domain".into(),
+        "=".into(),
+        "0.1".into(),
+    ];
+    for (key, values) in [("x_array", x), ("y_array", y)] {
+        words.extend([key, "=", "["].map(str::to_owned));
+        words.extend(values.into_iter().map(num_text));
+        words.push("]".into());
+    }
+    Some(
+        words
+            .into_iter()
+            .map(|text| Token {
+                text,
+                span,
+                ends_group: false,
+            })
+            .collect(),
+    )
+}
+
 struct Pre<'l> {
     controls: HashMap<(u32, u32), Vec<crate::control::Statement>>,
     libraries: HashMap<PathBuf, Rc<Vec<Line>>>,
@@ -1252,6 +1303,51 @@ impl Flat<'_> {
                     }
                 }
             }
+            // The 44.2 raw exposes the unity-gain output and its behavioral
+            // voltage driver separately. Scope their names like ordinary cards.
+            if matches!(letter, 'e' | 'g')
+                && toks.len() >= 6
+                && (toks[3].text.eq_ignore_ascii_case("table")
+                    || toks.len() == 6 && toks[3].text.eq_ignore_ascii_case("value"))
+                && toks[4].is_eq()
+            {
+                let internal = ctx.node(&self.defs, &format!("{h}_int1"));
+                let mut output = toks[..6].to_vec();
+                output[3].text = internal.clone();
+                output[4].text = "0".into();
+                output[5].text = "1".into();
+                self.push(output, line);
+                toks[0].text = ctx.element(&format!("b{h}"));
+                if toks[3].text.eq_ignore_ascii_case("table") {
+                    let input = ctx.node(&self.defs, &format!("{h}_int2"));
+                    let driver = ctx.element(&format!("a{h}"));
+                    let model = format!("{driver}_pwl");
+                    let Some(model_card) = table_model(&model, &toks[6..], span) else {
+                        self.error(
+                            "E-BSOURCE-EXPR",
+                            "expected finite, increasing table coordinate pairs",
+                            span,
+                        );
+                        continue;
+                    };
+                    let port = |text| Token {
+                        text,
+                        span,
+                        ends_group: false,
+                    };
+                    self.push(
+                        [driver, input.clone(), internal, model].map(port).to_vec(),
+                        line,
+                    );
+                    self.push(model_card, line);
+                    toks.truncate(6);
+                    toks[1].text = input;
+                } else {
+                    toks[1].text = internal;
+                }
+                toks[2].text = "0".into();
+                toks[3].text = "v".into();
+            }
             if (ctx.copies != 1. || ctx.copies_expr.is_some())
                 && matches!(letter, 'm' | 'r' | 'l' | 'c' | 'd' | 'q' | 'j' | 'z')
             {
@@ -1334,6 +1430,11 @@ impl Flat<'_> {
                 ".param" if nested == 0 => {
                     let parsed = split_assignments(raw_rest(l)).map(|pairs| {
                         for (name, value) in pairs {
+                            if crate::expr::contains_voltage_call(&value) {
+                                self.error("E-PARSE-EXPR", format!(
+                                    "parameter `{name}` contains v(): node voltages are unavailable during parameter evaluation"
+                                ), l.span());
+                            }
                             scope.defs.insert(name, Rc::from(value));
                         }
                     });

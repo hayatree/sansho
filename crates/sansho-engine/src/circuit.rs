@@ -2,6 +2,7 @@
 //!
 //! Provenance: original work. Topology checks (no DC path to ground, loops of voltage-defined
 //! branches) are standard MNA well-posedness conditions; see Ho, Ruehli & Brennan (1975).
+//! Voltage-probe numbering follows black-box ngspice 44.2 ring-oscillator captures.
 //! See `docs/PROVENANCE.md`.
 
 use sansho_devices::va::VaGroup;
@@ -618,20 +619,32 @@ pub(crate) fn compile_cached(
         if let ElementKind::Bjt { model, s: None, .. } = &e.kind {
             grounded |= bipolar_thermal.contains_key(model.as_str());
         }
-        for n in e.kind.nodes() {
+        // A voltage probe can introduce a later terminal at this card's position.
+        // It does not supply a DC path; probe touches are counted after binding.
+        let mut register = |n: &str, terminal: bool| {
             if digital_ports.digital.contains_key(n) {
-                continue;
+                return;
             }
             if n == GROUND {
-                grounded = true;
-                continue;
+                grounded |= terminal;
+                return;
             }
             let idx = *node_index.entry(n.to_string()).or_insert_with(|| {
                 node_names.push(n.to_string());
                 touches.push(0);
                 node_names.len() - 1
             });
-            touches[idx] += 1;
+            touches[idx] += usize::from(terminal);
+        };
+        for n in e.kind.nodes() {
+            register(n, true);
+        }
+        if let ElementKind::Behavioral { expr, .. } = &e.kind {
+            let probes = sansho_netlist::voltage_probe_nodes(expr)
+                .map_err(|msg| vec![Diagnostic::error("E-BSOURCE-EXPR", msg).with_span(e.span)])?;
+            for n in probes {
+                register(&n, false);
+            }
         }
     }
     if nl.elements.is_empty() {
@@ -1433,7 +1446,7 @@ fn device_temperature(
     Ok(sansho_devices::temperature::Temperature { kelvin, nominal })
 }
 
-fn passive_value(
+pub(crate) fn passive_value(
     value: f64,
     params: &[(String, f64)],
     model: Option<&ModelCard>,
@@ -1448,8 +1461,9 @@ fn passive_value(
         .unwrap_or_default();
     let t = instance_temperature(&p, opts, m.opt(&["tnom"]))?;
     let d = t.kelvin - t.nominal;
-    let result =
-        value * (1. + d * (p.get("tc1", m.get("tc1", 0.)) + d * p.get("tc2", m.get("tc2", 0.))));
+    let result = value
+        * p.get("scale", 1.)
+        * (1. + d * (p.get("tc1", m.get("tc1", 0.)) + d * p.get("tc2", m.get("tc2", 0.))));
     if !result.is_finite() {
         return Err(Diagnostic::error(
             "E-ELAB-PARAM",

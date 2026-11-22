@@ -146,8 +146,8 @@ impl AnalysisKind {
     pub fn plot_name(self) -> &'static str {
         match self {
             Self::Vectors => "unknown",
-            Self::Pss => "Periodic Steady State (time domain)",
-            Self::PssFreq => "Periodic Steady State (frequency domain)",
+            Self::Pss => "Time Domain Periodic Steady State Analysis",
+            Self::PssFreq => "Frequency Domain Periodic Steady State Analysis",
             Self::Sp => "SP Analysis",
             Self::Harmonic2 => "DISTORTION - 2nd harmonic",
             Self::Harmonic3 => "DISTORTION - 3rd harmonic",
@@ -207,6 +207,18 @@ pub struct AnalysisResult {
 }
 
 impl AnalysisResult {
+    /// Keep selected variables and their waveform columns in their existing order.
+    pub fn retain_variables(&mut self, mut keep: impl FnMut(&Variable) -> bool) {
+        let mask: Vec<_> = self.variables.iter().map(&mut keep).collect();
+        let mut include = mask.iter().copied();
+        self.variables.retain(|_| include.next().unwrap_or(false));
+        let mut include = mask.into_iter();
+        match &mut self.data {
+            Data::Real { columns } => columns.retain(|_| include.next().unwrap_or(false)),
+            Data::Complex { columns } => columns.retain(|_| include.next().unwrap_or(false)),
+        }
+    }
+
     /// Number of points.
     pub fn len(&self) -> usize {
         if self.scale.is_some() {
@@ -225,6 +237,13 @@ impl AnalysisResult {
 
     /// Index of a variable by (case-insensitive) name.
     pub fn index_of(&self, name: &str) -> Option<usize> {
+        if matches!(self.kind, AnalysisKind::Pss | AnalysisKind::PssFreq) {
+            // In a 44.2 #branch capture the last matching column carries the current.
+            return self
+                .variables
+                .iter()
+                .rposition(|v| v.name.eq_ignore_ascii_case(name));
+        }
         self.variables
             .iter()
             .position(|v| v.name.eq_ignore_ascii_case(name))
@@ -276,6 +295,9 @@ pub struct PrintTable {
 /// Results of all analyses of one run.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SimResults {
+    /// Batch raw selection. Interactive writes and decoded files use their supplied layout.
+    #[serde(skip)]
+    pub batch_raw: Option<BatchRaw>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub prints: Vec<PrintTable>,
     /// Netlist title.
@@ -285,6 +307,180 @@ pub struct SimResults {
     /// `.meas` results in netlist order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub measures: Vec<Measurement>,
+}
+
+/// Batch output policy from elaboration and the noise cards in netlist order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BatchRaw {
+    pub private_nodes: std::collections::BTreeSet<String>,
+    pub noise_intervals: Vec<u32>,
+    /// The 44.2 batch writer emits only the start of a two-point linear AC sweep.
+    pub ac_start_only: Vec<bool>,
+}
+
+impl BatchRaw {
+    fn visible(&self, kind: AnalysisKind, name: &str, detail: bool) -> bool {
+        match kind {
+            AnalysisKind::Noise => detail || matches!(name, "onoise_spectrum" | "inoise_spectrum"),
+            AnalysisKind::IntegratedNoise => {
+                detail || matches!(name, "onoise_total" | "inoise_total")
+            }
+            _ => !self.private_nodes.contains(name),
+        }
+    }
+}
+
+fn integrated_noise_name(name: &str) -> bool {
+    matches!(name, "onoise_total" | "inoise_total")
+        || name.starts_with("onoise_total_")
+        || name.starts_with("inoise_total_")
+}
+
+struct RawColumn<'a> {
+    index: usize,
+    name: std::borrow::Cow<'a, str>,
+    zero: bool,
+}
+
+impl RawColumn<'_> {
+    fn complex(&self, value: (f64, f64)) -> (f64, f64) {
+        if self.zero { (0., 0.) } else { value }
+    }
+}
+
+fn raw_column<'a>(
+    batch: Option<&BatchRaw>,
+    kind: AnalysisKind,
+    index: usize,
+    name: &'a str,
+) -> RawColumn<'a> {
+    let zero = batch.is_some()
+        && kind == AnalysisKind::Ac
+        && name.starts_with("@r")
+        && name.ends_with("[i]");
+    let name = if batch.is_some()
+        && matches!(kind, AnalysisKind::Noise | AnalysisKind::IntegratedNoise)
+        && ["onoise.", "onoise_total.", "inoise_total."]
+            .iter()
+            .any(|p| name.starts_with(p))
+    {
+        name.replacen('.', "_", 1).into()
+    } else {
+        name.into()
+    };
+    RawColumn { index, name, zero }
+}
+
+#[derive(Clone, Copy)]
+struct RawPlot {
+    index: usize,
+    stride: usize,
+    detail: bool,
+}
+
+impl SimResults {
+    fn raw_layout(&self) -> Vec<RawPlot> {
+        let mut intervals = self.batch_raw.iter().flat_map(|b| &b.noise_intervals);
+        let mut integrated = intervals.clone();
+        let mut ac = self.batch_raw.iter().flat_map(|b| &b.ac_start_only);
+        let mut layout: Vec<_> = self
+            .analyses
+            .iter()
+            .enumerate()
+            .map(|(index, a)| {
+                let interval = match a.kind {
+                    AnalysisKind::Noise => intervals.next(),
+                    AnalysisKind::IntegratedNoise => integrated.next(),
+                    _ => None,
+                }
+                .copied()
+                .unwrap_or(0);
+                let stride = if a.kind == AnalysisKind::Noise {
+                    interval.max(1) as usize
+                } else if a.kind == AnalysisKind::Ac && ac.next() == Some(&true) {
+                    2
+                } else {
+                    1
+                };
+                RawPlot {
+                    index,
+                    stride,
+                    detail: interval > 0,
+                }
+            })
+            .collect();
+        if self.batch_raw.is_some() {
+            // Keep unmeasured families in their original slots. The order among
+            // the four measured families holds even across an intervening card.
+            let rank = |p: &RawPlot| match self.analyses[p.index].kind {
+                AnalysisKind::Ac => Some(0),
+                AnalysisKind::Dc => Some(1),
+                AnalysisKind::Op => Some(2),
+                AnalysisKind::Tran => Some(3),
+                _ => None,
+            };
+            let mut ranked: Vec<_> = layout.iter().filter_map(|p| Some((rank(p)?, *p))).collect();
+            ranked.sort_by_key(|&(rank, _)| rank);
+            for (slot, (_, plot)) in layout.iter_mut().filter(|p| rank(p).is_some()).zip(ranked) {
+                *slot = plot;
+            }
+            // Sansho appends its Fourier report derived from the completed transient.
+            layout.sort_by_key(|p| self.analyses[p.index].kind == AnalysisKind::Four);
+        }
+        layout
+    }
+
+    /// Consume a run as batch raw plots, moving waveform storage without copying samples.
+    pub fn into_raw_output(mut self) -> Self {
+        let layout = self.raw_layout();
+        let mut plots: Vec<_> = self.analyses.drain(..).map(Some).collect();
+        for RawPlot {
+            index,
+            stride,
+            detail,
+        } in layout
+        {
+            if let Some(mut a) = plots[index].take() {
+                if let Some(batch) = &self.batch_raw {
+                    let kind = a.kind;
+                    a.retain_variables(|v| batch.visible(kind, &v.name, detail));
+                }
+                for (i, v) in a.variables.iter_mut().enumerate() {
+                    let col = raw_column(self.batch_raw.as_ref(), a.kind, i, &v.name);
+                    if col.zero
+                        && let Data::Complex { columns } = &mut a.data
+                        && let Some(column) = columns.get_mut(i)
+                    {
+                        column.fill((0., 0.));
+                    }
+                    if let std::borrow::Cow::Owned(name) = col.name {
+                        v.name = name;
+                    }
+                }
+                if stride > 1 {
+                    retain_stride(&mut a.scale_values, stride);
+                    match &mut a.data {
+                        Data::Real { columns } => {
+                            columns.iter_mut().for_each(|c| retain_stride(c, stride))
+                        }
+                        Data::Complex { columns } => {
+                            columns.iter_mut().for_each(|c| retain_stride(c, stride))
+                        }
+                    }
+                }
+                self.analyses.push(a);
+            }
+        }
+        self.batch_raw = None;
+        self
+    }
+}
+
+fn retain_stride<T>(values: &mut Vec<T>, stride: usize) {
+    for (dst, src) in (0..values.len()).step_by(stride).enumerate() {
+        values.swap(dst, src);
+    }
+    values.truncate(values.len().div_ceil(stride));
 }
 
 /// Write results as an ngspice-compatible ASCII raw file (one plot per analysis).
@@ -298,13 +494,27 @@ pub fn write_raw_binary(results: &SimResults, w: &mut impl Write) -> io::Result<
 }
 
 fn write_raw(results: &SimResults, w: &mut impl Write, binary: bool) -> io::Result<()> {
-    for a in &results.analyses {
+    for RawPlot {
+        index,
+        stride,
+        detail,
+    } in results.raw_layout()
+    {
+        let a = &results.analyses[index];
         let complex = matches!(a.data, Data::Complex { .. });
-        let mut vars: Vec<&Variable> = Vec::new();
-        if let Some(s) = &a.scale {
-            vars.push(s);
-        }
-        vars.extend(a.variables.iter());
+        let batch = results.batch_raw.as_ref();
+        let selected: Vec<_> = a
+            .variables
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| batch.is_none_or(|b| b.visible(a.kind, &v.name, detail)))
+            .map(|(i, v)| raw_column(batch, a.kind, i, &v.name))
+            .collect();
+        let vars = a.scale.iter().map(|v| (v.name.as_str(), v.quantity)).chain(
+            selected
+                .iter()
+                .map(|c| (c.name.as_ref(), a.variables[c.index].quantity)),
+        );
         let npoints = a.len();
 
         let valid = match &a.data {
@@ -325,19 +535,30 @@ fn write_raw(results: &SimResults, w: &mut impl Write, binary: bool) -> io::Resu
         writeln!(w, "Date: unknown")?;
         writeln!(w, "Plotname: {}", a.kind.plot_name())?;
         writeln!(w, "Flags: {}", if complex { "complex" } else { "real" })?;
-        writeln!(w, "No. Variables: {}", vars.len())?;
-        writeln!(w, "No. Points: {npoints}")?;
+        writeln!(
+            w,
+            "No. Variables: {}",
+            selected.len() + usize::from(a.scale.is_some())
+        )?;
+        writeln!(w, "No. Points: {}", npoints.div_ceil(stride))?;
         writeln!(w, "Variables:")?;
-        for (i, v) in vars.iter().enumerate() {
-            match (v.name.starts_with('@'), v.quantity) {
-                (true, Quantity::Current) => writeln!(w, "\t{i}\ti({})\tcurrent", v.name)?,
-                (true, Quantity::Voltage) => writeln!(w, "\t{i}\tv({})\tvoltage", v.name)?,
-                _ => writeln!(w, "\t{i}\t{}\t{}", v.name, v.quantity.raw_name())?,
+        for (i, (name, quantity)) in vars.enumerate() {
+            if i == 0 && a.kind == AnalysisKind::Dc && name == "v-sweep" {
+                writeln!(w, "\t{i}\tv(v-sweep)\tvoltage")?;
+                continue;
+            }
+            let wrapped = name.starts_with('@')
+                || a.kind == AnalysisKind::Sens
+                || (a.kind == AnalysisKind::IntegratedNoise && integrated_noise_name(name));
+            match (wrapped, quantity) {
+                (true, Quantity::Current) => writeln!(w, "\t{i}\ti({})\tcurrent", name)?,
+                (true, Quantity::Voltage) => writeln!(w, "\t{i}\tv({})\tvoltage", name)?,
+                _ => writeln!(w, "\t{i}\t{}\t{}", name, quantity.raw_name())?,
             }
         }
         if binary {
             writeln!(w, "Binary:")?;
-            for p in 0..npoints {
+            for p in (0..npoints).step_by(stride) {
                 if a.scale.is_some() {
                     w.write_all(&a.scale_values[p].to_ne_bytes())?;
                     if complex {
@@ -346,14 +567,17 @@ fn write_raw(results: &SimResults, w: &mut impl Write, binary: bool) -> io::Resu
                 }
                 match &a.data {
                     Data::Real { columns } => {
-                        for c in columns {
+                        for col in &selected {
+                            let c = &columns[col.index];
                             w.write_all(&c[p].to_ne_bytes())?;
                         }
                     }
                     Data::Complex { columns } => {
-                        for c in columns {
-                            w.write_all(&c[p].0.to_ne_bytes())?;
-                            w.write_all(&c[p].1.to_ne_bytes())?;
+                        for col in &selected {
+                            let c = &columns[col.index];
+                            let (re, im) = col.complex(c[p]);
+                            w.write_all(&re.to_ne_bytes())?;
+                            w.write_all(&im.to_ne_bytes())?;
                         }
                     }
                 }
@@ -361,12 +585,12 @@ fn write_raw(results: &SimResults, w: &mut impl Write, binary: bool) -> io::Resu
             continue;
         }
         writeln!(w, "Values:")?;
-        for p in 0..npoints {
+        for (row, p) in (0..npoints).step_by(stride).enumerate() {
             let mut first = true;
             let mut emit = |w: &mut dyn Write, s: String| -> io::Result<()> {
                 if first {
                     first = false;
-                    writeln!(w, " {p}\t{s}")
+                    writeln!(w, " {row}\t{s}")
                 } else {
                     writeln!(w, "\t{s}")
                 }
@@ -381,13 +605,16 @@ fn write_raw(results: &SimResults, w: &mut impl Write, binary: bool) -> io::Resu
             }
             match &a.data {
                 Data::Real { columns } => {
-                    for c in columns {
+                    for col in &selected {
+                        let c = &columns[col.index];
                         emit(w, format!("{:.15e}", c[p]))?;
                     }
                 }
                 Data::Complex { columns } => {
-                    for c in columns {
-                        emit(w, format!("{:.15e},{:.15e}", c[p].0, c[p].1))?;
+                    for col in &selected {
+                        let c = &columns[col.index];
+                        let (re, im) = col.complex(c[p]);
+                        emit(w, format!("{re:.15e},{im:.15e}"))?;
                     }
                 }
             }
@@ -403,6 +630,7 @@ mod tests {
     #[test]
     fn raw_ascii_layout() {
         let r = SimResults {
+            batch_raw: Default::default(),
             prints: Vec::new(),
             measures: vec![],
             title: "t".into(),

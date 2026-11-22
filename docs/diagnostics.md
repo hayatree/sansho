@@ -80,6 +80,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-CONV-DC`](#e-conv-dc) | error | DC sweep did not converge |
 | [`E-CONV-TRAN`](#e-conv-tran) | error | Timestep too small |
 | [`E-CONV-PSS`](#e-conv-pss) | error | Periodic shooting did not converge |
+| [`W-CONV-PSS`](#w-conv-pss) | warning | Autonomous shooting exhausted its iteration budget |
 | [`E-PSS-NOOSC`](#e-pss-noosc) | error | Oscillation could not be resolved |
 | [`E-ANALYSIS`](#e-analysis) | error | Invalid small-signal or Fourier analysis |
 | [`E-DC-SOURCE`](#e-dc-source) | error | Invalid DC sweep source |
@@ -544,9 +545,15 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## E-CONV-PSS
 
-**Periodic shooting did not converge.** A transient stage or the periodic sensitivity system failed, or the mean normalized endpoint error exceeded steadycoeff at the shooting iteration limit.
+**Periodic shooting did not converge.** A transient stage or the periodic sensitivity system failed, or driven shooting exhausted its iteration budget.
 
 - Check the frequency guess and initial conditions. Allow more stabilization time or shooting iterations. Tighten reltol to refine the shooting grid for sharp transitions.
+
+## W-CONV-PSS
+
+**Autonomous shooting exhausted its iteration budget.** The output comes from the completed shot with the smallest mean normalized endpoint mismatch.
+
+- Increase sciter or extend stabilization and check the reported residual and frequency.
 
 ## E-PSS-NOOSC
 

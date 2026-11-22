@@ -6,7 +6,13 @@ here=$(cd "$(dirname "$0")" && pwd)
 out="$here/../out/probes"
 mkdir -p "$out"
 if (( $# == 0 )); then
-    set -- "$here"/*.cir
+    # PSS uses a separate oracle; output-order probes run directly in batch mode.
+    for deck in "$here"/*.cir; do
+        case ${deck##*/} in
+            r22_pss_*|r22b_order_*|r22c_order_*|r22d_order_*|r22e_plots_*) continue ;;
+        esac
+        set -- "$@" "$deck"
+    done
 fi
 failures=()
 runner=$(command -v "${NGSPICE:-ngspice}") || { echo "ngspice executable unavailable" >&2; exit 1; }
@@ -62,6 +68,10 @@ run_setting() (
 )
 for deck in "$@"; do
     stem=$(basename "$deck" .cir)
+    if [[ $stem == r22_pss_* ]]; then
+        echo "Run PSS probes with cargo run --release -p sansho-verify -- $deck" >&2
+        exit 2
+    fi
     read -ra values <<< "$(sed -n 's/^\* sweep: //p' "$deck")"
     # New decks name the swept model parameter before its numeric settings.
     if [[ ${values[0]:-} =~ ^[[:alpha:]_][[:alnum:]_]*$ ]]; then

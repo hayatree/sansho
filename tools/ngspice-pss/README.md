@@ -25,12 +25,37 @@ from source is allowed only under these conditions:
 
 ## Use
 
+From the repository root, the verifier runs the installed oracle on each original
+probe. Each successful capture writes a validated `.ref.raw` and its convergence
+transcript `.ref.log` under `verify/out/`. Cached CI reads the pair. A probe
+marked pending still runs with Sansho and reports SKIP until its first reference
+is present. A missing required capture, incomplete raw or mismatched transcript
+fails verification.
+
 ```sh
-tools/ngspice-pss/build.sh                       # once, by a person
+cargo run --offline --release -p sansho-verify -- verify/pss-ng-decks
+cargo run --offline --release -p sansho-verify -- --cached -v verify/pss-ng-decks
+```
+
+For an individual batch capture use the wrapper from the repository root.
+
+```sh
+tools/ngspice-pss/build.sh                       # once, by a person, never by an agent
 SANSHO_NGSPICE_IMAGE=sansho-ngspice-pss:latest tools/ngspice/ngspice.sh -b deck.cir -r out.raw
 ```
 
 `ngspice.sh` never auto-builds this image. It exits with an error if the image is missing.
+
+For this image the wrapper uses a named container with pulling disabled. An
+independent watchdog force-removes the container after 230 seconds. Exit and
+signal cleanup also force-remove it. The host needs Docker, Python 3 and GNU
+`timeout`. The wrapper requires an accessible local image and Docker daemon.
+
+The original complete captures in `verify/out/pss-ng/` supply the μ = 1
+Van der Pol (`1e-3`), LC branch (`1e-3` and `1e-5`), and three-stage ring
+(`1e-3`) comparisons. Both LC logs and the ring log report non-convergence.
+The tighter VdP run announced 0 Hz and the tighter ring stopped during shooting.
+Neither capture contains two complete plots.
 
 ## Recorded build
 

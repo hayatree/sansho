@@ -800,10 +800,10 @@ impl DeviceGroup for Mos1s {
         for i in 0..self.len() {
             let m = &self.model[i];
             if m.rd > 0.0 {
-                self.int[i][0] = Some(u.alloc_internal_node(&self.names[i], "d"));
+                self.int[i][0] = Some(u.alloc_private_node(&self.names[i], "d"));
             }
             if m.rs > 0.0 {
-                self.int[i][2] = Some(u.alloc_internal_node(&self.names[i], "s"));
+                self.int[i][2] = Some(u.alloc_private_node(&self.names[i], "s"));
             }
         }
     }

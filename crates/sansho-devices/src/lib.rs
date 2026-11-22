@@ -93,6 +93,7 @@ pub struct Unknowns {
     kinds: Vec<UnknownKind>,
     branches: HashMap<String, usize>,
     operator_states: Vec<usize>,
+    private_nodes: Vec<usize>,
 }
 
 impl Unknowns {
@@ -131,9 +132,23 @@ impl Unknowns {
         idx
     }
 
+    /// Allocate a physical node that is absent from default batch raw output.
+    pub fn alloc_private_node(&mut self, device: &str, suffix: &str) -> usize {
+        let idx = self.alloc_internal_node(device, suffix);
+        self.private_nodes.push(idx);
+        idx
+    }
+
+    /// Display names of private solver unknowns, including analog operator states.
+    pub fn private_names(&self) -> impl Iterator<Item = &String> {
+        self.private_nodes
+            .iter()
+            .filter_map(|i| self.names.get(i - self.offset))
+    }
+
     /// Allocate a private analog-operator equation with voltage convergence scaling.
     pub fn alloc_operator_state(&mut self, device: &str, suffix: &str) -> usize {
-        let idx = self.alloc_internal_node(device, suffix);
+        let idx = self.alloc_private_node(device, suffix);
         self.operator_states.push(idx);
         idx
     }
@@ -574,6 +589,8 @@ pub fn thermal_voltage(temp: f64) -> f64 {
 /// Each MNA row receives the same realization through its f and q coefficients.
 #[derive(Debug)]
 pub struct NoiseSource {
+    /// Generator label in a detailed batch noise summary, when established.
+    pub component: Option<&'static str>,
     pub device: String,
     pub power: f64,
     pub exponent: f64,
@@ -601,6 +618,7 @@ impl NoiseSource {
     pub fn branch(device: &str, p: Node, n: Node, power: f64, exponent: f64) -> Self {
         Self {
             device: device.into(),
+            component: None,
             power,
             exponent,
             table: Vec::new(),
@@ -766,6 +784,11 @@ pub trait DeviceGroup: std::any::Any + Send + Sync + std::fmt::Debug {
     /// Prepare transient pair kernels after the matrix ordering is known.
     #[cfg(feature = "jit")]
     fn prepare_newton_pairs(&mut self, _temperature: f64, _fixed_node: Node) {}
+
+    /// Ordered summary labels, including sources with zero power at this bias.
+    fn noise_components(&self) -> &'static [&'static str] {
+        &[]
+    }
 
     /// Collect independent noise generators at the converged small-signal bias.
     fn noise(

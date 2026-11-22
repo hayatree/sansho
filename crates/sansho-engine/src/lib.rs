@@ -19,6 +19,7 @@ mod lint;
 mod measure;
 pub mod monte_carlo;
 mod options;
+mod output_order;
 mod parallel;
 mod probes;
 mod pss;
@@ -70,7 +71,7 @@ pub struct TranStats {
 }
 
 enum AnalysisDetails {
-    Harmonics(sansho_output::PrintTable),
+    Harmonics(sansho_output::PrintTable, Option<Diagnostic>),
     Dc(DcStats),
     Tran(TranStats),
 }
@@ -221,11 +222,25 @@ fn run_analysis(
     let ckt = owned.as_ref().unwrap_or(ckt);
     let mut result = match card {
         AnalysisCard::Pss { spec, .. } => {
-            let (mut plots, report) = pss::analyze(ckt, nl, opts, spec)?;
+            let pss::Output {
+                mut plots,
+                report,
+                warning,
+            } = pss::analyze(ckt, nl, opts, spec)?;
             for plot in &mut plots {
                 add_aliases(ckt, plot);
+                // A #branch monitor in 44.2 exports a zero column before the
+                // physical current with the same raw name in both domains.
+                if !spec.driven
+                    && let Some(branch) = spec.oscnob.strip_suffix("#branch")
+                    && let Some(index) = plot.index_of(&format!("i({branch})"))
+                    && let sansho_output::Data::Real { columns } = &mut plot.data
+                {
+                    columns.insert(index, vec![0.; plot.scale_values.len()]);
+                    plot.variables.insert(index, plot.variables[index].clone());
+                }
             }
-            return Ok((plots, Some(AnalysisDetails::Harmonics(report))));
+            return Ok((plots, Some(AnalysisDetails::Harmonics(report, warning))));
         }
         AnalysisCard::Sp { grid, noise, .. } => {
             return rf::analyze(ckt, nl, opts, *grid, *noise).map(|p| (vec![p], None));
@@ -234,6 +249,7 @@ fn run_analysis(
             return distortion::analyze(ckt, nl, opts, *grid, *ratio).map(|p| (p, None));
         }
         AnalysisCard::Noise {
+            summary,
             output,
             source,
             sweep,
@@ -248,6 +264,7 @@ fn run_analysis(
                 opts,
                 output,
                 source,
+                *summary > 0,
                 analysis::ac_frequencies(*sweep, *points, *fstart, *fstop)?,
             )
             .map(|plots| (plots, None));
@@ -348,10 +365,16 @@ fn add_aliases(ckt: &Circuit, result: &mut sansho_output::AnalysisResult) {
     }
 }
 
-/// Project public output in circuit order. The independent scale is always retained.
+/// Project public output in the requested signal order. The independent scale is always retained.
 fn project_results(full: &mut SimResults, saves: &[String]) -> Option<MeasurementContext> {
     if saves.is_empty() || saves.iter().any(|s| s == "all") {
         return None;
+    }
+    let mut requested = std::collections::HashMap::new();
+    for (position, save) in saves.iter().enumerate() {
+        requested
+            .entry(save.to_ascii_lowercase())
+            .or_insert(position);
     }
     let analyses = full
         .analyses
@@ -370,13 +393,18 @@ fn project_results(full: &mut SimResults, saves: &[String]) -> Option<Measuremen
             {
                 return a.clone();
             }
-            let indices: Vec<_> = a
+            let mut selected: Vec<_> = a
                 .variables
                 .iter()
                 .enumerate()
-                .filter(|(_, v)| saves.iter().any(|s| s.eq_ignore_ascii_case(&v.name)))
-                .map(|(i, _)| i)
+                .filter_map(|(i, v)| {
+                    requested
+                        .get(&v.name.to_ascii_lowercase())
+                        .map(|&rank| ((v.name.starts_with('@'), rank), i))
+                })
                 .collect();
+            selected.sort_unstable();
+            let indices: Vec<_> = selected.into_iter().map(|(_, i)| i).collect();
             use sansho_output::Data;
             sansho_output::AnalysisResult {
                 events: a.events.clone(),
@@ -396,6 +424,7 @@ fn project_results(full: &mut SimResults, saves: &[String]) -> Option<Measuremen
         })
         .collect();
     let saved = SimResults {
+        batch_raw: full.batch_raw.clone(),
         prints: full.prints.clone(),
         title: full.title.clone(),
         measures: full.measures.clone(),
@@ -544,7 +573,37 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
                 .map(|a| (vec![a], None));
         }
     }
+    let noise_summary_intervals: Vec<_> = nl
+        .analyses
+        .iter()
+        .filter_map(|c| {
+            if let AnalysisCard::Noise { summary, .. } = c {
+                Some(*summary)
+            } else {
+                None
+            }
+        })
+        .collect();
     let mut results = SimResults {
+        batch_raw: Some(sansho_output::BatchRaw {
+            private_nodes: ckt
+                .unknowns
+                .private_names()
+                .filter(|n| !saves.contains(n))
+                .cloned()
+                .collect(),
+            noise_intervals: noise_summary_intervals.clone(),
+            ac_start_only: nl
+                .analyses
+                .iter()
+                .filter_map(|card| match card {
+                    AnalysisCard::Ac { sweep, points, .. } => {
+                        Some(*sweep == sansho_netlist::AcSweep::Lin && *points == 2)
+                    }
+                    _ => None,
+                })
+                .collect(),
+        }),
         prints: Vec::new(),
         measures: Vec::new(),
         title: nl.title.clone(),
@@ -554,10 +613,24 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
     let mut dc_stats = vec![];
     for (card, r) in nl.analyses.iter().zip(outcomes) {
         match r {
-            Ok((a, stats)) => {
+            Ok((mut a, stats)) => {
+                for plot in &mut a {
+                    if saves.is_empty()
+                        || saves.iter().any(|s| s == "all")
+                        || matches!(
+                            plot.kind,
+                            sansho_output::AnalysisKind::Sp | sansho_output::AnalysisKind::Sens
+                        )
+                    {
+                        output_order::default_order(plot, nl, ckt.num_nodes());
+                    }
+                }
                 results.analyses.extend(a);
                 match stats {
-                    Some(AnalysisDetails::Harmonics(report)) => results.prints.push(report),
+                    Some(AnalysisDetails::Harmonics(report, warning)) => {
+                        results.prints.push(report);
+                        warnings.extend(warning.map(|w| w.with_span(card_span(card))));
+                    }
                     Some(AnalysisDetails::Dc(s)) => dc_stats.push(s),
                     Some(AnalysisDetails::Tran(s)) => tran_stats.push(s),
                     None => {}
@@ -589,17 +662,7 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
     }
     let measurement_context = project_results(&mut results, &saves);
     Ok(RunOutput {
-        noise_summary_intervals: nl
-            .analyses
-            .iter()
-            .filter_map(|c| {
-                if let AnalysisCard::Noise { summary, .. } = c {
-                    Some(*summary)
-                } else {
-                    None
-                }
-            })
-            .collect(),
+        noise_summary_intervals,
         measurement_context,
         results,
         warnings,

@@ -1,0 +1,24 @@
+Multiple and repeated early branch lookups
+* Provenance: original R22d circuit for black-box branch insertion order.
+Bfirst b1 0 V={1k*i(Va)}
+Blate b2 0 V={1k*(i(Vc)+i(Vb))}
+Fcopy 0 f Vd 1
+Hcopy h 0 Vb 1k
+La l 0 1m
+Ecopy e 0 b1 b2 1
+Va a 0 1
+Vb b 0 2
+Vc c 0 3
+Vd d 0 4
+Ra a 0 1k
+Rb b 0 1k
+Rc c 0 1k
+Rd d 0 1k
+Rf f 0 2k
+Rh h 0 1k
+Rl l a 2k
+Re e 0 1k
+Rb1 b1 0 1k
+Rb2 b2 0 1k
+.op
+.end

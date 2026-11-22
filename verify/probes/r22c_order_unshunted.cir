@@ -1,0 +1,6 @@
+Read-only analog node without a shunt
+* Provenance: original R22c circuit for black-box singular-node behavior.
+Btest out 0 V={1+v(ghost)}
+Rload out 0 1k
+.op
+.end

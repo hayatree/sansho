@@ -1,0 +1,25 @@
+Interleaved branch families and a forward current probe
+* Provenance: original R22c circuit for black-box vector ordering.
+* Distinguish reverse instance order from reversal of the entire deck.
+Vearly vin 0 1
+Hearly h1 0 Vlate 1k
+Bearly b1 0 V={i(Vlate)*1k}
+Learly l1 0 1m
+Eearly e1 0 vin 0 1
+Vlate vs 0 2
+Elate e2 0 vs 0 1
+Llate l2 0 2m
+Blate b2 0 V={v(vs)}
+Hlate h2 0 Vearly 1k
+Rin vin 0 1k
+Rs vs 0 1k
+R1 h1 0 1k
+R2 h2 0 1k
+R3 b1 0 1k
+R4 b2 0 1k
+R5 e1 0 1k
+R6 e2 0 1k
+R7 vin l1 2k
+R8 vs l2 2k
+.op
+.end

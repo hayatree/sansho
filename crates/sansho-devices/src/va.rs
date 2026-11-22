@@ -467,6 +467,7 @@ impl DeviceGroup for VaGroup {
                     .collect();
                 out.push(crate::NoiseSource {
                     device: inst.name.clone(),
+                    component: None,
                     power: drive.power,
                     exponent: drive.exponent,
                     table: drive.table,

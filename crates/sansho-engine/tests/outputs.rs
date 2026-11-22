@@ -16,6 +16,129 @@ fn near(x: f64, y: f64, tol: f64) {
 }
 
 #[test]
+fn behavioral_source_columns_match_the_black_box_captures() {
+    let cases = [
+        (
+            include_str!("../../../verify/probes/r22c_order_families.cir"),
+            "v(vin) v(h1) v(b1) v(l1) v(e1) v(vs) v(e2) v(l2) v(b2) v(h2) i(blate) i(bearly) i(vlate) i(hlate) i(vearly) i(hearly) i(llate) i(learly) i(elate) i(eearly)",
+        ),
+        (
+            include_str!("../../../verify/probes/r22b_order_terminals.cir"),
+            "v(p) v(n) v(a) v(z) v(01) v(middle) i(vz) i(va) i(vone)",
+        ),
+        (
+            include_str!("../../../verify/probes/r22b_order_branch.cir"),
+            "v(out) v(z) v(a) v(middle) v(sense) i(vsense)",
+        ),
+        (
+            include_str!("../../../verify/probes/r22b_order_func.cir"),
+            "v(first) v(out) v(body) v(arg) v(middle) v(unused) i(vb) i(va)",
+        ),
+        (
+            include_str!("../../../verify/probes/r22b_order_eg_value.cir"),
+            "v(eo) v(en) v(efirst_int1) v(a) v(z) v(go) v(gn) v(gnext_int1) v(y) v(middle) i(bgnext) i(befirst) i(efirst) i(vz) i(va) i(vy)",
+        ),
+        (
+            include_str!("../../../verify/probes/r22b_order_subckt.cir"),
+            "v(one) v(ctl) v(x1.local) v(x1.middle) v(two) v(x2.local) v(x2.middle) i(vc) i(v.x2.vl) i(v.x1.vl)",
+        ),
+        (
+            include_str!("../../../verify/probes/r22b_order_expr_only.cir"),
+            "v(out) v(ghost) v(middle)",
+        ),
+    ];
+    for (text, expected) in cases {
+        let plot = simulate(text).analyses.remove(0);
+        let names: Vec<_> = plot.variables.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, expected.split_whitespace().collect::<Vec<_>>());
+        if let Some(ghost) = plot.real("v(ghost)") {
+            assert_eq!(ghost, [0.]);
+        }
+        if let Some(driver) = plot.real("v(efirst_int1)") {
+            near(driver[0], 2., 1e-14);
+            near(plot.real("v(gnext_int1)").unwrap()[0], -0.003, 1e-14);
+            near(plot.real("v(eo)").unwrap()[0], 1., 1e-14);
+            near(plot.real("v(go)").unwrap()[0], 3., 1e-14);
+            near(plot.real("i(efirst)").unwrap()[0], -0.001, 1e-14);
+            near(plot.real("i(befirst)").unwrap()[0], 0., 1e-14);
+            near(plot.real("i(bgnext)").unwrap()[0], 0., 1e-14);
+        }
+    }
+}
+
+#[test]
+fn batch_raw_plot_and_mixed_save_order() {
+    let r = simulate(include_str!("../../../verify/probes/r22c_order_save.cir"));
+    let mut raw = Vec::new();
+    sansho_output::write_raw_ascii(&r, &mut raw).unwrap();
+    let decoded = sansho_output::read_raw_ascii(std::str::from_utf8(&raw).unwrap()).unwrap();
+    assert_eq!(decoded.analyses[0].kind, sansho_output::AnalysisKind::Ac);
+    assert_eq!(decoded.analyses[1].kind, sansho_output::AnalysisKind::Op);
+    for plot in &decoded.analyses {
+        let names: Vec<_> = plot.variables.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["i(vfirst)", "v(beta)", "v(alpha)", "i(vlast)", "@rfirst[i]"]
+        );
+    }
+    assert_eq!(decoded.analyses[0].complex("v(beta)").unwrap(), [(4., 0.)]);
+    near(
+        decoded.analyses[1].real("@rfirst[i]").unwrap()[0],
+        0.001,
+        1e-16,
+    );
+}
+
+#[test]
+fn both_raw_writers_match_the_materialized_batch_projection() {
+    for deck in [
+        include_str!("../../../verify/decks/r22d_order_noise_summary.cir"),
+        include_str!("../../../verify/decks/r22d_order_save_bias.cir"),
+        include_str!("../../../verify/decks/r22d_order_plots_forward.cir"),
+    ] {
+        let full = simulate(deck);
+        let projected = full.clone().into_raw_output();
+        type Writer = fn(&SimResults, &mut Vec<u8>) -> std::io::Result<()>;
+        let writers: [Writer; 2] = [
+            sansho_output::write_raw_ascii,
+            sansho_output::write_raw_binary,
+        ];
+        for write in writers {
+            let mut direct = vec![];
+            let mut materialized = vec![];
+            write(&full, &mut direct).unwrap();
+            write(&projected, &mut materialized).unwrap();
+            assert_eq!(direct, materialized);
+        }
+    }
+}
+
+#[test]
+fn explicit_save_keeps_the_solved_diode_access_voltage() {
+    let circuit = "diode access\nI1 0 n 1m\nD1 n 0 dj\n.model dj d(is=1e-14 rs=50)\n.op\n";
+    let r = simulate(circuit);
+    let a = &r.analyses[0];
+    let junction = a.real("v(d1#a)").unwrap()[0];
+    near(a.real("v(n)").unwrap()[0] - junction, 0.05, 1e-10);
+    assert!(r.into_raw_output().analyses[0].real("v(d1#a)").is_none());
+    let saved = simulate(&format!("{circuit}.save v(d1#a)\n")).into_raw_output();
+    assert_eq!(saved.analyses[0].real("v(d1#a)").unwrap(), [junction]);
+}
+
+#[test]
+fn parameter_voltage_probes_fail_at_the_declaration() {
+    for text in [
+        include_str!("../../../verify/probes/r22b_order_param_unused.cir"),
+        include_str!("../../../verify/probes/r22b_order_param_used.cir"),
+    ] {
+        let errors = parse(text).unwrap_err();
+        assert!(errors.iter().any(|d| d.code == "E-PARSE-EXPR"
+            && d.message.contains("node voltages")
+            && d.span.is_some()));
+    }
+}
+
+#[test]
 fn printed_and_measured_vectors_precede_projection() {
     let src = "test\n.title Source and load\nV1 n 0 2\nR1 n 0 2k\n.dc V1 1 2 0.5\n.print dc v(n) @r1[i] @v1[p]\n.meas dc power find @r1[p] at=2\n.save @r1[i]\n.end";
     let nl = parse(src).unwrap();

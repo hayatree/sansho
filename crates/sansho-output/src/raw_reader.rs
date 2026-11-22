@@ -52,7 +52,11 @@ fn kind_of(plot: &str) -> Option<AnalysisKind> {
             return Some(kind);
         }
     }
-    if p.starts_with("s-parameter analysis") {
+    if p == "periodic steady state (time domain)" {
+        Some(AnalysisKind::Pss)
+    } else if p == "periodic steady state (frequency domain)" {
+        Some(AnalysisKind::PssFreq)
+    } else if p.starts_with("s-parameter analysis") {
         Some(AnalysisKind::Sp)
     } else if p.starts_with("operating point") {
         Some(AnalysisKind::Op)
@@ -94,6 +98,7 @@ fn quantity_of(t: &str) -> Quantity {
 pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
     let lines: Vec<&str> = text.lines().collect();
     let mut results = SimResults {
+        batch_raw: Default::default(),
         prints: Vec::new(),
         measures: Vec::new(),
         title: String::new(),
@@ -114,7 +119,7 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
             i += 1;
             continue;
         }
-        let plot = val.trim().to_string();
+        let kind = kind_of(val.trim());
         let plot_line = i + 1;
         let (mut complex, mut nvars, mut npts) = (false, None, None);
         i += 1;
@@ -154,15 +159,19 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
             if f.len() < 3 {
                 return Err(err(i + 1, "malformed variable line"));
             }
+            let name = f[1].to_ascii_lowercase();
+            let inner = name
+                .strip_prefix("v(")
+                .or_else(|| name.strip_prefix("i("))
+                .and_then(|s| s.strip_suffix(')'));
+            let unwrapped = inner.filter(|s| {
+                s.starts_with('@')
+                    || kind == Some(AnalysisKind::Sens)
+                    || kind == Some(AnalysisKind::IntegratedNoise)
+                        && crate::integrated_noise_name(s)
+            });
             vars.push(Variable {
-                name: if f[1].starts_with("i(@") || f[1].starts_with("v(@") {
-                    f[1][2..]
-                        .strip_suffix(')')
-                        .unwrap_or(f[1])
-                        .to_ascii_lowercase()
-                } else {
-                    f[1].to_ascii_lowercase()
-                },
+                name: unwrapped.unwrap_or(&name).to_owned(),
                 quantity: quantity_of(f[2]),
             });
             i += 1;
@@ -209,7 +218,7 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
                 }
             }
         }
-        let Some(kind) = kind_of(&plot) else {
+        let Some(kind) = kind else {
             continue;
         };
         let has_scale = kind.is_distortion()
@@ -226,7 +235,10 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
             )
             || (kind == AnalysisKind::Sens && vars.first().is_some_and(|v| v.name == "frequency"));
         let (scale, scale_values, vars) = if has_scale && !vars.is_empty() {
-            let s = vars[0].clone();
+            let mut s = vars[0].clone();
+            if kind == AnalysisKind::Dc && s.name == "v(v-sweep)" {
+                s.name = "v-sweep".into();
+            }
             let vals = if complex {
                 cx[0].iter().map(|c| c.0).collect()
             } else {
@@ -266,6 +278,7 @@ mod tests {
     #[test]
     fn round_trip() {
         let r = SimResults {
+            batch_raw: Default::default(),
             prints: Vec::new(),
             measures: Vec::new(),
             title: "t".into(),

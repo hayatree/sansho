@@ -470,6 +470,43 @@ pub fn parse_behavior(text: &str) -> Result<Expr, String> {
     Ok(e)
 }
 
+/// Recognize a live voltage call even in an unused parameter whose value is
+/// never evaluated. Use the same identifier boundaries as the expression lexer.
+pub(crate) fn contains_voltage_call(text: &str) -> bool {
+    text.match_indices(['v', 'V']).any(|(i, _)| {
+        !text[..i].ends_with(|c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '.'))
+            && text[i + 1..].trim_start().starts_with('(')
+    })
+}
+
+/// Node discovery in a flattened source expression. Probes are visited in text
+/// order, and a differential probe introduces its negative terminal first.
+pub fn voltage_probe_nodes(text: &str) -> Result<Vec<String>, String> {
+    let mut nodes = Vec::new();
+    for token in tokenize_for(strip_delims(text), true)? {
+        if let Tok::Id(id) = token
+            && let Some(args) = id.strip_prefix("v(").and_then(|s| s.strip_suffix(')'))
+        {
+            nodes.extend(args.rsplit(',').map(str::to_owned));
+        }
+    }
+    Ok(nodes)
+}
+
+/// Branch-current references in the order encountered in a flattened expression.
+pub fn current_probe_branches(text: &str) -> Result<Vec<String>, String> {
+    Ok(tokenize_for(strip_delims(text), true)?
+        .into_iter()
+        .filter_map(|t| {
+            if let Tok::Id(id) = t {
+                id.strip_prefix("i(")?.strip_suffix(')').map(str::to_owned)
+            } else {
+                None
+            }
+        })
+        .collect())
+}
+
 /// Expand lexical parameters and user functions while preserving live probes.
 pub(crate) fn source_text(
     e: &Expr,

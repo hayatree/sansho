@@ -1,0 +1,11 @@
+Motional RLC arm with shunt capacitance and saturating negative resistance
+* Provenance: original Sansho oscillator probe for R22.
+* sansho-verify: pending-reference
+* sansho-verify: pss-ng v(out)
+Lm out m 10m
+Rm m c 12
+Cm c 0 10n ic=0.15
+Cp out 0 1n ic=0.15
+Bdrive out 0 I={0.0001*v(out)*(v(out)*v(out)-1)}
+.pss 53k 3m out 256 11 50 0.005 uic
+.end

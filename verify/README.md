@@ -43,6 +43,135 @@ For compact devices, the maintainer uses black-box behavior from ngspice 44.2 as
 All decks are original circuits written for this project. Raw files go to `verify/out/`
 (ignored by git).
 
+## R22c vector order
+
+The ngspice 44.2 captures give the following output rule for circuit plots.
+
+1. Emit the independent scale when present. Discover external nodes on the first visit to a flattened primitive card. Visit its terminals in written order, followed by its expanded behavioral expression in text order. In `v(p,n)`, discover `n` before `p`. The expression still evaluates to the voltage at `p` minus the voltage at `n`. Ground, repeated visits and `i(source)` take no external voltage slot.
+2. Apply the same rule inside each instance at the position of the X card. For example, the R22b subcircuit begins with an output terminal and a probe of `v(local,control)`, which yields `one, ctl, x1.local`. The CMG ring's first X card lists `a b`, while its first transistor uses the output before the input, giving `b, a`.
+3. Emit device-created columns by family, reverse first model use, then reverse instance order. In the R22c mixed probe the branch visits are B, H, L, E and V. A source can introduce its controlling branch during its own visit. Bearly introduces Vlate, then Hlate introduces Vearly. Subsequent visits reuse the branch. The mixed probe therefore ends in `blate, bearly, vlate, hlate, vearly, hearly, llate, learly, elate, eearly`. A voltage port's resistance node follows its current. Native MOS network nodes precede ordinary V branches, and VA internals follow them in the available captures.
+4. Across explicit save cards, emit the scale, ordinary vectors in first-request order, then device parameters in first-request order. Deduplicate repeated requests. With no shunt, both simulators diagnose the floating `ghost` node in `r22c_order_unshunted`. The 44.2 process exits 1 and produces no OP samples.
+
+A VALUE card emits its original E or G with unity gain, followed by a B voltage source driving `<name>_int1` relative to ground. In the operating-point capture the helpers measure 2 V and −3 mV, their branch currents are zero, and the E output supplies 1 mA. An expression-only node acquires an ordinary voltage unknown. The R22b deck ties it to ground through a 1 GΩ shunt and measures exactly 0 V. Both R22b parameter decks reject the voltage call at the declaration.
+
+The verifier checks the scale, vector count and every vector position before comparing samples. It keeps the existing raw-name conventions for device observables and special analysis quantities. The following 26 circuits had different vector sets before R22d.
+
+| Difference | Decks flagged by strict comparison |
+|---|---|
+| E/TABLE helper nodes and branches | `behavior_limiter`, `behavior_table_corners` |
+| Device-internal nodes | `b4_n_rnet`, `bjt_ce_amp`, `bjt_diffpair`, `diode_iv`, `diode_rectifier`, `diode_rectifier_gear`, `nmos_dc`, `r9_disto_diode` |
+| VA operator states | `cmg_inverter_tran`, `cmg_nmos_idvd`, `cmg_nmos_iv`, `cmg_pmos_iv`, `cmg_ring5` |
+| Device noise contributions | `b3_noise1`, `b3_noise2`, `noise_bjt_ce`, `noise_bsim4_cs`, `noise_bsim4_noic_default`, `noise_diode`, `noise_divider`, `noise_mos1_cs`, `r17_soi_noise` |
+| Sensitivity parameter coverage | `sens_divider`, `sens_rc_ac` |
+
+In the R22c cache, 236 of 280 reference plots have exactly the same ordered raw vector names, up from 108. All plots in 206 of 237 files match, up from 83, when also requiring the same plot inventory. Plots are paired by analysis and occurrence. Of the 44 differing reference plots, 40 differ in vector coverage and four differ only in the raw spelling of SP, TF or PZ quantities. The relative order of shared vectors matches in all 280 after applying the verifier's name conventions. `four_clipped` also emits a Fourier plot that the verifier derives from the cached transient. The after count uses fresh Sansho runs for 236 decks and the retained `modulated_sources.spx.raw` for the retired deck.
+
+### R22d cached results
+
+Three of the 237 cached reference files combine OP with another analysis.
+Both `bjt_ce_amp` and `rc_lowpass` declare OP, AC, TRAN and write AC, OP, TRAN.
+`diode_rectifier` declares and writes OP, TRAN. The separate R22c save probe
+declares OP, AC and writes AC, OP. Six DC-before-AC decks write AC first,
+including three that also write TRAN last. These observations rule out simple
+card order. No cached deck pairs DC with OP or reverses the OP/AC card pair.
+The R22d batch writer put AC first and TRAN last in consecutive groups of these
+four analyses and preserved ties between DC and OP. R22e resolves that tie below.
+The API retains analysis-card order.
+
+| Class | R22d result against 44.2 |
+|---|---|
+| E/TABLE, 2 decks | Both pass. The E uses a unity-gain output, a B branch drives the expression voltage at `etable_int2`, and an A PWL branch drives the smoothed value at `etable_int1`. All four added columns were checked at 61 DC and 3 AC samples in `behavior_limiter` and 81 DC samples in `behavior_table_corners`. Both helper currents match exactly. The largest helper voltage error is 0.556 mV at a rounded endpoint. |
+| Physical device internals, 8 decks | Raw export omits the classical diode anode, BJT access nodes, MOS1 access nodes and the two BSIM4 drain/source access nodes. They still participate in the MNA solve and an explicit save can select their solved voltages. The BSIM4 gate and three body-network voltages remain in the comparison. |
+| CMG, 5 decks | Raw export omits private analog-operator equations. The remaining external voltages, branch currents and physical VA internal voltages are compared at every reference sample. |
+| Noise, 9 decks | All nine cards omit the summary interval. The raw contains two spectra and two integrated totals. Each is checked across its full plot. The engine retains device contributions for measurements and contributor reports. R22e checks the subsequent positive-interval capture below. |
+| Sensitivity, 2 decks | `sens_divider` compares 15 of 53 columns, `sens_rc_ac` compares 19 of 54. Every new derivative passes. Only the existing AC R1 value difference is accepted. The exact ordered lists of missing reference vectors are in [sens_divider.cir](decks/sens_divider.cir) and [sens_rc_ac.cir](decks/sens_rc_ac.cir). |
+
+The remaining sensitivity fields are implicit passive model parameters, passive geometry,
+exponential temperature coefficients, voltage limits and source port/waveform parameters.
+The solver lacks bindings for this full parameter inventory. Each listed column must
+exist in the reference, be identically zero there and be absent from Sansho. A change
+to that inventory fails verification. Shared columns must retain their order and
+pass their value checks, apart from the annotated AC R1 discrepancy.
+
+The follow-ups distinguish competing branch lookups, the two permutations of
+OP/DC/AC/TRAN, positive-interval noise detail, and AC resistor observables.
+The R22c save header matches, but at 1 kHz 44.2 gives 0 for `@rfirst[i]`
+while Sansho gives the incremental resistor current of 2 mA. The bias probe
+varies phase, DC bias and save order to distinguish the observable definitions.
+
+```sh
+mkdir -p target/r22d
+for deck in verify/probes/r22d_order_*.cir; do
+    stem=$(basename "$deck" .cir)
+    SANSHO_NGSPICE_IMAGE=sansho-ngspice:latest tools/ngspice/ngspice.sh -b "$deck" -r "target/r22d/$stem.ng.raw" >"target/r22d/$stem.ng.log" 2>&1
+done
+```
+
+### R22e batch regressions
+
+The default strict suite includes all five R22d decks and the R22c 1 kHz
+save deck. Their six `.ref.raw` files in `verify/out` are byte copies of
+the original captures. The controls deck confirms that the first lookup
+introduces each controlling branch. After the node voltages, the branches
+appear as `blate, vc, vb, bfirst, va, vd, hcopy, la, ecopy`.
+
+Both R22d permutations write AC, DC transfer,
+operating point, then transient. The engine keeps the analyses in card
+order for sessions and measurements. Both permutations also emit a single
+1 kHz AC row for `.ac lin 2 1k 2k`. The R15 VBIC and R17b junction
+probe raws show the same start-only behavior at 1 MHz.
+
+The saved AC currents `i(@rfirst[i])` and `i(@rlast[i])` are both zero at
+100, 200 and 300 Hz. The source branches measure −j2 mA and −2 mA. At OP
+the two resistors carry 1 mA and 1.5 mA. The R22c save confirms zero for
+`i(@rfirst[i])` at 1 kHz. The batch projection emits those values while
+session queries retain the incremental device current.
+
+For noise interval 2 the spectrum contains 10 columns including frequency,
+at 100, 300 and 500 Hz. The integrated plot contains 16 RMS columns.
+Each diode and resistor source and each device sum has an output/input
+pair. The verifier checks the ordered vectors, quantities, frequencies
+and values with a relative tolerance of 1e−5 and a voltage floor of 1e−20.
+The largest relative errors are 2.19 ppm in the spectrum and 3.42 ppm in
+the integrated pairs. The resistor flicker columns are exactly zero.
+
+The 237 earlier reference files contain 280 plots and establish order
+within each multi-plot analysis.
+Noise density precedes integrated noise, PSS time precedes frequency, and
+distortion writes harmonic 2 then 3 or the sum, difference and third-order
+intermodulation products. No cached reference places these families, TF,
+sensitivity, PZ or SP beside another analysis family. Their relative slots
+remain in card order pending capture. The `four_clipped` and `meas_events`
+reference raws contain only transient data. Sansho appends its derived
+Fourier report after native plots and returns measurements as scalars.
+
+| Follow-up plot-order probes in `verify/probes` | Local oracle image |
+|---|---|
+| `r22e_plots_forward.cir`, `r22e_plots_reverse.cir` | `sansho-ngspice:latest` |
+| `r22e_plots_pss_forward.cir`, `r22e_plots_pss_reverse.cir` | `sansho-ngspice-pss:latest` |
+
+Each pair reverses the complete card sequence. Its two-point AC sweep spans
+700 Hz to 2.6 kHz to test the start-only rule at a different frequency ratio.
+The PSS pair includes a free-running LC tank. To capture with the installed images, run from the
+repository root. The local image check and explicit pull policy keep this offline.
+
+```sh
+mkdir -p target/r22e
+for deck in verify/probes/r22e_plots_*.cir; do
+    stem=$(basename "$deck" .cir)
+    case "$stem" in
+        *_pss_*) oracle=sansho-ngspice-pss:latest ;;
+        *) oracle=sansho-ngspice:latest ;;
+    esac
+    docker image inspect "$oracle" >/dev/null || break
+    if [ "$oracle" = sansho-ngspice-pss:latest ]; then
+        SANSHO_NGSPICE_IMAGE="$oracle" tools/ngspice/ngspice.sh -b "$deck" -r "target/r22e/$stem.ng.raw" >"target/r22e/$stem.ng.log" 2>&1
+    else
+        docker run --rm --pull=never --network none -e SPICE_ASCIIRAWFILE=1 -u "$(id -u):$(id -g)" -v "$PWD:$PWD" -w "$PWD" "$oracle" -b "$deck" -r "target/r22e/$stem.ng.raw" >"target/r22e/$stem.ng.log" 2>&1
+    fi
+done
+```
+
 ## Built-in BSIM4 and SKY130
 
 `verify/bsim4-decks` contains 22 PDK-independent level-54 decks. The eight decks in
@@ -139,7 +268,7 @@ The two simulators use independent streams. The mean tolerance is four estimated
 | `transformer_load.cir` | Loaded winding voltages and currents in AC and transient analysis |
 | `behavior_multiplier.cir` | Parameterized two-input multiplication under a DC sweep and two sinusoidal inputs |
 | `behavior_limiter.cir` | DC soft clipping, its incremental AC transconductance, and an E table/G value load away from table breakpoints |
-| `behavior_table_corners.cir` | KNOWN: E table with interior breakpoints; ngspice smooths the corners, Sansho interpolates linearly |
+| `behavior_table_corners.cir` | Smoothed end and interior breakpoints, helper voltages and both helper currents |
 | `switch_hold.cir` | With a 10 ns maximum step, two hold capacitors sampled by voltage and current controls with corresponding hysteresis thresholds |
 | `junction_temperature.cir` | Diode forward drop and BJT gain over a −20 to 100 °C sweep with model TNOM |
 | `temperature_instances.cir` | Diode and BJT branch currents with absolute instance temperatures and offsets from a 55 °C ambient |
@@ -175,9 +304,8 @@ to spectral density.
 
 The verifier strips one outer voltage or current wrapper on the noise,
 integrated noise, TF, sensitivity and pole-zero plots, case-insensitively
-on both sides. Sensitivity compares the intersection of parameter names.
-ngspice exports additional instance and model-parameter derivatives. An empty
-intersection fails. Poles and zeros are compared separately as complex
+on both sides. Sensitivity requires the ordered parameter inventory, with the
+two exact R22d coverage annotations described above. Poles and zeros are compared separately as complex
 multisets, preserving multiplicity. The one-to-one pairing minimizes the
 largest normalized complex distance using the deck's existing tolerances.
 

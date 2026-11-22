@@ -179,24 +179,53 @@ pub(super) fn noise(
     opts: &SimOptions,
     output: &Probe,
     source: &str,
+    detail: bool,
     freq: Vec<f64>,
 ) -> Result<Vec<AnalysisResult>, Diagnostic> {
     let out = port(c, output)?;
     let src = input(c, nl, source)?;
     let (x, ws, ctx) = linearize(c, opts, Mode::Noise)?;
     let mut generators = vec![];
+    let mut labels = vec![];
     for (group, slots) in c.groups.iter().zip(&ws.slots) {
         group.noise(&ctx, &x, slots, &mut generators)?;
+        if detail {
+            labels.resize(generators.len(), group.noise_components());
+        }
     }
-    let mut by_device = BTreeMap::new();
-    for g in &generators {
-        by_device.insert(g.device.clone(), 0);
+    let mut devices = BTreeMap::<&str, Vec<usize>>::new();
+    for (j, g) in generators.iter().enumerate() {
+        devices.entry(&g.device).or_default().push(j);
     }
-    for (i, idx) in by_device.values_mut().enumerate() {
-        *idx = i;
+    let mut devices: Vec<_> = devices.into_iter().collect();
+    if detail {
+        // Use the circuit's device visitation order for the summary header.
+        let order = crate::output_order::model_instances(nl);
+        devices.sort_by_key(|(name, _)| {
+            (
+                name.bytes().next(),
+                std::cmp::Reverse(order.get(name).copied()),
+            )
+        });
     }
-    let device_indices: Vec<_> = generators.iter().map(|g| by_device[&g.device]).collect();
-    let mut columns = vec![Vec::with_capacity(freq.len()); 2 + by_device.len()];
+    // Each trace sums independent generator powers. A listed but inactive
+    // component has an empty source list and contributes exactly zero.
+    let mut traces = Vec::new();
+    for (device, indices) in devices {
+        if detail {
+            for &label in labels[indices[0]] {
+                let sources = indices
+                    .iter()
+                    .copied()
+                    .filter(|&j| generators[j].component == Some(label))
+                    .collect();
+                traces.push((format!("_{device}_{label}"), sources));
+            }
+        }
+        traces.push((format!(".{device}"), indices));
+    }
+    let mut columns = vec![Vec::with_capacity(freq.len()); traces.len() + 2];
+    let mut powers = vec![0.; generators.len()];
     let mut totals = vec![[0.; 2]; generators.len()];
     let mut previous = vec![0.; generators.len()];
     let mut lu = SerialLu::new(&c.pattern).map_err(solver)?;
@@ -216,7 +245,6 @@ pub(super) fn noise(
                 "undefined input-referred noise at {f} Hz (zero or non-finite gain)"
             )));
         }
-        let mut powers = vec![0.; by_device.len()];
         for (j, g) in generators.iter().enumerate() {
             let transfer: c64 = g
                 .rows
@@ -231,7 +259,7 @@ pub(super) fn noise(
                     g.device
                 )));
             }
-            powers[device_indices[j]] += psd;
+            powers[j] = psd;
             if k > 0 {
                 let output_power = area(freq[k - 1], f, previous[j], psd);
                 totals[j][0] += output_power;
@@ -243,8 +271,8 @@ pub(super) fn noise(
         let sum = powers.iter().sum::<f64>();
         columns[0].push(sum.sqrt());
         columns[1].push((sum / gain).sqrt());
-        for (col, p) in columns[2..].iter_mut().zip(powers) {
-            col.push(p.sqrt());
+        for (col, (_, sources)) in columns[2..].iter_mut().zip(&traces) {
+            col.push(sources.iter().map(|&j| powers[j]).sum::<f64>().sqrt());
         }
     }
     let mut vars = vec![
@@ -258,8 +286,12 @@ pub(super) fn noise(
             },
         ),
     ];
-    for name in by_device.keys() {
-        vars.push(var(format!("onoise.{name}"), Quantity::VoltageDensity));
+    for (suffix, _) in &traces {
+        vars.push(var(format!("onoise{suffix}"), Quantity::VoltageDensity));
+    }
+    if detail {
+        vars.rotate_left(2);
+        columns.rotate_left(2);
     }
     let spectrum = AnalysisResult {
         events: Default::default(),
@@ -286,15 +318,19 @@ pub(super) fn noise(
             totals.iter().map(|v| v[1]).sum::<f64>().sqrt(),
         ),
     ];
-    let mut parts = vec![0.; by_device.len()];
-    for (&i, v) in device_indices.iter().zip(&totals) {
-        parts[i] += v[0];
-    }
-    for (name, i) in by_device {
+    let input_unit = values[1].0.quantity;
+    for (suffix, sources) in traces {
+        let rms = |side: usize| sources.iter().map(|&j| totals[j][side]).sum::<f64>().sqrt();
         values.push((
-            var(format!("onoise_total.{name}"), Quantity::Voltage),
-            parts[i].sqrt(),
+            var(format!("onoise_total{suffix}"), Quantity::Voltage),
+            rms(0),
         ));
+        if detail {
+            values.push((var(format!("inoise_total{suffix}"), input_unit), rms(1)));
+        }
+    }
+    if detail {
+        values.rotate_left(2);
     }
     Ok(vec![
         spectrum,
@@ -305,6 +341,10 @@ pub(super) fn noise(
 #[derive(Clone, Copy)]
 enum Parameter {
     Element(usize),
+    SourceMagnitude(usize),
+    SourcePhase(usize),
+    Multiplicity(usize),
+    Passive(usize, &'static str),
     Model(usize, usize),
     Instance(usize, usize),
     LineImpedance(usize),
@@ -342,6 +382,47 @@ impl Parameter {
 
     fn set(self, nl: &mut Netlist, v: f64) {
         match self {
+            Self::SourceMagnitude(i) | Self::SourcePhase(i) => {
+                if let ElementKind::VoltageSource { source, .. }
+                | ElementKind::CurrentSource { source, .. } = &mut nl.elements[i].kind
+                {
+                    if matches!(self, Self::SourceMagnitude(_)) {
+                        source.ac_mag = v;
+                    } else {
+                        source.ac_phase_deg = v;
+                    }
+                }
+            }
+            Self::Multiplicity(i) => match &mut nl.elements[i].kind {
+                ElementKind::Resistor {
+                    value,
+                    mult,
+                    params,
+                    ..
+                } => {
+                    let ratio = *mult / v;
+                    *value *= ratio;
+                    if let Some((_, ac)) = params.iter_mut().rfind(|(k, _)| k == "ac") {
+                        *ac *= ratio;
+                    }
+                    *mult = v;
+                }
+                ElementKind::Capacitor { value, params, .. } => {
+                    let old = params.iter().rfind(|(k, _)| k == "m").map_or(1., |p| p.1);
+                    *value *= v / old;
+                    set_passive(params, "m", v);
+                }
+                _ => {}
+            },
+            Self::Passive(i, key) => match &mut nl.elements[i].kind {
+                ElementKind::Resistor { params, mult, .. } if key == "ac" => {
+                    set_passive(params, key, v / *mult)
+                }
+                ElementKind::Resistor { params, .. } | ElementKind::Capacitor { params, .. } => {
+                    set_passive(params, key, v)
+                }
+                _ => {}
+            },
             Self::LineImpedance(i) => {
                 if let ElementKind::Line { z0, .. } = &mut nl.elements[i].kind {
                     *z0 = v;
@@ -367,9 +448,11 @@ impl Parameter {
                 _ => {}
             },
             Self::Element(i) => match &mut nl.elements[i].kind {
-                ElementKind::Resistor { value, .. }
-                | ElementKind::Capacitor { value, .. }
-                | ElementKind::Inductor { value, .. } => *value = v,
+                ElementKind::Resistor { value, mult, .. } => *value = v / *mult,
+                ElementKind::Capacitor { value, params, .. } => {
+                    *value = v * params.iter().rfind(|(k, _)| k == "m").map_or(1., |p| p.1)
+                }
+                ElementKind::Inductor { value, .. } => *value = v,
                 ElementKind::VoltageSource { source, .. }
                 | ElementKind::CurrentSource { source, .. } => source.dc = Some(v),
                 _ => {}
@@ -377,7 +460,16 @@ impl Parameter {
         }
     }
 }
-fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
+fn set_passive(params: &mut Vec<(String, f64)>, key: &str, v: f64) {
+    if let Some(p) = params.iter_mut().rfind(|(k, _)| k == key) {
+        p.1 = v;
+    } else {
+        params.push((key.into(), v));
+    }
+}
+
+type SensParameters = (Netlist, Vec<(String, Parameter, f64)>);
+fn parameters(nl: &Netlist, ac: bool) -> Result<SensParameters, Diagnostic> {
     let mut nominal = nl.clone();
     let mut params = vec![];
     let (options, _) = crate::SimOptions::from_cards(&nl.options);
@@ -487,7 +579,92 @@ fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
             | ElementKind::CurrentSource { source, .. } => sansho_devices::dc_value(source),
             _ => continue,
         };
-        params.push((e.name.clone(), Parameter::Element(i), value));
+        let written = match &e.kind {
+            ElementKind::Resistor { mult, .. } => value * mult,
+            ElementKind::Capacitor { params, .. } => {
+                value / params.iter().rfind(|(k, _)| k == "m").map_or(1., |p| p.1)
+            }
+            _ => value,
+        };
+        params.push((e.name.clone(), Parameter::Element(i), written));
+        match &e.kind {
+            ElementKind::Resistor {
+                params: fields,
+                model,
+                ..
+            }
+            | ElementKind::Capacitor {
+                params: fields,
+                model,
+                ..
+            } => {
+                let get = |key: &str| fields.iter().rfind(|(k, _)| k == key).map(|p| p.1);
+                let mult = if let ElementKind::Resistor { mult, .. } = e.kind {
+                    mult
+                } else {
+                    get("m").unwrap_or(1.)
+                };
+                let resistor = matches!(e.kind, ElementKind::Resistor { .. });
+                let model = model
+                    .as_ref()
+                    .and_then(|id| nl.models.iter().find(|m| m.name == *id));
+                if ac && resistor {
+                    let resistance = get("ac").unwrap_or(crate::circuit::passive_value(
+                        value, fields, model, &options,
+                    )?);
+                    params.push((
+                        format!("{}_ac", e.name),
+                        Parameter::Passive(i, "ac"),
+                        resistance * mult,
+                    ));
+                }
+                let mut field = |key: &'static str, suffix, default| {
+                    params.push((
+                        format!("{}_{suffix}", e.name),
+                        Parameter::Passive(i, key),
+                        get(key).unwrap_or(default),
+                    ));
+                };
+                if !resistor {
+                    field("ic", "ic", 0.);
+                }
+                field("temp", "temp", options.temp + get("dtemp").unwrap_or(0.));
+                field("dtemp", "dtemp", 0.);
+                params.push((format!("{}_m", e.name), Parameter::Multiplicity(i), mult));
+                for (key, suffix) in [("tc1", if resistor { "tc" } else { "tc1" }), ("tc2", "tc2")]
+                {
+                    let inherited = model
+                        .and_then(|m| m.params.iter().rfind(|(k, _)| k == key))
+                        .map_or(0., |p| p.1);
+                    params.push((
+                        format!("{}_{suffix}", e.name),
+                        Parameter::Passive(i, key),
+                        get(key).unwrap_or(inherited),
+                    ));
+                }
+                params.push((
+                    format!("{}_scale", e.name),
+                    Parameter::Passive(i, "scale"),
+                    get("scale").unwrap_or(1.),
+                ));
+            }
+            ElementKind::VoltageSource { source, .. }
+            | ElementKind::CurrentSource { source, .. }
+                if ac && source.ac_mag != 0. =>
+            {
+                params.push((
+                    format!("{}_acmag", e.name),
+                    Parameter::SourceMagnitude(i),
+                    source.ac_mag,
+                ));
+                params.push((
+                    format!("{}_acphase", e.name),
+                    Parameter::SourcePhase(i),
+                    source.ac_phase_deg,
+                ));
+            }
+            _ => {}
+        }
     }
     for (i, m) in nominal.models.iter_mut().enumerate() {
         let level = m
@@ -623,7 +800,7 @@ fn parameters(nl: &Netlist) -> (Netlist, Vec<(String, Parameter, f64)>) {
             }
         }
     }
-    (nominal, params)
+    Ok((nominal, params))
 }
 fn bind(deck: &Netlist, c: &Circuit, opts: &SimOptions) -> Result<Circuit, Diagnostic> {
     let (other, _) =
@@ -641,6 +818,14 @@ fn bind(deck: &Netlist, c: &Circuit, opts: &SimOptions) -> Result<Circuit, Diagn
     }
     Ok(other)
 }
+// The raw header classifies a sensitivity by the numerator of the derivative.
+fn sensitivity_quantity(output: &Probe) -> Quantity {
+    match output {
+        Probe::Voltage(..) => Quantity::Voltage,
+        Probe::Current(_) => Quantity::Current,
+    }
+}
+
 pub(super) fn sens(
     c: &Circuit,
     nl: &Netlist,
@@ -652,7 +837,7 @@ pub(super) fn sens(
     let mut adj = vec![0.; c.dim()];
     inject(&mut adj, out);
     dc_lu(c, &ws)?.solve_transpose(&mut adj).map_err(solver)?;
-    let (nominal, params) = parameters(nl);
+    let (nominal, params) = parameters(nl, false)?;
     let evaluate = |deck: &Netlist| {
         let other = bind(deck, c, opts)?;
         let mut w = Workspace::new(&other);
@@ -687,7 +872,7 @@ pub(super) fn sens(
         if !value.is_finite() {
             return Err(error(format!("non-finite sensitivity for {name}")));
         }
-        values.push((var(name, Quantity::Scalar), value));
+        values.push((var(name, sensitivity_quantity(output)), value));
     }
     Ok(scalars(AnalysisKind::Sens, values))
 }
@@ -803,7 +988,7 @@ pub(super) fn ac_sens(
             .map_err(solver)?;
         states.push((forward, adjoint));
     }
-    let (nominal, params) = parameters(nl);
+    let (nominal, params) = parameters(nl, true)?;
     let mut variables = vec![];
     let mut columns = vec![];
     for (name, param, value) in params {
@@ -818,10 +1003,11 @@ pub(super) fn ac_sens(
                 std::mem::take(&mut ws.asm.g),
                 std::mem::take(&mut ws.asm.c),
                 delayed,
+                crate::analysis::ac_rhs(&other),
             ))
         };
-        let (g1, c1, d1) = sample(upper)?;
-        let (g0, c0, d0) = sample(lower)?;
+        let (g1, c1, d1, b1) = sample(upper)?;
+        let (g0, c0, d0, b0) = sample(lower)?;
         let dp = upper - lower;
         let mut column = Vec::with_capacity(freq.len());
         for (&f, (forward, adjoint)) in freq.iter().zip(&states) {
@@ -834,7 +1020,11 @@ pub(super) fn ac_sens(
                     stamp.apply(omega, sign, &mut matrix);
                 }
             }
-            let mut delta = c64::default();
+            let mut delta: c64 = adjoint
+                .iter()
+                .zip(b1.iter().zip(&b0))
+                .map(|(&z, (&p, &m))| z * (p - m))
+                .sum();
             for (j, &u) in forward.iter().enumerate() {
                 let range = c.pattern.col_ptr()[j]..c.pattern.col_ptr()[j + 1];
                 for (&row, &entry) in c.pattern.row_idx()[range.clone()]
@@ -852,7 +1042,7 @@ pub(super) fn ac_sens(
             }
             column.push((derivative.re, derivative.im));
         }
-        variables.push(var(name, Quantity::Scalar));
+        variables.push(var(name, sensitivity_quantity(output)));
         columns.push(column);
     }
     Ok(AnalysisResult {
