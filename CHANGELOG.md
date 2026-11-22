@@ -4,7 +4,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
-- Schedule Monte Carlo runs dynamically, one serial run per worker, instead of in fixed windows. Circuits with 256 or more nonlinear devices no longer fall back to two concurrent runs. A 402-transistor BSIM4 ring runs 9.7 times faster with 32 workers, and the results are unchanged. [Scheduling](docs/architecture.md)
+- Schedule Monte Carlo runs dynamically, one serial run per worker, instead of in fixed windows. Circuits with 256 or more nonlinear devices no longer fall back to two concurrent runs. BSIM3/BSIM4 bindings are also shared between Monte Carlo instances whose expression-bound cards are identical, instead of being prepared once per instance. A 402-transistor BSIM4 ring runs 10.9 times faster with 32 workers and 1.24 times faster serially, and the results are unchanged. [Scheduling](docs/architecture.md)
 
 - Add an experimental mixed-precision real solver (`SANSHO_REAL_SOLVER=mixed`). It uses single-precision LU with double-precision iterative refinement and falls back to double factors whenever refinement does not reach double accuracy. [Measurements](docs/architecture.md)
 

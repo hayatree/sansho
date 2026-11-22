@@ -1538,6 +1538,8 @@ fn native_groups<'a>(
     let mut sois = Chunked::<sansho_devices::bsimsoi::Sois>::new(CHUNK_NONLINEAR);
     let mut bsim3 = Chunked::<Bsim3s>::new(CHUNK_NONLINEAR);
     let mut compact_models = HashMap::<_, PreparedMos>::new();
+    let mut card_names = HashMap::<&str, usize>::new();
+    let mut card_contents = HashMap::<_, usize>::new();
     let mut bsim4 = Chunked::<Bsim4s>::new(CHUNK_NONLINEAR);
     let mut model_cache = ModelCache::new(&nl.models);
     let mut controlled: Groups = Vec::new();
@@ -2529,8 +2531,27 @@ fn native_groups<'a>(
                 {
                     // Temperature, scale and geometry defaults are fixed for this compile.
                     // Preserve parameter order (later aliases/duplicates can override).
+                    // Monte Carlo gives each expression-bound instance a private
+                    // card name, so identical cards are matched by content.
+                    let card_id = match card_names.get(model.as_str()) {
+                        Some(&id) => id,
+                        None => {
+                            let content = (
+                                card.kind.as_str(),
+                                card.version.as_deref(),
+                                card.params
+                                    .iter()
+                                    .map(|(k, v)| (k.as_str(), v.to_bits()))
+                                    .collect::<Vec<_>>(),
+                            );
+                            let next = card_contents.len();
+                            let id = *card_contents.entry(content).or_insert(next);
+                            card_names.insert(model.as_str(), id);
+                            id
+                        }
+                    };
                     let key = (
-                        model.as_str(),
+                        card_id,
                         params
                             .iter()
                             .map(|(k, v)| (k.as_str(), v.to_bits()))
