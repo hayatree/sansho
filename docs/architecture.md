@@ -370,6 +370,21 @@ An unavailable transversal or an activated entry above the block diagonal
 selects unblocked LU. Large linear jobs reuse numeric factors when every
 assembled Jacobian entry matches the previous factorization bit for bit.
 
+`mixed` (experimental) factors each Newton matrix in single precision and refines
+every solve with double-precision residuals. A solve is accepted when the
+componentwise backward error max|b − Ax| / (|A||x| + |b|) is at most 8 ε₆₄.
+Otherwise, or when the single-precision factorization fails, the same matrix is
+factored in double precision. Later factorizations then skip the single-precision
+attempt 1, 3, 7, …, 63 times. Accuracy therefore never rests on the
+low-precision factors. All 148 ngspice comparison decks pass with `mixed`. In
+those runs 94 % of solves refined (1.4 steps on average) and 6 % fell back. The
+large benchmarks are too ill-conditioned for single-precision factors (roughly
+cond(A) > 1e7). The 300 × 300 RC mesh and the MOS1 16-bit multiplier fall back on
+nearly every solve and run about 4 % slower than `newton`. `SANSHO_PROFILE_MIXED=1`
+prints the refinement counters. A batched GPU factorization would be the
+setting where single-precision factors pay off. On the CPU the backend is kept as a
+measurement tool.
+
 ---
 
 ## 7. Agent-native design

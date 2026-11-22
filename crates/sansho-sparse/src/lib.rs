@@ -16,7 +16,7 @@ mod pattern;
 mod qz;
 mod refactor;
 mod serial;
-pub use refactor::NewtonLu;
+pub use refactor::{MixedStats, NewtonLu};
 
 pub use complex::Complex64 as c64;
 pub use ordering::BatchOrdering;
@@ -51,6 +51,19 @@ impl Scalar for f64 {
     type Cell = btf::Value;
     fn magnitude(self) -> f64 {
         self.abs()
+    }
+    fn zero() -> Self {
+        0.0
+    }
+    fn is_finite_value(self) -> bool {
+        self.is_finite()
+    }
+}
+
+impl Scalar for f32 {
+    type Cell = btf::Value32;
+    fn magnitude(self) -> f64 {
+        f64::from(self.abs())
     }
     fn zero() -> Self {
         0.0

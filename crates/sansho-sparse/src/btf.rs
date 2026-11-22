@@ -16,7 +16,7 @@ mod schedule;
 
 const LARGE_BLOCK: usize = 2048;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Disjoint task-owned factor entries. Relaxed loads and stores let the
 /// scheduler borrow the arrays safely. Rayon joins publish completed lanes.
@@ -48,6 +48,28 @@ impl FactorValue<c64> for [Value; 2] {
     fn set(&self, v: c64) {
         self[0].set(v.re);
         self[1].set(v.im);
+    }
+}
+
+/// Single-precision factor entry for mixed-precision refinement.
+#[derive(Debug, Default)]
+pub struct Value32(AtomicU32);
+
+impl FactorValue<f32> for Value32 {
+    fn new(v: f32) -> Self {
+        Self(AtomicU32::new(v.to_bits()))
+    }
+    fn store_exclusive(&mut self, v: f32) {
+        *self.0.get_mut() = v.to_bits();
+    }
+    fn load_exclusive(&mut self) -> f32 {
+        f32::from_bits(*self.0.get_mut())
+    }
+    fn get(&self) -> f32 {
+        f32::from_bits(self.0.load(Ordering::Relaxed))
+    }
+    fn set(&self, v: f32) {
+        self.0.store(v.to_bits(), Ordering::Relaxed);
     }
 }
 

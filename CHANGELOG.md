@@ -4,6 +4,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Add an experimental mixed-precision real solver (`SANSHO_REAL_SOLVER=mixed`). It uses single-precision LU with double-precision iterative refinement and falls back to double factors whenever refinement does not reach double accuracy. [Measurements](docs/architecture.md)
+
 - Add an optional CUDA batch for Monte Carlo (`sansho mc --gpu`, build feature `gpu`). Each run keeps its CPU Newton and step control; diode evaluations of all concurrent runs share one kernel launch, with results independent of the lane count. An experimental `--gpu-jacobian f32` uses single-precision derivatives inside Newton iterations only. [Design and measurements](docs/architecture.md#82-g1-gpu-batch-sansho-gpu-feature-gpu)
 
 - Add two-dimensional NUMD/NBJT and four-terminal NUMOS with silicon/oxide meshes, electrodes, surface mobility and interface charge. Eight acceptance circuits cover diode C–V, NPN characteristics, MOS transfer/output, gate AC and a loaded inverter transient. [Geometry, analytic checks and open calibration choices](docs/cider.md#two-dimensional-devices)

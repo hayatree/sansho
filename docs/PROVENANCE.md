@@ -484,3 +484,11 @@ single-precision Jacobian is inexact Newton: J. E. Dennis and R. B. Schnabel,
 not the fixed point. NVIDIA's CUDA C++ Programming Guide and NVRTC documentation
 define the kernel language and run-time compilation. No GPU circuit-simulator
 source was consulted.
+
+The experimental mixed-precision Newton solver (`SANSHO_REAL_SOLVER=mixed`) is
+classical iterative refinement: J. H. Wilkinson, *Rounding Errors in Algebraic
+Processes* (1963), C. B. Moler, J. ACM 14(2), 1967, and N. J. Higham, *Accuracy and
+Stability of Numerical Algorithms*, 2nd ed., §12. The stopping test is the
+Oettli–Prager componentwise backward error (Numer. Math. 6, 1964). The
+single-precision factors reuse Sansho's own Gilbert–Peierls kernel through a new
+`f32` scalar.
