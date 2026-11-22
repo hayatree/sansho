@@ -20,6 +20,7 @@ pub(super) struct Profile {
     probes: u64,
     pub(super) shared: u64,
     pub(super) approximate: u64,
+    pub(super) charge_bypass: u64,
     pub(super) scalar_time: Duration,
     intrinsic: Duration,
     primal: Duration,
@@ -98,6 +99,7 @@ impl CoreCache {
             total.scalar += p.scalar;
             total.probes += p.probes;
             total.approximate += p.approximate;
+            total.charge_bypass += p.charge_bypass;
             total.shared += p.shared;
             total.scalar_time += p.scalar_time;
             total.intrinsic += p.intrinsic;
@@ -110,14 +112,15 @@ impl CoreCache {
         }
         writeln!(
             out,
-            "sansho-bsim4 visits={} evaluations={} charge_visits={} scalar_evaluations={} probes={} shared={} bypass={}",
+            "sansho-bsim4 visits={} evaluations={} charge_visits={} scalar_evaluations={} probes={} shared={} bypass={} charge_bypass={}",
             total.visits,
             total.full,
             total.samples,
             total.scalar,
             total.probes,
             total.shared,
-            total.approximate
+            total.approximate,
+            total.charge_bypass
         )?;
         let ns = |d: Duration| d.as_secs_f64() * 1e9 / (total.probes.max(1) as f64);
         writeln!(

@@ -836,6 +836,7 @@ impl DeviceGroup for Mos1s {
         st: &mut StateRef<'_>,
         out: &mut Slots,
         _: &mut crate::bsim4::CoreCache,
+        _: f64,
     ) -> bool {
         // The converged charge and Meyer history depend only on voltage and
         // the accepted state. Temperature and gmin enter the IV equations.
@@ -1285,7 +1286,8 @@ mod tests {
                         current: &mut b
                     },
                     &mut sample,
-                    &mut Default::default()
+                    &mut Default::default(),
+                    0.
                 ));
                 assert_eq!(a.map(f64::to_bits), b.map(f64::to_bits));
                 assert!(

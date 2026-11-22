@@ -28,19 +28,31 @@ impl Stamp {
         out.g[at.g..at.g + 16].copy_from_slice(self.g.as_flattened());
         out.c[at.c..at.c + 16].copy_from_slice(self.c.as_flattened());
         let mut f = self.f;
-        let mut q = self.q;
         if self.act.map(f64::to_bits) != act.map(f64::to_bits) {
             let dv = std::array::from_fn::<_, 4, _>(|k| act[k] - self.act[k]);
-            for i in 0..4 {
+            for (i, row) in self.g.iter().enumerate() {
                 for (k, &delta) in dv.iter().enumerate() {
-                    f[i] += self.g[i][k] * delta;
-                    q[i] += self.c[i][k] * delta;
+                    f[i] += row[k] * delta;
                 }
             }
         }
         out.f[at.f..at.f + 4].copy_from_slice(&f);
-        out.q[at.q..at.q + 4].copy_from_slice(&q);
-        out.q[at.q + 4..at.q + 16].copy_from_slice(&self.parts);
+        self.write_charges(act, &mut out.q[at.q..at.q + 16]);
+    }
+
+    /// Terminal charges expanded to `act`, then the twelve component charges.
+    fn write_charges(&self, act: [f64; 4], out: &mut [f64]) {
+        let mut q = self.q;
+        if self.act.map(f64::to_bits) != act.map(f64::to_bits) {
+            let dv = std::array::from_fn::<_, 4, _>(|k| act[k] - self.act[k]);
+            for (i, row) in self.c.iter().enumerate() {
+                for (k, &delta) in dv.iter().enumerate() {
+                    q[i] += row[k] * delta;
+                }
+            }
+        }
+        out[..4].copy_from_slice(&q);
+        out[4..].copy_from_slice(&self.parts);
     }
 }
 
@@ -226,6 +238,7 @@ impl Batch {
         state: &mut StateRef<'_>,
         out: &mut Slots,
         cache: &mut Cache,
+        tolerance: f64,
     ) {
         if let Some(p) = &mut cache.profile {
             p.samples += self.nodes.len() as u64;
@@ -244,6 +257,24 @@ impl Batch {
             let m = &self.models[model].size;
             let [d, g, s, b] = act;
             *history = [g - s, d - s, b - s, b - d, b - s].map(|v| v * m.sign);
+            let offset = self.offsets(index).q;
+            // Newton bypass accuracy: a first-order expansion of the terminal
+            // charges from the last linearization when every terminal is within
+            // `tolerance`. The component charges for LTE are reused as they are.
+            if tolerance > 0.
+                && let Some(stamp) = cache.last.get(index).and_then(Option::as_ref)
+                && stamp
+                    .act
+                    .iter()
+                    .zip(act)
+                    .all(|(&a, v)| (a - v).abs() <= tolerance)
+            {
+                if let Some(p) = &mut cache.profile {
+                    p.charge_bypass += 1;
+                }
+                stamp.write_charges(act, &mut out.q[offset..offset + 16]);
+                continue;
+            }
             let bits = act.map(f64::to_bits);
             let entry = &mut cache.charges[slot(bits)];
             if !entry
@@ -263,7 +294,6 @@ impl Batch {
                 }
                 ChargeSample { model, bits, parts }
             });
-            let offset = self.offsets(index).q;
             write_charges(&mut out.q[offset..offset + 16], &s.parts);
         }
     }

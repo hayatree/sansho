@@ -757,14 +757,17 @@ pub trait DeviceGroup: std::any::Any + Send + Sync + std::fmt::Debug {
         self.eval(ctx, x, state, out);
     }
 
-    /// Optionally sample exact transient charges and advance limiter history at an
+    /// Optionally sample transient charges and advance limiter history at an
     /// unlimited solution. Return false to request full device evaluation.
+    /// A positive `tolerance` (V) permits a first-order expansion from a Newton
+    /// linearization whose terminal voltages all lie within it.
     fn sample_charges(
         &self,
         _x: &[f64],
         _state: &mut StateRef<'_>,
         _out: &mut Slots,
         _cache: &mut bsim4::CoreCache,
+        _tolerance: f64,
     ) -> bool {
         false
     }

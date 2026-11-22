@@ -575,9 +575,10 @@ impl DeviceGroup for Bsim4s {
         state: &mut StateRef<'_>,
         out: &mut Slots,
         cache: &mut CoreCache,
+        tolerance: f64,
     ) -> bool {
         if let Some(batch) = &self.compact {
-            batch.sample_terminals(x, state, out, &mut cache.terminal);
+            batch.sample_terminals(x, state, out, &mut cache.terminal, tolerance);
         }
         self.compact.is_some()
     }

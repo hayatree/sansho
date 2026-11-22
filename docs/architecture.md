@@ -232,8 +232,9 @@ signal projection. [Analysis algorithms and limits](analyses.md)
 - A BSIM4 chunk without internal resistive nodes combines intrinsic, overlap and
   junction contributions into a four-terminal MNA stamp. It checks the limiters
   before reuse, and compares the junction `gmin` with the anchor. The chunk
-  preserves all twelve component charges for LTE. Exact scalar charge sampling
-  at the converged voltages also updates the five limiter histories before commit.
+  preserves all twelve component charges for LTE. Scalar charge sampling at the
+  converged voltages also updates the five limiter histories before commit. With
+  `bypass=1` it expands the last linearization when every terminal is within `vntol`.
   Chunks with internal nodes keep their separate network stamps and evaluate
   overlap and junctions on every visit. Gate resistance modes 2 and 3 evaluate
   the full intrinsic model.

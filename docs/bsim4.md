@@ -30,7 +30,13 @@ Currents and charges receive the first-order correction at the current iterate.
 The combined stamp additionally requires unchanged `gmin`, completed limiting
 and ordinary bias initialization. Cross-instance sharing requires identical
 model bindings and voltage bits. `.options bypass=0` selects exact-bias reuse.
-The converged charge sample always uses the actual voltages. The M5-3 benchmarks
+The converged charge sample applies the same rule: when all four terminals lie
+within `vntol` of the instance's last linearization, the terminal charges receive
+the first-order correction and the twelve LTE component charges are reused.
+Otherwise, and always with `bypass=0`, it evaluates the charges at the actual
+voltages. In the 51-stage ring benchmark 98% of the samples take the expansion.
+Across the ngspice comparison suites, only three BSIM4 transient waveforms change,
+by at most 1.7e-10 of their range. The M5-3 benchmarks
 measure the accuracy and work counts for both bypass settings. [Performance measurements](performance.md#m5-3-single-worker-bsim4)
 
 ## Equation coverage

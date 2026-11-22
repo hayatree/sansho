@@ -338,7 +338,13 @@ fn assemble_for(
         let mut state = StateRef { accepted, current };
         if matches!(request, Assembly::Charges(_))
             && s.initial_conditions.is_empty()
-            && group.sample_charges(x, &mut state, s, cache)
+            && group.sample_charges(
+                x,
+                &mut state,
+                s,
+                cache,
+                if opts.bypass { opts.vntol } else { 0. },
+            )
         {
             return;
         }
