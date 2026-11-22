@@ -1,0 +1,74 @@
+Omitted and explicit hole surface transport in a p-channel device
+* Provenance: original Sansho fixture, ngspice 44 manual chapter 26.
+* sweep: hole_mus 120 240 480
+.param probe=120
+Vg g 0 dc -0.9 ac 1
+Vomitted omitted 0 -0.05
+Momitted omitted g 0 0 momitted
+.model momitted numos
++ options mosfet defw=5u
++ x.mesh loc=0 n=1
++ x.mesh loc=0.4 n=3
++ x.mesh loc=2.4 n=13
++ x.mesh loc=2.8 n=15
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.002 n=3
++ y.mesh loc=0.008 n=4
++ y.mesh loc=0.022 n=5
++ y.mesh loc=0.052 n=6
++ y.mesh loc=0.12 n=7
++ y.mesh loc=0.28 n=8
++ y.mesh loc=0.65 n=10
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.l=15 iy.l=2 iy.h=7
++ electrode num=2 iy.h=1
++ electrode num=3 ix.h=1 iy.l=2 iy.h=7
++ electrode num=4 iy.l=10
++ contact num=2 workf=4.7258
++ doping uniform n.type conc=1e16 domains=1
++ doping uniform p.type conc=1e18 x.h=0.39 y.l=0 y.h=0.12 domains=1
++ doping uniform p.type conc=1e18 x.l=2.41 y.l=0 y.h=0.12 domains=1
++ interface domain=1 neighbor=2 layer.width=0.04
++ models surfmob transmob fieldmob
++ end
+Vexplicit explicit 0 -0.05
+Mexplicit explicit g 0 0 mexplicit
+.model mexplicit numos
++ options mosfet defw=5u
++ x.mesh loc=0 n=1
++ x.mesh loc=0.4 n=3
++ x.mesh loc=2.4 n=13
++ x.mesh loc=2.8 n=15
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=2
++ y.mesh loc=0.002 n=3
++ y.mesh loc=0.008 n=4
++ y.mesh loc=0.022 n=5
++ y.mesh loc=0.052 n=6
++ y.mesh loc=0.12 n=7
++ y.mesh loc=0.28 n=8
++ y.mesh loc=0.65 n=10
++ region num=1 mat=1 y.l=0
++ region num=2 mat=2 y.h=0
++ material num=1 silicon
++ material num=2 oxide
++ electrode num=1 ix.l=15 iy.l=2 iy.h=7
++ electrode num=2 iy.h=1
++ electrode num=3 ix.h=1 iy.l=2 iy.h=7
++ electrode num=4 iy.l=10
++ contact num=2 workf=4.7258
++ doping uniform n.type conc=1e16 domains=1
++ doping uniform p.type conc=1e18 x.h=0.39 y.l=0 y.h=0.12 domains=1
++ doping uniform p.type conc=1e18 x.l=2.41 y.l=0 y.h=0.12 domains=1
++ interface domain=1 neighbor=2 layer.width=0.04
++ models surfmob transmob fieldmob
++ mobility mat=1 hole mus={probe} ec.a=3.257329e5 ec.b=1e30
++ end
+.options itl1=150 itl2=100
+.dc Vg -0.4 -1.2 -0.1
+.save i(vomitted) i(vexplicit)
+.end

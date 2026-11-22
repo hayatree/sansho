@@ -1,0 +1,11 @@
+JFET2 HFGAM complex admittance
+* Provenance: original Sansho R14 circuit.
+* sweep: hfgam 0 .012 .03
+.param probe=0
+Vd d 0 1.8 ac 1
+Vg g 0 -.6
+J1 d g 0 dev
+.model dev njf(level=2 beta=0.7m vto=-1.6 cgs=4p cgd=1p taug=10n hfgam={probe})
+.ac dec 6 1k 10g
+.save i(Vd) i(Vg)
+.end

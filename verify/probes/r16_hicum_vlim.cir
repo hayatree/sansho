@@ -1,0 +1,11 @@
+Velocity saturation dependence of the current knee
+* Provenance: original Sansho R16 circuit.
+* sweep: vlim .2 .5 1
+.param probe=.2
+Vc c 0 1
+Vb b 0 .79
+Q1 c b 0 0 dev
+.model dev npn(level=8 vlim={probe} t0=2p tef0=10p)
+.dc Vc -.05 2 .025
+.save i(Vc) i(Vb)
+.end

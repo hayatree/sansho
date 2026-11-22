@@ -1,0 +1,12 @@
+JFET2 CGD capacitance at unequal end biases
+* Provenance: original Sansho R14 circuit.
+* sweep: cgd 0 1p 3p
+.param probe=0
+Vg g 0 .45 ac 1
+Vd d 0 1.8
+Vs s 0 0
+J1 d g s core
+.model core njf(level=2 cgs=3p vbi=1 fc=.5 cgd={probe} is=1e-18)
+.ac dec 5 1meg 100meg
+.save i(Vg) i(Vd) i(Vs)
+.end

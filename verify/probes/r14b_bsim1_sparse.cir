@@ -1,0 +1,11 @@
+BSIM1 sparse-card output with independently varied gate voltage
+* Provenance: original Sansho R14b circuit.
+* sweep: vgs .2 1.2 2.4
+.param probe=1.2
+Vd d 0 1
+Vg g 0 {probe}
+M1 d g 0 0 core l=1u w=4u
+.model core nmos(level=4 phi=.7 tox=.025 vfb=-.5 k1=.5 muz=450)
+.dc Vd 0 4 .025
+.save i(Vd)
+.end

@@ -1,3 +1,4 @@
 * ngspice settings for the SkyWater SKY130 libraries (reference runs only).
+* Provenance: original Sansho verification fixture.
 set ngbehavior=hsa
 set ng_nomodcheck

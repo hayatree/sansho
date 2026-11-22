@@ -1,0 +1,11 @@
+Temperature mapping of TAVC
+* Provenance: original Sansho R15 circuit.
+* sweep: tavc -.002 0 .002
+.param probe=-.002
+Vc c 0 6
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=2e-18 iben=2e-13 nen=2 tnom=20 avc1=.05 avc2=3 tavc={probe})
+.dc temp -20 100 10
+.save i(Vc) i(Vb)
+.end

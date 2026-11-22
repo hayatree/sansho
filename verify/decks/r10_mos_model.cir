@@ -1,0 +1,15 @@
+R10 change the threshold of a long-channel device
+* Provenance: original Sansho R10 circuit.
+Vg gate 0 2
+Vd drain 0 1
+M1 drain gate 0 0 core l=2u w=10u
+.model core nmos(level=1 vto=.4 kp=100u)
+.control
+foreach vt 0.4 0.8
+  altermod core vto = $vt
+  dc vg 0 2 .25
+  meas dc supply find i(vd) at=2
+end
+quit
+.endc
+.end

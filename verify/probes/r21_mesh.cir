@@ -1,0 +1,25 @@
+R21 mesh probe
+* Provenance: original Sansho fixture, ngspice 44 manual chapter 26.
+* sweep: height_nodes 2 4 8
+.param probe=2
+Vbias a 0 dc -0.15 ac 1
+Djunction a 0 pn
+.model pn numd level=2
++ options diode defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=32
++ y.mesh loc=0 n=1
++ y.mesh loc=1 n={probe}
++ region num=1 mat=1
++ material num=1 silicon tn=2n tp=3n
++ electrode num=1 ix.h=1
++ electrode num=2 ix.l=32
++ doping uniform p.type conc=1e16
++ doping uniform n.type conc=2e16 x.low=1.2
++ models srh
++ method ac.analysis=direct
++ end
+.options itl1=150 itl2=100
+.ac lin 1 100k 100k
+.save i(vbias)
+.end

@@ -1,0 +1,13 @@
+External thermal path when internal heating is switched
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: shmod 0 1
+.param probe=0
+Vd d 0 0.95
+Vg g 0 pulse(.25 1.15 1u 100n 100n 14u 40u)
+Ve e 0 0
+Renv tj 0 50k
+M1 d g 0 e tj dev l=.48u w=2.4u tnodeout
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 shmod={probe} rth0=.036 cth0=.00012 isdif=.02)
+.tran .4u 35u
+.save v(tj) i(Vd)
+.end

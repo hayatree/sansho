@@ -1,0 +1,11 @@
+Depletion charge versus junction temperature
+* Provenance: original Sansho R15 circuit.
+* sweep: junction_temp -20 27 85
+.param probe=-20
+Vc c 0 2
+Vb b 0 .1 ac 1
+Q1 c b 0 dev temp={probe}
+.model dev npn(level=4 cje=8p cjc=4p pe=.8 pc=.7 me=.45 mc=.35)
+.ac dec 8 100k 10G
+.save i(Vc) i(Vb)
+.end

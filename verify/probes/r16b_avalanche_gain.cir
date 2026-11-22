@@ -1,0 +1,15 @@
+Compare base admittance with and without avalanche at three BC capacitances
+* Provenance: original Sansho R16b black-box experiment.
+* sweep: avalanche_gain 5f 15f 30f
+.param probe=5f
+Vc c 0 1
+Vb b 0 .76 ac 1
+Von b bon 0
+Voff b boff 0
+Qon c bon 0 0 onmod
+Qoff c boff 0 0 offmod
+.model onmod npn(level=8 favl=.05 qavl=2f cjci0={probe})
+.model offmod npn(level=8 favl=0 qavl=2f cjci0={probe})
+.ac lin 1 1 1
+.save i(Von) i(Voff)
+.end

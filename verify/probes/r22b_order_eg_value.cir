@@ -1,0 +1,16 @@
+Behavioral voltage and current sources written with value=
+* Provenance: original Sansho node-order probe for R22b.
+* Assume user node order eo, en, z, a, go, gn, y, middle.
+* Report any extra vectors from ngspice's expansion of E/G cards.
+Efirst eo en value={v(z,a)}
+Gnext go gn value={1m*v(y,z)}
+Ren en 0 1k
+Reo eo 0 1k
+Rgn gn 0 1k
+Rgo go 0 1k
+Rm middle 0 1k
+Vy y 0 1
+Va a 0 2
+Vz z 0 4
+.op
+.end

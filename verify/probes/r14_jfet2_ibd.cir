@@ -1,0 +1,11 @@
+JFET2 IBD bias dependence
+* Provenance: original Sansho R14 circuit.
+* sweep: ibd 0 1p 10p
+.param probe=0
+Vd d 0 1.8
+Vg g 0 -.6 ac 1
+J1 d g 0 dev
+.model dev njf(level=2 beta=0.7m vto=-1.6 cgs=4p cgd=1p vbd=4.5 ibd={probe})
+.dc Vg -3 .35 .025
+.save i(Vd) i(Vg)
+.end

@@ -1,0 +1,10 @@
+RC half-charge delay after a unit step
+* Provenance: original analytic test. Independent 3% R and 4% C standard deviations.
+.param resistance=agauss(1k,90,3) capacitance=agauss(1n,120p,3)
+Vstep in 0 1
+Rcharge in out {resistance}
+Cload out 0 {capacitance}
+.ic v(out)=0
+.tran 8n 1.3u 0 8n uic
+.meas tran delay when v(out)=0.5 rise=1
+.end

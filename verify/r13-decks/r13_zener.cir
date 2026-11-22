@@ -1,0 +1,10 @@
+Shunt reference through breakdown
+* Provenance: original Sansho verification circuit.
+Vs supply 0 0
+Rfeed supply ref 220
+Az %gd(0 ref) shunt
+.model shunt zener(v_breakdown=4.7 i_breakdown=10m r_breakdown=3 i_rev=0.2u)
+.dc Vs 0 9 0.1
+.save v(ref) i(Vs)
+.print dc v(ref) i(Vs)
+.end

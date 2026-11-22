@@ -1,0 +1,10 @@
+Van der Pol with a low frequency guess and default shooting controls
+* Provenance: original Sansho oscillator probe for R22.
+* sansho-verify: pending-reference
+* sansho-verify: pss-ng v(out)
+Cx out 0 1m ic=1
+Cy y 0 1m
+Bx 0 out I={v(y)}
+By 0 y I={(1-v(out)*v(out))*v(y)-v(out)}
+.pss 115 60m out 128 7 uic
+.end

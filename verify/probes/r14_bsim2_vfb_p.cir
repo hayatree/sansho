@@ -1,0 +1,15 @@
+BSIM2 signed flat-band convention on a mirrored p-channel card
+* Provenance: original Sansho R14 circuit.
+* sweep: vfb -.7 -.5 -.3
+.param probe=-.7
+Vg g 0 1.2
+Eg pg 0 g 0 -1
+Vd d 0 1.7
+Vp pd 0 -1.7
+Mn d g 0 0 n l=1u w=4u
+Mp pd pg 0 0 p l=1u w=4u
+.model n nmos(level=5 phi=.7 tox=.025 vfb={probe} mu0=450 k1=.5)
+.model p pmos(level=5 phi=.7 tox=.025 vfb={probe} mu0=450 k1=.5)
+.dc Vg 0 2.4 .05
+.save i(Vd) i(Vp)
+.end

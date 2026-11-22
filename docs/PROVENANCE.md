@@ -12,48 +12,99 @@ that introduces the code.
 |---|---|---|---|
 | — | — | — | No third-party code yet |
 
+The generated [binary license inventory](../THIRD-PARTY-LICENSES.md) records
+Cargo dependencies separately, including additional notices supplied by a crate.
+
+## Module coverage
+
+The paths below include all nested modules and their tests under `crates/`. Each
+source header identifies its specific origin. The algorithm records below give
+the references for numerical methods and model equations.
+
+| Crate | Origin and scope |
+| --- | --- |
+| `sansho-diag` | Original structured diagnostic types, codes, suggestions and registry tests. |
+| `sansho-netlist` | Original SPICE frontend, expression and measurement parsers, preprocessing, statistical bindings and writer. |
+| `sansho-devices` | Original model equations, automatic differentiation and terminal stamps from the device references below. The Verilog-A adapter uses the local compiler. |
+| `sansho-sparse` | Original matrix layout, ordering, refactorization, scheduling and solver adapters. |
+| `sansho-engine` | Original circuit elaboration, analyses, nonlinear solve, parallel assembly, lint, measurements and statistical runs. |
+| `sansho-output` | Original results, waveform serialization and raw reader/writer from the public SPICE raw layout. |
+| `sansho-va` | Original analog compiler, interpreter, JIT lowering, private cache, fingerprint and tests. Standard headers are locally authored declarations from the LRM and published constants. |
+| `sansho-api` | Original Rust sessions, job management, hashes, summaries, alterations and waveform queries. |
+| `sansho-cli` | Original argument handling, reporting, batch execution, raw/JSON export and process-level tests. |
+| `sansho-mcp` | Original stdio transport, tool schemas, session adapter and protocol tests from the MCP and JSON-RPC specifications. |
+| `sansho-gpu` | Original lock-step batch coordinator, device-group adapter and CUDA C diode kernel transcribed from Sansho's own `diode.rs`, `junction.rs` and `dual.rs`. CUDA is reached through the `cudarc` crate (MIT OR Apache-2.0) at run time. |
+| `sansho-verify` | Original raw comparison, interpolation, reference-process drivers and harness tests. |
+
+The examples, verification circuits, model cards, include wrappers, black-box
+probe drivers and benchmark generators are original project fixtures. External
+PDKs and production Verilog-A models are supplied locally. The CI scripts,
+Docker recipe, release workflow and Cargo metadata notice generator are project
+tooling. Upstream legal texts in the notice inventory retain their attribution.
+
 ## Algorithms and references
 
 | Area | Implementation | References |
 |---|---|---|
-| Verilog-A preprocessing, lexical grammar, AST and parser | `spx-va/src` | Original implementation from knowledge of Accellera Verilog-AMS LRM 2.4 analog subset; recursive descent and precedence climbing from general compiler techniques |
-| Verilog-A built-in disciplines and constants | `spx-va/src/preproc.rs` | Original declarations from LRM nature/discipline semantics; mathematical constants, SI defining constants and CODATA 2022 values |
-| Verilog-A test models | `spx-va/tests` | Original resistor, junction and simplified square-law MOS examples; no third-party models |
-| Netlist syntax, number scale factors | `spx-netlist` | Nagel (1975), SPICE2 input format |
-| MNA stamps for R, C, L, V, I, E, F, G, H | `spx-devices/src/linear.rs`, `sources.rs` | Ho, Ruehli & Brennan (1975) |
-| PULSE / SIN / EXP / PWL waveforms and defaults | `spx-devices/src/waveform.rs` | Nagel (1975); commonly documented SPICE3 defaults |
-| DAE form `dq/dt + f = b`, deterministic slot assembly | `spx-devices`, `spx-engine/src/solve.rs` | Original design (`docs/architecture.md` D1, D4) |
-| Newton iteration, SPICE convergence test | `spx-engine/src/solve.rs` | Nagel (1975) |
-| Backward Euler / trapezoidal integration, breakpoint handling | `spx-engine/src/analysis.rs` | Nagel (1975); standard numerical ODE texts. Device-local charge error estimates and the internal RC startup bound are original applications of divided differences and linearized KCL. |
-| Topology checks (DC path, voltage-source loops) | `spx-engine/src/circuit.rs` | Ho, Ruehli & Brennan (1975); union-find (textbook) |
-| ASCII raw file layout | `spx-output` | Publicly documented SPICE3/ngspice rawfile format |
-| Large circuit BTF and real LU | `spx-sparse/src/btf.rs` | Original alternating-path maximum transversal from Duff (1981), iterative strongly connected components from Tarjan (1972), and left-looking sparse elimination from Gilbert & Peierls (1988). Block triangular solves and threshold pivot reuse follow the algorithm descriptions in Davis & Palamadai Natarajan, *Algorithm 907*, ACM TOMS (2010). Ordering uses the existing faer dependency through its public API. |
+| Planar silicon/oxide numerical devices and MOS measurements | `sansho-devices/src/cider/{mod,cards,plane,equilibrium}.rs`, `sansho-engine/tests/r21_cider.rs`, R21 decks and probes | Original rectangular box integration and Scharfetter–Gummel flux assembly from Selberherr (1984), Scharfetter and Gummel (1969), Gates and Mayaram's mixed device/circuit formulation. Card names and port definitions follow ngspice 44 manual §§26.2, 26.4–26.7, 26.9–26.13 and 26.16–26.19. Analytic checks use the one-dimensional MOS Poisson integral and the gradual-channel saturation law. R21b checks oxide permittivity, the exterior gate footprint and the active bulk electron mobility against independent terminal currents. Surface defaults come from the R20b silicon material reports. R21c derives the paired-face charge conversion, active mobility classes, strip geometry, critical-field conversion and displaced lateral profile from the paired black-box controls. The local transverse-field weighting and recessed contact footprint remain open. [Equations and coverage](cider.md#two-dimensional-devices) |
+| One-dimensional silicon drift–diffusion, physical cards and electrode admittance | `sansho-devices/src/cider/`, `sansho-engine/src/cider_outputs.rs`, `sansho-engine/tests/r20_cider.rs`, R20 decks, R20/R20b probes and `verify/cider_extract.py` | Original finite-volume assembly and mixed-level coupling from Scharfetter and Gummel (1969), Selberherr (1984), Gates (1993) and the CODECS mixed-level formulation. Input and terminal observables follow ngspice 44 manual chapter 26. R20b and R20c use independently written decks, their cached 44.2 terminal waveforms and silicon material reports. Narrowing follows Slotboom and de Graaff, mobility follows Caughey–Thomas and Arora, and recombination follows SRH and three-carrier Auger theory. The material reports and independent overrides identify the silicon parameters. [Physical model and constant sources](cider.md#silicon-constants-and-model-choices) |
+| Periodic steady-state shooting and harmonics | `sansho-engine/src/pss.rs`, `sansho-verify/src/pss_analytic.rs`, `verify/pss-decks` | Original implementation. The ngspice 44 manual §§1.2.8 and 11.3.12 supplies the card semantics. T. J. Aprille and T. N. Trick, “Steady-state analysis of nonlinear circuits with periodic inputs” (Proc. IEEE, 1972) and “A computer algorithm to determine the steady-state response of nonlinear oscillators” (IEEE TCT, 1972), supply the fixed-period map and autonomous phase constraint. Kundert, White and Sangiovanni-Vincentelli, *Steady-State Methods for Simulating Analog and Microwave Circuits* (1990), describes sensitivity propagation. Telichevesky, Kundert and White, “Efficient Steady-State Analysis Based on Matrix-Free Krylov-Subspace Methods” (DAC, 1995), gives the matrix-free formulation. Sansho forms the full monodromy and uses direct LU. Tests use impedance dividers, long-transient crossings and the Van der Pol equation. R22 raw titles, endpoint, branch columns and DFT scaling were measured from the PSS-enabled 44.2 binary on original circuits. The harmonic-aware mesh follows the second-order dispersion term. The new oscillators in `verify/probes/r22_pss_*.cir` and shared-phase comparison in `sansho-verify/src/pss_ng.rs` are original work. |
+| Raw vector order, visibility and E/G VALUE and TABLE expansion | `sansho-engine/src/output_order.rs`, `sansho-netlist/src/preproc.rs`, `verify/probes/r22{b,c,d}_order_*.cir` | Original implementation from maintainer-supplied ngspice 44.2 batch outputs for Sansho decks. The two-terminal probe, repeated subcircuit, behavioral driver voltages, branch currents and shunted expression-only node establish the rules in the [verification notes](../verify/README.md#r22c-vector-order). The R22d batch projection and smoothed TABLE driver derive from original decks and cached headers and samples. Noise and sensitivity use the public manual output descriptions and the existing adjoint implementation. The R22e batch precedence, AC resistor save values and detailed diode/resistor noise inventory come from the original R22c/R22d capture files. [R22e measurements](../verify/README.md#r22e-batch-regressions) The R22f/R22g plot-family order, port internal nodes, linear distortion grid, gmin-inclusive junction noise, single-point noise, pole-zero source treatment, TF spellings and current-output resistance, and port-number checks come from original black-box probes and regression decks. They are derived from their numbers by Kirchhoff's laws where possible. [R22f/R22g measurements](../verify/README.md#r22fr22g-analysis-families-and-special-vectors) |
+| Verilog-A preprocessing, lexical grammar, AST and parser | `sansho-va/src` | Original implementation from knowledge of Accellera Verilog-AMS LRM 2.4 analog subset; recursive descent and precedence climbing from general compiler techniques |
+| Verilog-A built-in disciplines and constants | `sansho-va/src/preproc.rs` | Original declarations from LRM nature/discipline semantics; mathematical constants, SI defining constants and CODATA 2022 values |
+| Verilog-A test models | `sansho-va/tests` | Original resistor, junction and simplified square-law MOS examples; no third-party models |
+| Netlist syntax, number scale factors | `sansho-netlist` | Nagel (1975), SPICE2 input format |
+| MNA stamps for R, C, L, V, I, E, F, G, H | `sansho-devices/src/linear.rs`, `sources.rs` | Ho, Ruehli & Brennan (1975) |
+| PULSE / SIN / EXP / PWL waveforms and defaults | `sansho-devices/src/waveform.rs` | Nagel (1975); commonly documented SPICE3 defaults |
+| DAE form `dq/dt + f = b`, deterministic slot assembly | `sansho-devices`, `sansho-engine/src/solve.rs` | Original design (`docs/architecture.md` D1, D4) |
+| Newton iteration, SPICE convergence test | `sansho-engine/src/solve.rs` | Nagel (1975) |
+| Backward Euler / trapezoidal integration, breakpoint handling | `sansho-engine/src/analysis.rs` | Nagel (1975); standard numerical ODE texts. Device-local charge error estimates and the internal RC startup bound are original applications of divided differences and linearized KCL. |
+| Topology checks (DC path, voltage-source loops) | `sansho-engine/src/circuit.rs` | Ho, Ruehli & Brennan (1975); union-find (textbook) |
+| ASCII raw file layout | `sansho-output` | Publicly documented SPICE3/ngspice rawfile format |
+| Large circuit BTF and real LU | `sansho-sparse/src/btf.rs` | Original alternating-path maximum transversal from Duff (1981), iterative strongly connected components from Tarjan (1972), and left-looking sparse elimination from Gilbert & Peierls (1988). Block triangular solves and threshold pivot reuse follow the algorithm descriptions in Davis & Palamadai Natarajan, *Algorithm 907*, ACM TOMS (2010). |
 | Large circuit decks | `benches/large/gen.py` | Original row-wise unsigned multiplication, CMOS gates and RC lattice. The ring scales the repository's `big_ring` test circuit. The BSIM4 cards come from `verify/bsim4-decks/b4_inverter_tran.cir`. |
-| BSIM4 intrinsic bypass | `spx-devices/src/bsim4/mod.rs` | Original reuse of current and charge linearizations, following device bypass in Nagel's SPICE2 thesis (1975). |
-| Sparse LU | `spx-sparse/src/faer_backend.rs` | `faer` crate (MIT), used as a library dependency |
-| Forward-mode automatic differentiation | `spx-devices/src/dual.rs` | Griewank & Walther, *Evaluating Derivatives* (SIAM, 2008) |
-| pn-junction current, depletion charge with `fc` linearization, junction limiting, `vcrit` | `spx-devices/src/junction.rs` | Nagel (1975); Antognetti & Massobrio (1993), ch. 1 |
-| Diode (level 1) | `spx-devices/src/diode.rs` | Antognetti & Massobrio (1993), ch. 1; breakdown as a single exponential (own simplification) |
-| BJT Gummel–Poon | `spx-devices/src/bjt.rs` | Gummel & Poon (1970); Getreu (1976); Antognetti & Massobrio (1993), ch. 2 |
-| Silicon MOSFET level 54, parameter catalog and device tests | `spx-devices/src/bsim4/` | Original Rust from UC Berkeley, *BSIM4 4.8.2 Technical Manual*, ch. 1–15 and Appendix A, and published update notes (CMC/ECL-2.0 documentation). The local notes contain an embedded implementation excerpt encountered during document inspection. Implementation files and excerpts were not used to derive the Rust equations. |
-| SKY130 nominal library binding | `spx-netlist/src/{preproc,parser,expr}.rs` | Original implementation. Local Apache-2.0 SKY130 model cards informed syntax and the maintainer's ngspice 44.2 waveforms supplied black-box comparisons. |
-| MOSFET level 1, Meyer capacitances | `spx-devices/src/mos1.rs` | Shichman & Hodges (1968); Meyer (1971); Antognetti & Massobrio (1993), ch. 4; FET step limiting is original |
-| Gmin stepping, source stepping | `spx-engine/src/analysis.rs` | Standard continuation methods (e.g. Nagel 1975; Vlach & Singhal, *Computer Methods for Circuit Analysis and Design*, 1983); adaptive schedules are original |
-| LTE step control, variable-step BDF2 | `spx-engine/src/analysis.rs` | Nagel (1975); Brayton, Gustavson & Hachtel, "A new efficient algorithm for solving differential-algebraic systems using implicit BDF", Proc. IEEE 60 (1972) |
-| `.meas` evaluation | `spx-netlist/src/meas.rs`, `spx-engine/src/measure.rs` | Original; card syntax as commonly documented for SPICE-family simulators |
-| Parallel jobs (L0), chunked device evaluation (L1), ordered gather assembly (L2) | `spx-engine/src/parallel.rs`, `circuit.rs`, `solve.rs` | Original design (`docs/architecture.md` D4); `rayon` crate (MIT/Apache-2.0) as a library dependency |
-| Diagnostic code registry, lint checks, "did you mean" (Levenshtein distance) | `spx-diag/src/codes.rs`, `spx-engine/src/lint.rs`, `spx-netlist/src/parser.rs` | Original; edit distance as in V. I. Levenshtein (1966), textbook dynamic programming |
-| Parameter expressions, `.param`, `.func` | `spx-netlist/src/expr.rs` | Original recursive-descent parser; operator set and functions as commonly documented for SPICE parameter expressions (ngspice user manual, used as documentation only) |
-| `.include`/`.lib`, subcircuit flattening, model binning, `.ic`/`.nodeset`/UIC | `spx-netlist/src/preproc.rs`, `parser.rs`, `spx-engine/src/analysis.rs` | Nagel (1975) input format; hierarchical naming and library sections as documented in the ngspice user manual; node clamping is a standard Norton-equivalent technique |
-| Netlist writer | `spx-netlist/src/writer.rs` | Original; SPICE input format (Nagel 1975) |
-| Session / job API, summaries, alterations | `spx-api` | Original |
-| Input / result hashes | `spx-api/src/hash.rs` | FNV-1a by G. Fowler, L. C. Noll, K.-P. Vo (public domain; IETF draft-eastlake-fnv) |
-| Waveform downsampling (LTTB) | `spx-api/src/waveform.rs` | S. Steinarsson, *Downsampling Time Series for Visual Representation*, MSc thesis, University of Iceland, 2013 |
-| MCP server | `spx-mcp` | Model Context Protocol specification (modelcontextprotocol.io, revisions 2024-11-05 – 2025-11-25) and JSON-RPC 2.0 specification; no SDK code used |
-| ASCII raw reader, verification metric | `spx-output/src/raw_reader.rs`, `spx-verify` | Original; public rawfile layout |
+| BSIM4 intrinsic bypass | `sansho-devices/src/bsim4/mod.rs` | Original reuse of current and charge linearizations, following device bypass in Nagel's SPICE2 thesis (1975). |
+| Quotient-graph ordering | `sansho-sparse/src/ordering.rs` | Original symmetric approximate degree implementation from Amestoy, Davis & Duff, “An Approximate Minimum Degree Ordering Algorithm” (1996), and George & Liu, “The Evolution of the Minimum Degree Ordering Algorithm” (1989). Breadth-first level separators follow George & Liu, *Computer Solution of Large Sparse Positive Definite Systems* (1981). |
+| Real and complex sparse LU | `sansho-sparse/src/{btf,serial,complex}.rs` | Original Gilbert & Peierls (1988) elimination, fixed-pivot panel updates and triangular solves with elementary Cartesian complex arithmetic. |
+| Dense generalized eigenvalues | `sansho-sparse/src/qz.rs` | Original Hessenberg–triangular reduction and double-shift real QZ from Golub & Van Loan, *Matrix Computations*, and Moler & Stewart, “An Algorithm for Generalized Matrix Eigenvalue Problems” (1973). |
+| Forward-mode automatic differentiation | `sansho-devices/src/dual.rs` | Griewank & Walther, *Evaluating Derivatives* (SIAM, 2008) |
+| pn-junction current, depletion charge with `fc` linearization, junction limiting, `vcrit` | `sansho-devices/src/junction.rs` | Nagel (1975); Antognetti & Massobrio (1993), ch. 1 |
+| Diode (level 1) | `sansho-devices/src/diode.rs` | Massobrio & Antognetti (1993), ch. 1, and ngspice user manual §7.2.2 (reverse bias, adjusted avalanche knee and forward high injection) |
+| VDMOS electrical core and integrated gate charge | `sansho-devices/src/vdmos.rs` | Shichman and Hodges (1968), ngspice user manual, VDMOS section. Independent integration of the joined Miller-capacitance curve. Default capacitances, smooth overdrive and mobility denominator checked against the R8 black-box sweeps. |
+| MESFET channel and effective gate potential | `sansho-devices/src/jfet.rs` | H. Statz et al., “GaAs FET Device and Circuit Simulation in SPICE,” IEEE TED 34 (1987), 160–169. Incremental rectangular integration from accepted biases, checked against the 44.2 loaded AC gain and transient. |
+| Native silicon B4SOI 4.4 and R17 circuits | `sansho-devices/src/bsimsoi/`, `verify/{decks,probes}/r17_soi_*.cir` | Original implementation from UC Berkeley, *BSIMSOIv4.4 Users’ Manual* (2010), chapters 2–9 and appendices A–E. Level aliases and card conventions follow the ngspice 44 user manual §§7.6.1 and 7.6.4. Numeric defaults also use the supplied ngspice 44.2 black-box parameter listing. Charge partition, overlap, barrier evaluation and stress reuse Sansho’s own BSIM4 routines. R17b uses the supplied 44.2 raw waveforms, parameter listing and rejection logs to disambiguate the equations. All circuit parameter sets and the R17b follow-up probes are original. R17c derives the PMOS back-gate sign, forward junction capacitance limit and film readout conventions from the cached 44.2 sweeps. [R17b equations](bsimsoi.md#r17b-measurements-against-442) · [R17c measurements](bsimsoi.md#r17c-measurements-against-442) |
+| Native level-four VBIC | `sansho-devices/src/vbic/` | Original R15 reconstruction from bipolar charge control, McAndrew et al. (IEEE JSSC 31, 1996 and MSM 2003), and Kull et al. (IEEE TED 32, 1985). The ngspice 44 manual §§7.3.4 and 27.5.2 defines the thermal port and card interface. R15b and R15c derive and verify the charge, noise and parameter mappings from original circuit measurements of the ngspice 44.2 executable. [Equation choices and verification status](vbic.md) |
+| Native level-eight HICUM/L2 | `sansho-devices/src/hicum/` | Original R16 equations based on Schröter and Chakravorty, *Compact Hierarchical Bipolar Transistor Modeling with HICUM* (World Scientific, 2010), graded-junction and carrier statistics, and the ngspice 44 manual §§7.3.5, 7.3.6 and 11.5.3.2. R16b derives the field rounding, transport and charge response, substrate scale and thermal mapping from supplied 44.2 black-box terminal measurements. R16c uses the mirrored BC pair, avalanche feedback invariant, admittance and punch-through capacitance sweeps. [Derivation, open choices and probes](hicum.md) |
+| BJT epitaxial collector | `sansho-devices/src/bjt.rs` | G. M. Kull et al., “A Unified Circuit Model for Bipolar Transistors Including Quasi-Saturation Effects,” IEEE TED 32 (1985). Conductivity modulation and storage. The high-field denominator and vertical reverse-diffusion area were reconstructed from original R8 VO, GAMMA and loaded RCO sweeps against ngspice 44.2. [Measurements](../verify/probes/README.md#r8b-epitaxial-collector-and-urc) |
+| TXL and CPL wave equations, modal filters, coupled loss sections and original R18/R18b circuits | `sansho-engine/src/kspice/`, `verify/{decks,probes}/r18*.cir` | ngspice 44 user manual §§6.4.1–6.4.2, 27.4.1 and 27.4.4 for the interface. C. R. Paul, *Analysis of Multiconductor Transmission Lines*, for modal transforms and the coupled telegrapher equations. S. Lin and E. S. Kuh, IEEE TCAS-I 39(11), 1992, and their 1992 Multi-Chip Module Conference paper on Padé approximation, for delay extraction and recursive convolution. The finite-cut quadrature, rational cascade, symmetric loss-section splitting and scattering implementation are independently derived. [Equations and numerical choices](distributed-lines.md#modal-transient) |
+| LTRA transfer and history convolution | `sansho-devices/src/ltra.rs`, `sansho-engine/src/analysis.rs` | Roychowdhury and Pederson, DAC (1991), distributed lossy interconnect convolution. Independent inverse transforms, spectral/image sums and quadrature. |
+| URC graded ladder and diode temperature coefficients | `sansho-devices/src/urc.rs`, `diode.rs` | ngspice user manual, uniform distributed RC and junction diode sections. The R8 FMAX and explicit-N black-box sweeps resolve count truncation and inverse-area access resistance. The diode TCV sign and units derive from the maintainer’s paired 100 °C measurement. The four TBV runs and their warnings establish that 44.2 ignores both parameters. See [distributed lines](distributed-lines.md) and [semiconductor coverage](r8-semiconductors.md). |
+| BJT Gummel–Poon | `sansho-devices/src/bjt.rs` | Gummel & Poon (1970); Getreu (1976); Antognetti & Massobrio (1993), ch. 2 |
+| Silicon MOSFET levels 8 and 49 | `sansho-devices/src/bsim3/` | Original derivation from UC Berkeley, *BSIM3v3.3 Manual* (2005), chapters 2–5 and 8–9, Appendices A, B and D. The R5 decks and numerical tests use original parameter choices. [Equation choices and coverage](bsim3.md) |
+| Silicon MOSFET level 54, parameter catalog and device tests | `sansho-devices/src/bsim4/` | Original Rust from UC Berkeley, *BSIM4 4.8.2 Technical Manual*, ch. 1–15 and Appendix A, and published update notes (CMC/ECL-2.0 documentation). The local notes contain an embedded implementation excerpt encountered during document inspection. Implementation files and excerpts were not used to derive the Rust equations. |
+| SKY130 nominal library binding | `sansho-netlist/src/{preproc,parser,expr}.rs` | Original implementation. Local Apache-2.0 SKY130 model cards informed syntax and the maintainer's ngspice 44.2 waveforms supplied black-box comparisons. |
+| MOSFET level 1, Meyer capacitances | `sansho-devices/src/mos1.rs` | Shichman & Hodges (1968); Meyer (1971); Antognetti & Massobrio (1993), ch. 4; FET step limiting is original |
+| Gmin stepping, source stepping | `sansho-engine/src/analysis.rs` | Standard continuation methods (e.g. Nagel 1975; Vlach & Singhal, *Computer Methods for Circuit Analysis and Design*, 1983); adaptive schedules are original |
+| LTE step control, variable-step BDF2 | `sansho-engine/src/analysis.rs` | Nagel (1975); Brayton, Gustavson & Hachtel, "A new efficient algorithm for solving differential-algebraic systems using implicit BDF", Proc. IEEE 60 (1972) |
+| `.meas` evaluation | `sansho-netlist/src/meas.rs`, `sansho-engine/src/measure.rs` | Original; card syntax as commonly documented for SPICE-family simulators |
+| Parallel jobs (L0), chunked device evaluation (L1), ordered gather assembly (L2) | `sansho-engine/src/parallel.rs`, `circuit.rs`, `solve.rs` | Original design (`docs/architecture.md` D4); `rayon` crate (MIT/Apache-2.0) as a library dependency |
+| Diagnostic code registry, lint checks, "did you mean" (Levenshtein distance) | `sansho-diag/src/codes.rs`, `sansho-engine/src/lint.rs`, `sansho-netlist/src/parser.rs` | Original; edit distance as in V. I. Levenshtein (1966), textbook dynamic programming |
+| Parameter expressions, `.param`, `.func` | `sansho-netlist/src/expr.rs` | Original recursive-descent parser; operator set and functions as commonly documented for SPICE parameter expressions (ngspice user manual, used as documentation only) |
+| `.include`/`.lib`, subcircuit flattening, model binning, `.ic`/`.nodeset`/UIC | `sansho-netlist/src/preproc.rs`, `parser.rs`, `sansho-engine/src/analysis.rs` | Nagel (1975) input format; hierarchical naming and library sections as documented in the ngspice user manual; node clamping is a standard Norton-equivalent technique |
+| Netlist writer | `sansho-netlist/src/writer.rs` | Original; SPICE input format (Nagel 1975) |
+| Session / job API, summaries, alterations | `sansho-api` | Original |
+| Input / result hashes | `sansho-api/src/hash.rs` | FNV-1a by G. Fowler, L. C. Noll, K.-P. Vo (public domain; IETF draft-eastlake-fnv) |
+| Waveform downsampling (LTTB) | `sansho-api/src/waveform.rs` | S. Steinarsson, *Downsampling Time Series for Visual Representation*, MSc thesis, University of Iceland, 2013 |
+| MCP server | `sansho-mcp` | Model Context Protocol specification (modelcontextprotocol.io, revisions 2024-11-05 – 2025-11-25) and JSON-RPC 2.0 specification; no SDK code used |
+| ASCII raw reader, verification metric | `sansho-output/src/raw_reader.rs`, `sansho-verify` | Original; public rawfile layout |
 
 Reference simulators (ngspice) are only ever executed as external programs on our own decks
-(`tools/ngspice`, `spx-verify`); their sources are not read.
+(`tools/ngspice`, `sansho-verify`); their sources are not read.
+The PSS oracle image (`tools/ngspice-pss`) is compiled from the ngspice 44.2 release tarball
+with `--enable-pss`. Download, build and deletion of the source happen inside one Docker build
+step. No image layer keeps the source, the build log is discarded unread, and the source never
+enters the working tree or any agent session. The image is used only to produce reference
+waveforms for `.pss`. The Sansho PSS implementation was written before the image existed (R19).
 
 ### Planned references (for upcoming work)
 
@@ -79,16 +130,16 @@ Reference simulators (ngspice) are only ever executed as external programs on ou
 
 ### Verilog-A VA-2
 
-- `spx-va/src/sema.rs` and `ir.rs`: original semantic analysis and resolved typed-tree lowering
+- `sansho-va/src/sema.rs` and `ir.rs`: original semantic analysis and resolved typed-tree lowering
   from the Accellera Verilog-AMS LRM 2.4 and general compiler techniques. No external compiler
   implementation was consulted or ported.
-- `spx-va/src/dual.rs` and `eval.rs`: original dynamic forward-mode differentiation from the
+- `sansho-va/src/dual.rs` and `eval.rs`: original dynamic forward-mode differentiation from the
   chain rule and general AD literature; DAE current/charge stamping from elementary modified
   nodal analysis. Built-in derivatives are elementary analytic derivatives.
-- `spx-va/src/limit.rs`: original logarithmic junction limiter based on the published junction
+- `sansho-va/src/limit.rs`: original logarithmic junction limiter based on the published junction
   voltage limiting idea in L. W. Nagel, *SPICE2*, ERL Memo M520 (1975). The field-effect voltage
   step clamp is an original heuristic, not a port of another simulator's limiter.
-- `spx-va/tests/evaluator.rs`: models and test expectations authored for this change from
+- `sansho-va/tests/evaluator.rs`: models and test expectations authored for this change from
   elementary resistor, exponential junction and square-law charge equations; central finite
   differences provide independent derivative checks. No PDK files are included.
 
@@ -100,10 +151,10 @@ model code, or interface headers. There is no third-party code port requiring a 
 
 | Component | Files | Provenance |
 |---|---|---|
-| Limiting linearization tangent | `spx-va/src/dual.rs`, `eval.rs` | Original chain-rule AD implementation; first-order SPICE linearization from Nagel (1975) |
-| Simulator adapter and dense stamping | `spx-devices/src/va.rs`, `lib.rs`; `spx-engine/src/circuit.rs` | Original repository DAE/MNA integration, Ho, Ruehli & Brennan (1975), Accellera Verilog-AMS LRM 2.4 |
-| HDL cards, N instances and hierarchy | `spx-netlist/src` | Original parser/writer work from the requested syntax and existing source-loader/flattening interfaces |
-| Models and integration tests | `spx-engine/tests/verilog_a.rs`, `tests/va/*`; `examples/va/diode.va`, `examples/va_diode.cir`; `spx-api/tests/session.rs` | Authored resistor/capacitor and junction equations from repository built-ins, Nagel (1975), Antognetti & Massobrio (1993); analytic RC response |
+| Limiting linearization tangent | `sansho-va/src/dual.rs`, `eval.rs` | Original chain-rule AD implementation; first-order SPICE linearization from Nagel (1975) |
+| Simulator adapter and dense stamping | `sansho-devices/src/va.rs`, `lib.rs`; `sansho-engine/src/circuit.rs` | Original repository DAE/MNA integration, Ho, Ruehli & Brennan (1975), Accellera Verilog-AMS LRM 2.4 |
+| HDL cards, N instances and hierarchy | `sansho-netlist/src` | Original parser/writer work from the requested syntax and existing source-loader/flattening interfaces |
+| Models and integration tests | `sansho-engine/tests/verilog_a.rs`, `tests/va/*`; `examples/va/diode.va`, `examples/va_diode.cir`; `sansho-api/tests/session.rs` | Authored resistor/capacitor and junction equations from repository built-ins, Nagel (1975), Antognetti & Massobrio (1993); analytic RC response |
 
 Implemented without network access, external source implementations, interface headers, PDK
 files or new third-party dependencies. No ported code requires a NOTICE addition.
@@ -112,14 +163,14 @@ files or new third-party dependencies. No ported code requires a NOTICE addition
 
 | Component | Files | Provenance |
 |---|---|---|
-| Built-in headers | `spx-va/src/headers/constants.vams`, `disciplines.vams` | Original declarations from Accellera Verilog-AMS LRM 2.4. Math values follow the named mathematical identities. Physical values follow the SI definitions and CODATA 2022. |
-| Binding and branch collapse | `spx-va/src/eval/topology.rs`, `sema.rs`, `eval.rs`, `spx-engine/src/circuit.rs` | Original constant propagation, union-find and MNA stamping from general compiler and circuit literature. Port current probes use an ideal series voltage source. Integration introduces a DAE state. |
-| Collapse fixture | `spx-va/tests/models/collapse.va` | Authored from Ohm's law and the Shockley diode equation. |
-| Local model verification | `spx-va/tests/production.rs`, `spx-engine/tests/verilog_a.rs` | Original finite-difference harness and DC transfer test. Third-party models are external test inputs. |
+| Built-in headers | `sansho-va/src/headers/constants.vams`, `disciplines.vams` | Original declarations from Accellera Verilog-AMS LRM 2.4. Math values follow the named mathematical identities. Physical values follow the SI definitions and CODATA 2022. |
+| Binding and branch collapse | `sansho-va/src/eval/topology.rs`, `sema.rs`, `eval.rs`, `sansho-engine/src/circuit.rs` | Original constant propagation, union-find and MNA stamping from general compiler and circuit literature. Port current probes use an ideal series voltage source. Integration introduces a DAE state. |
+| Collapse fixture | `sansho-va/tests/models/collapse.va` | Authored from Ohm's law and the Shockley diode equation. |
+| Local model verification | `sansho-va/tests/production.rs`, `sansho-engine/tests/verilog_a.rs` | Original finite-difference harness and DC transfer test. Third-party models are external test inputs. |
 
 ### Verilog-A VA-5
 
-The register compiler in `spx-va/src/eval/program.rs` and `eval/program/` is an original
+The register compiler in `sansho-va/src/eval/program.rs` and `eval/program/` is an original
 implementation of forward constant propagation, control-flow joins, local value numbering
 and backwards liveness analysis from general compiler literature (Aho et al., *Compilers*).
 The dense gradient rows, scratch arena and scalar chain-rule factors in `dual.rs` and
@@ -128,7 +179,7 @@ The 21-stage benchmark in `benches/psp_ring21.cir` extends the project's authore
 
 ### Verilog-A VA-5b
 
-The native backend in `crates/spx-va/src/eval/program/jit.rs` and its submodules
+The native backend in `crates/sansho-va/src/eval/program/jit.rs` and its submodules
 is original work based on the project's register evaluator, the Accellera
 Verilog-AMS LRM 2.4, SSA construction and forward-mode AD (Aho et al.,
 *Compilers*, Griewank and Walther, *Evaluating Derivatives*). Finiteness checks
@@ -148,7 +199,7 @@ The VA artifact store, include manifest, binding scheduler and benchmark drivers
 are original repository work. The store uses SHA-256, per-key initialization,
 exclusive file creation and atomic POSIX rename. The native entry uses the
 public Cranelift 0.137.2 code buffer, relocation and JIT module APIs. Math
-callbacks and limiters come from spx. The straight-line partition in `jit/split.rs` uses original SSA
+callbacks and limiters come from Sansho. The straight-line partition in `jit/split.rs` uses original SSA
 liveness and register handoff code from general compiler literature. No
 external simulator code, headers,
 model text or precompiled models are part of the change.
@@ -175,12 +226,11 @@ The timing probes use Rust and Python monotonic clocks. This round adds no depen
 The Newton numeric refactorization, scatter schedule, pivot tests and triangular solves
 are original repository code. The algorithmic sources are J. R. Gilbert and T. Peierls,
 *Sparse Partial Pivoting in Time Proportional to Arithmetic Operations* (1988), and
-T. A. Davis, *Direct Methods for Sparse Linear Systems* (2006). Symbolic ordering and
-fresh partial pivoting use the existing faer dependency through its public Rust API.
+T. A. Davis, *Direct Methods for Sparse Linear Systems* (2006).
 
 The two-instance evaluator uses standard SSA value numbering, postdominators and
 masked SIMD execution through Cranelift's public IR and host-ISA APIs. Scalar math
-uses the existing spx shims. Instance pairing, ordered stamp assembly, local model
+uses the existing Sansho shims. Instance pairing, ordered stamp assembly, local model
 card reuse and the timing probes are original work. The IHP models served as test
 inputs. Dependency and licensing inventories are unchanged.
 
@@ -214,7 +264,7 @@ Ruehli and Brennan (1975). Its use in the final elimination column follows
 from the left-looking LU and triangular solves already implemented here.
 The packed lowering uses the forward-mode chain rule with a zero seed for
 a constrained voltage. The implementation, work-count instrumentation and
-static stack-operand counter are original. The counter reads spx's emitted
+static stack-operand counter are original. The counter reads Sansho's emitted
 machine code through Linux procfs and disassembles it with the system
 objdump. Third-party models served only as simulator test inputs.
 
@@ -225,7 +275,7 @@ circuits are original work from Accellera Verilog-AMS LRM 2.4, the repository's
 modified nodal equations and the forward-mode chain rule. BSIM-CMG 111.2.1
 (ECL-2.0) served as external compiler input. The known-difference directive and
 the SKY130 terminal-waveform replay are original verification work using local
-black-box results. The KU0 decision follows the BSIM4 4.8.2 manual, equation 14.5.
+black-box results. R6 revised the original equation 14.5 choice using the cached ngspice 44.2 KU0 control and layout sweeps.
 
 ### M5-3 single-worker BSIM4
 
@@ -236,3 +286,209 @@ divided differences supply the transient predictor. The block ordering
 implements minimum-degree elimination on a symmetric graph as described in
 Davis, *Direct Methods for Sparse Linear Systems* (2006). The implementations
 and performance probes are original.
+
+### M5-4 parallel fixed-pivot LU
+
+The BTF column dependency schedule and cached symbolic reach in
+`sansho-sparse/src/btf.rs` and `btf/schedule.rs` are original implementations.
+The numerical algorithm follows Gilbert and Peierls (1988) and Davis and
+Palamadai Natarajan, Algorithm 907 (2010). The dependency forest and
+independent work scheduling use the principles described by Liu (1990) and
+Anderson and Saad (1989). The discarded separator-ordering experiment used
+George (1973). The tile gather, charge-history buffer rotation, parallel LTE
+and determinism fixtures extend the repository's existing algorithms. The
+MOS1 charge-only specialization uses this repository's existing charge and
+linearization equations. The sparse crate uses the workspace's existing
+Rayon library.
+
+### M5-5 statistical analysis
+
+The netlist sampler, lexical binding plan and CPU batch runner are original Rust implementations. Parameter scopes and the absolute, relative, normal, uniform and two-point distributions follow public ngspice user documentation on `.param` and statistical functions. The external count selects repeated statistical instances of one deck, following the public SPICE Monte Carlo analysis convention.
+
+The integer finalizer follows Steele, Lea and Flood, *Fast Splittable Pseudorandom Number Generators* (OOPSLA 2014). Stable string identities use FNV-1a arithmetic. Indexing the random function by independent run and call-site counters follows the design principle in Salmon et al., *Parallel Random Numbers: As Easy as 1, 2, 3* (SC 2011). The normal transform follows Box and Muller, *A Note on the Generation of Random Normal Deviates* (1958). Sample variance uses Welford's online recurrence. The independent sample-variance ratio uses the standard F distribution and the incomplete beta continued fraction.
+
+All three validation circuits and their reference drivers were authored for this repository. The SKY130 deck references the locally installed Volare model files. The numeric solvers share an immutable symbolic ordering across runs.
+
+### R1 ngspice-dialect devices and temperature
+
+The element cards and control quantities follow the public ngspice user manual
+descriptions of coupled inductors, nonlinear dependent sources, switches,
+temperature options and transient initial conditions. The coupled flux and
+controlled-source stamps follow Ho, Ruehli and Brennan, *The Modified Nodal
+Approach to Network Analysis* (1975). The expression evaluator extends the
+repository's forward-mode dual-number implementation. The switch configuration
+iteration and crossing-time interpolation are original implementations.
+
+The temperature translations in `temperature.rs`, `diode.rs`, `bjt.rs` and
+`mos1.rs` follow the silicon junction, Gummel–Poon and level-1 MOS models
+in Massobrio and Antognetti, *Semiconductor Device Modeling with SPICE* (1993).
+The BSIM4 equations retain their existing provenance. The R1 verification
+circuits and analytic regression tests were written for this project.
+
+### R2 small-signal and Fourier analyses
+
+The netlist syntax, analysis terminology and conventional vector names follow the
+public ngspice user manual descriptions of NOISE, TF, SENS, FOUR and PZ. The
+adjoint noise formulation follows Rohrer, Nagel, Meyer and Weber, “Computationally
+Efficient Electronic-Circuit Noise Calculations” (1971). The DC sensitivity
+contraction follows Director and Rohrer (1969). The MNA transfer and bordered
+pole-zero pencils follow the network equations in Vlach and Singhal, *Computer
+Methods for Circuit Analysis and Design*. The Fourier implementation uses the
+real-signal discrete Fourier transform. The original dense QZ kernel and its references appear in the algorithm table above.
+
+The built-in noise sources use the Johnson–Nyquist, shot and empirical flicker
+laws, the Berkeley BSIM4 4.8.2 Technical Manual chapter 10 and Appendix A.10,
+and the Accellera Verilog-AMS 2.4 LRM small-signal noise functions. The device
+adapters, source projection, parameter perturbations, integration, tests and
+R2 verification circuits are original implementations.
+
+MOS1 oxide thickness, effective geometry and KF/AF parameters follow the
+[ngspice 44 user manual, §7.6.2.5](https://ngspice.sourceforge.io/docs/ngspice-44-manual.pdf#page=159).
+The table lists the parameters and defaults. The gate-area power law and
+conversion through gm² are also given in Bucher et al., *The EPFL-EKV MOSFET
+Model Equations for Simulation*, eq. 94. The choice of gate-referred form for
+the R2 deck was checked against the maintainer's 44.2 simulation output.
+[Gate-area noise equation](https://ngspice.sourceforge.io/external-documents/models/ekv_v262.pdf)
+
+The BSIM4 source-side partition and flicker normalization follow the
+[Berkeley BSIM4 4.8.2 Technical Manual](https://bsim.berkeley.edu/models/bsim4/),
+equations 10.2–14 and Appendix A.10. The zero-resistance reduction uses
+the device's own current and charge derivatives. The verifier matches complex
+pole and zero multisets by minimizing the largest normalized distance using
+bipartite augmenting paths.
+
+### R3 lines, JFETs, classical MOS channels and polynomials
+
+The two traveling-wave equations in `sansho-devices/src/line.rs` follow F. H.
+Branin, “Transient Analysis of Lossless Transmission Lines” (1967). Port
+stamps, accepted-step history, corner propagation, interpolation and the
+complex matrix correction are original Rust implementations.
+
+The level-one JFET uses the channel and depletion-junction description in
+Massobrio and Antognetti, *Semiconductor Device Modeling with SPICE*. The
+classical MOS channel reference is A. Vladimirescu and S. Liu, *The Simulation
+of MOS Integrated Circuits Using SPICE2*, UCB/ERL M80/7 (1980). The level-two
+current integrates inversion charge along the channel. The level-three current
+uses the bulk-charge slope and field-dependent mobility. Both reuse the
+existing Shichman–Hodges terminal conventions and Meyer charge implementation.
+Implemented terms and coverage limits are in [compatibility.md](compatibility.md).
+
+The J, T and POLY cards use the published ngspice element and model syntax.
+Graded polynomial enumeration, directional differentiation, numeric tests
+and the R3 decks were written for this project. No third-party device
+implementation or reference deck was imported.
+
+### R4 device and analysis changes
+
+The source and analysis card syntax, measurement operators, parameter names and
+raw plot conventions follow the public ngspice user documentation. Sweep execution,
+column serialization, measurement expression binding, interpolation, device stamps
+and the small verification decks are original implementations. Cached 44.2 outputs
+provide the comparisons recorded in the verification notes.
+
+The MOS2 and MOS3 channel reference is Vladimirescu and Liu, UCB/ERL M80/7
+(1980), with the classical MOS treatment in Massobrio and Antognetti. The
+level-two velocity boundary equates integrated channel current and drain-end
+inversion charge times saturation velocity. Beyond saturation the positive root
+of the depletion voltage drop gives the channel extension. The level-three model
+uses the lateral junction depletion estimate, charge sharing and a finite drain
+field at the saturation knee.
+
+The bipolar charge-control model follows Gummel and Poon (1970), Getreu,
+*Modeling the Bipolar Transistor*, and Massobrio and Antognetti. The transient
+forward excess phase follows the second-order transport delay approximation of
+Weil and McNamee (1978). The frequency-domain stamp uses the phase of the delay
+directly. Diode recombination, high injection, breakdown and perimeter charge use
+Massobrio and Antognetti, chapter 1 (especially §§1.1, 1.8.1 and 1.9.1), and
+the ngspice manual, §7.2.2 (area/perimeter scaling, Algorithm 7.1 and equations
+7.1–7.3). The modulation waveforms follow §§4.1.5–4.1.6 of the same manual. The stamp derivatives use the repository's dual numbers.
+
+
+### R6 compact-model compatibility
+
+The NOIC default, KU0 mobility response, BSIM3 gate–bulk overlap default, accumulation-centroid doping and area-only junction current derive from black-box comparisons with ngspice 44.2 and independently authored Sansho control decks. The device notes give the measured quantities and scope. The original noise and breakdown probes establish the BSIM3 channel-density endpoints, weak/strong flicker blend, EM switch and capMod 3 weak-inversion smoothing, and the SPICE3 diode bottom-current knee match, sidewall prefactor and low-IBV clamp. [BSIM3](bsim3.md#verification-status) · [BSIM4](bsim4.md#mobility-stress) · [Probe measurements](../verify/probes/README.md)
+
+## R7 netlist and output support
+
+The syntax and device quantities target the ngspice user manual sections on element cards, independent sources, DC and transient analysis, output variables, batch commands and simulator options. The R7 implementation reuses Sansho's existing clean-room compact-model equations and analytic derivatives. The R7b body-effect defaults use the BSIM3v3.3 and BSIM4.8.2 manual doping relations for GAMMA1/2 and VBX. The default-card sweeps and the UIC grid replay use the maintainer’s ngspice 44.2 raw files. No model source was imported.
+
+| Component | Files | Basis |
+|---|---|---|
+| Device output sampling and UIC | `sansho-engine/src/probes.rs`, `analysis.rs`, `sansho-devices/src/observables.rs` and the respective device groups | Device-local charge histories, MNA current balance, existing BSIM3v3.3 and BSIM4.8.2 terminal charge equations. |
+| Behavioral passives | Netlist preprocessing and parsing, `sansho-devices/src/behavioral.rs` | Differential definitions of capacitance and inductance, Kirchhoff’s current law and forward differentiation. |
+| Transient randomness | `sansho-devices/src/random.rs`, source and waveform modules | Original indexed integer mixer, Box and Muller (1958), exponential waiting times, octave-band synthesis, and Hörmann (1993), “The transformed rejection method for generating Poisson random variables.” |
+| Output cards, options and tests | Netlist, output, CLI and engine crates, `sansho-engine/tests/outputs.rs`, MCP stdio tests and `verify/decks/r7_*.cir` | Original circuits and implementation. Tests use circuit laws, finite differences, deterministic replay and distribution properties. |
+
+## R9 RF, distortion and device equations
+
+| Component | Basis |
+|---|---|
+| RF (`sansho-engine/src/rf.rs`) | K. Kurokawa, “Power Waves and the Scattering Matrix,” IEEE Transactions on Microwave Theory and Techniques 13 (1965), 194–202. Two-port noise factor and optimum reflection coefficient follow the noise-wave formalism in D. M. Pozar, *Microwave Engineering*. Original matrix solves and covariance calculation. SP plot layout, Norton noise correlation, 1 V circuit traces and noise normalization were checked against maintainer-supplied 44.2 black-box outputs. The R9 matched-pad sweep separates circuit-temperature normalization from a fixed reference by varying the pad and circuit temperature together. |
+| Distortion (engine and device `distortion.rs`) | P. Wambacq and W. Sansen, *Distortion Analysis of Analog Integrated Circuits*, Kluwer, 1998. Mixed analytic partials use forward differentiation as in A. Griewank and A. Walther, *Evaluating Derivatives*, SIAM, 2008. The local current and charge laws come from the Sansho diode, Gummel–Poon and Meyer MOS1 implementations and their cited literature. |
+| MOS6 | T. Sakurai and A. R. Newton, “A Simple MOSFET Model for Circuit Analysis,” IEEE Transactions on Electron Devices 38 (1991), 887–894, and their alpha-power-law model, IEEE Journal of Solid-State Circuits 25 (1990), 584–594. |
+| VDMOS | Existing clean-room square-law, junction and Miller equations. Original R9 through R9d circuits and maintainer-supplied 44.2 traces. Inverting the saturation and triode laws identifies the gate intercept and drain resistance. Heat injection, case steps, clamp currents and paired transfers identify thermal storage, the default ambient boundary, mobility and source access loss. Open and clamped case sweeps resolve both RTHCA terms. At a fixed 30 K rise the access branch isolates the hot RD multiplier. The disabled-channel sweep measures the RB heat contribution. [Probe evidence](../verify/probes/README.md#r9d-thermal-probe-results) |
+| Cards, results and fixtures | ngspice user manual is the syntax and analysis compatibility target. All R9 circuits, tests and Rust implementations were written for Sansho. No device implementation was imported. |
+
+## R10 batch control interpreter
+
+The ngspice user manual's chapters on the interactive interpreter, commands, vectors and control structures are the compatibility specification. The source-located statement parser, precedence parser, evaluator, output confinement, verification harness and seven R10 decks are original Sansho work. Analysis commands use the existing Sansho solver, measurement, session alteration and raw output implementations. Linear interpolation, centered secants, trapezoidal integration and elementary complex identities supply the vector calculations. The new tests use analytic divider, MOS1, RC and ramp values and cross-thread replay. [Supported syntax and numerical choices](control.md)
+
+## R11 analog A cards
+
+The ngspice XSPICE code-model library chapter is the syntax and compatibility target. The parser, port stamps, analytic waveforms and verification decks are original Sansho work. The port equations use Kirchhoff’s laws. The corner polynomial is obtained by matching the two endpoint values and slopes. The rational-transfer equations use a controllable companion realization with time measured in reciprocal denormalization frequency. Tests use closed-form circuit responses and central differences of assembled residuals and charges. The R11b square phase, edge times and slew-rate checks use maintainer-supplied black-box ngspice 44.2 measurements. The same run identified the mandatory dynamic-operator rails. [Model coverage and verification limits](xspice.md)
+
+### R12 event-driven simulation
+
+The compatibility target is the ngspice user manual’s XSPICE mixed-mode and digital library descriptions. The queue, delta iteration, drive resolution and analog rollback are original implementations based on general discrete-event simulation and circuit principles. R12b compared the five original circuits with maintainer-supplied ngspice 44.2 batch waveforms. Measured DAC slopes, sampled ADC timing, propagation of a short set pulse and the divide-by-two startup phase informed the corrections. Independent tests use Boolean timing and the first-order RC response. R12c used the maintainer’s 16 event-history logs to refine ADC thresholds, output scheduling, DC initialization and divider and oscillator phase. [Probe measurements](../verify/probes/README.md#r12-digital-histories)
+
+### R13 external code-model exclusions
+
+The parser's rejection of `d_process`, `d_cosim` and `codemodel` implements the Sansho R13 security requirements. The diagnostic tests use original deck fragments.
+
+### R13 built-in code models
+
+The analog equations, table readers, clocked file machine, RAM, generalized LUT and real-valued event cells are original Rust implementations based on the user-facing descriptions and port/parameter tables in the ngspice 44 user manual §§8.2–8.5. The coupler uses Faraday's law and ampere-turn balance (§§8.2.21–22). The table Jacobians use Newton divided differences with locally selected ENO stencils (§§8.2.30–31). Junction limiting reuses Sansho's existing Nagel implementation. Event synchronization extends the R12 deterministic queue (§§21.3 and 22.2.1). All R13 circuits, data and analytic checks are original. [Model-specific assumptions](xspice.md#choices-for-reference-probes)
+
+R13c uses maintainer-supplied 44.2 analog raws and the same manual sections.
+The zener avalanche scale follows from the derivative of an exponential at
+the rated current. The clock sampling convention, RAM write level and LUT
+partial-transition delays follow from the one-shot and DAC ramp timings.
+[Measured waveforms and probe limits](xspice.md#r13c-residuals)
+
+R13d derives the LUT timing, RAM strengths, sampled real-bridge law and normalized
+zener continuation from the maintainer’s 17 black-box 44.2 sweeps of original
+Sansho probes. [Equations and measurement limits](xspice.md#r13d-measured-laws)
+
+R13e derives the per-output LUT delay history, transient amplifier startup
+deadline and short real-bridge step behavior from the ten maintainer-supplied
+44.2 logs for the three original R13d follow-ups.
+[Measurements and unresolved boundaries](xspice.md#r13e-measured-laws)
+
+## R14 classical models and control fields
+
+JFET2 follows Parker and Skellern, IEEE T-MTT 45(9), 1997, with parameter definitions from ngspice 44 manual §7.4.5. The knee relation, feedback coefficients, charge derivatives, cold-power heating and temperature laws were reconstructed independently from the maintainer’s 44.2 black-box measurements. MOS9 reuses Sansho’s MOS3 and the mask adjustments in §§7.6.2.6 and 27.6.5. The VDMOS resistance law combines §7.7 with the R9 and R14 thermal controls.
+
+The early BSIM channel and charge use Sheu, Scharfetter, Ko and Jeng, IEEE JSSC 22(4), 1987, and Jeng, UCB/ERL M90/90. Parameter meanings follow §§7.6.3 and 27.6.6–7. Inverse-dimension units, body clamps, mobility normalization, weak-inversion joins and charge partition were independently checked against terminal data. All R14 and R14b circuits are original. [Quantitative derivations and remaining discrepancies](r14-models.md)
+
+Control formatting follows manual §§13.5.59 and 13.5.106 and the cached R10/R13 default print, measurement and wrdata samples. The R14c formatter uses the four corrected 44.2 control logs and wrdata byte streams. The R14b admittances and inverter comparisons independently check the charge equations, including the 0/100 partition in Berkeley ERL M85/85 §4.2 and the rounded cutoff in the Parker–Skellern PSFET model description. The zero-VMAX MOS3/9 shortening follows the paired drain sweeps and continuity at pinch-off. [Measurement details](r14-models.md)
+
+## G1 GPU batch evaluation
+
+The GPU Monte Carlo path keeps the CPU engine per run and batches only device
+evaluation, an original design from architecture §8 (G1). The diode kernel is a
+line-by-line CUDA C transcription of Sansho's own diode, junction and dual-number
+code, in the same operation order and with FMA contraction disabled. The optional
+single-precision Jacobian is inexact Newton: J. E. Dennis and R. B. Schnabel,
+*Numerical Methods for Unconstrained Optimization and Nonlinear Equations*
+(SIAM, 1996), §6, where an approximate Jacobian changes the convergence rate but
+not the fixed point. NVIDIA's CUDA C++ Programming Guide and NVRTC documentation
+define the kernel language and run-time compilation. No GPU circuit-simulator
+source was consulted.
+
+The experimental mixed-precision Newton solver (`SANSHO_REAL_SOLVER=mixed`) is
+classical iterative refinement: J. H. Wilkinson, *Rounding Errors in Algebraic
+Processes* (1963), C. B. Moler, J. ACM 14(2), 1967, and N. J. Higham, *Accuracy and
+Stability of Numerical Algorithms*, 2nd ed., §12. The stopping test is the
+Oettli–Prager componentwise backward error (Numer. Math. 6, 1964). The
+single-precision factors reuse Sansho's own Gilbert–Peierls kernel through a new
+`f32` scalar.

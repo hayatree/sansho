@@ -1,0 +1,9 @@
+Temperature characteristics at two supply voltages
+* Provenance: original R4 verification circuit.
+Vdrive rail 0
+Iload 0 out
+R1 rail out 1k
+R2 out 0 rt 1k
+.model rt r(tc1=0.002)
+.dc temp 20 40 10 Vdrive 1 2 1
+.end

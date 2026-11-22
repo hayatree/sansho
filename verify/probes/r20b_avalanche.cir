@@ -1,0 +1,34 @@
+Reverse multiplication with a resolved SRH generation current
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: density 1e16 3e16 1e17
+* Take the enabled/control ratio before breakdown. The large area and short lifetimes raise the generation signal.
+.param probe=1e16
+Vdrive drive 0 0
+Vref drive node_ref 0
+Dref node_ref 0 mref
+.model mref numd level=1
++ options diode defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon tn=2n tp=2n
++ doping uniform p.type conc={probe} x.high=1.2
++ doping uniform n.type conc={probe} x.low=1.2
++ models srh
++ end
+Vtest drive node_test 0
+Dtest node_test 0 mtest
+.model mtest numd level=1
++ options diode defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon tn=2n tp=2n
++ doping uniform p.type conc={probe} x.high=1.2
++ doping uniform n.type conc={probe} x.low=1.2
++ models srh avalanche
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.dc Vdrive -0.25 -3 -0.25
+.save i(vref) i(vtest)
+.end

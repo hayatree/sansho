@@ -1,0 +1,27 @@
+ADC boundary plateaus, asymmetric delays and the DAC unknown level
+* Provenance: original Sansho R12c follow-up to the 44.2 event histories.
+* sweep: 0.1
+.param probe=0.1
+Vi in 0 PWL(0 0 1n 0 2n {probe} 5n {probe} 6n 0.101 11n 0.101 12n 0.899 15n 0.899 16n 0.9 20n 0.9 21n 1 22n 1 23n 0 30n 0)
+Vctl ctl 0 1
+Aread [in] [d] adc
+Awindow [in] [w] win
+Awrite [d] [out] dac
+Rout out 0 10k
+Abuf d q gate
+Aosc ctl osc clock
+.model adc adc_bridge(rise_delay=0 fall_delay=0)
+.model win adc_bridge(in_low=0.1 in_high=0.9 rise_delay=2n fall_delay=0.25n)
+.model dac dac_bridge(out_low=-1 out_high=3 t_rise=1n t_fall=1n)
+.model gate d_buffer(rise_delay=2n fall_delay=0.25n)
+.model clock d_osc(cntl_array=[0 2] freq_array=[100Meg 100Meg] duty_cycle=0.25 rise_delay=2n fall_delay=0.25n)
+.control
+tran 0.1n 30n
+eprint d
+eprint w
+eprint q
+eprint osc
+print v(in) v(out)
+quit
+.endc
+.end

@@ -1,0 +1,13 @@
+Bulk charge and channel current at strong forward film bias
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: keta -.6 -.25 0
+.param probe=-.6
+Vd d 0 0.95
+Vg g 0 .8
+Ve e 0 0
+Vb b 0 0
+M1 d g 0 e b dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 keta={probe})
+.dc Vb .2 .75 .01
+.save i(Vd) @m1[qb]
+.end

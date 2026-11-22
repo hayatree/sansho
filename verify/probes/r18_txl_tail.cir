@@ -1,0 +1,14 @@
+Attenuated front and long relaxation tail
+* Provenance: original Sansho R18 circuit.
+* sweep: resistance 4 40 200
+* known-difference: 40 | v(far)
+* known-difference: 200 | v(near) v(far) i(vin)
+.param probe=4
+Vin src 0 dc 0 ac 1 pulse(0 1 1n .1n .1n 45n 100n)
+Rs src near 50
+Y1 near 0 far 0 wire
+.model wire txl(r={probe} l=250n g=0 c=100p length=1)
+Rl far 0 75
+.tran .1n 150n
+.save v(near) v(far) i(Vin)
+.end

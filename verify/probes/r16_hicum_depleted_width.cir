@@ -1,0 +1,11 @@
+Hole-charge continuation as reverse BC charge approaches QP0
+* Provenance: original Sansho R16 circuit.
+* sweep: depleted_width 5f 10f 20f
+.param probe=5f
+Vc c 0 1
+Vb b 0 .79
+Q1 c b 0 0 dev
+.model dev npn(level=8 qp0=20f t0=2p cjci0={probe} cjei0=0)
+.dc Vc -.05 2 .025
+.save i(Vc) i(Vb)
+.end

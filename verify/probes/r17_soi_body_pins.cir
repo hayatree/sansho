@@ -1,0 +1,14 @@
+Independently bias P and inspect the sixth film node
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: body_pins 10 100 1k
+.param probe=10
+Vd d 0 0.95
+Vg g 0 .8
+Ve e 0 0
+Vp p 0 .4
+Rread b 0 2meg
+M1 d g 0 e p b dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 rbsh={probe} isdif=.25)
+.dc Vp -.2 .6 .025
+.save i(Vp) v(b) i(Vd)
+.end

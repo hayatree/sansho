@@ -1,0 +1,705 @@
+//! `sansho` command-line interface.
+//!
+//! ```text
+//! sansho run deck.cir                # human-readable summary
+//! sansho run deck.cir -r out.raw     # also write an ngspice-compatible ASCII raw file
+//! sansho run deck.cir --json         # machine-readable JSON on stdout
+//! sansho batch a.cir b.cir -j 8      # independent netlists in parallel, one JSON line each
+//! ```
+//!
+//! Exit codes: 0 success, 1 simulation or netlist error, 2 I/O or usage error.
+//!
+//! Provenance: original work. See `docs/PROVENANCE.md`.
+
+#![forbid(unsafe_code)]
+
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+use sansho_api::control::{ControlOptions, ControlOutput};
+use sansho_diag::Diagnostic;
+use sansho_output::{AnalysisKind, Data, SimResults};
+use serde::Serialize;
+
+#[derive(Debug, Parser)]
+#[command(name = "sansho", version, about = "Fast, agent-native SPICE simulator")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum RawFormat {
+    Ascii,
+    Binary,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Parse and simulate a netlist.
+    Run {
+        /// Directory for write, wrdata and redirected print (defaults to the deck directory).
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+        /// Allow a trusted control script to write absolute paths or paths outside its output directory.
+        #[arg(long)]
+        allow_external_paths: bool,
+        /// Total control loop iterations permitted across all blocks.
+        #[arg(long, default_value_t = 10_000)]
+        iteration_limit: usize,
+        /// Master seed for single-run Monte Carlo replay.
+        #[arg(long, requires = "mc_run")]
+        mc_seed: Option<u64>,
+        /// Zero-based statistical run index.
+        #[arg(long, requires = "mc_seed")]
+        mc_run: Option<u64>,
+        /// Netlist file.
+        netlist: PathBuf,
+        /// Write an ngspice raw file.
+        #[arg(short, long)]
+        raw: Option<PathBuf>,
+        #[arg(long, value_enum, default_value = "ascii", requires = "raw")]
+        raw_format: RawFormat,
+        /// Print results and diagnostics as JSON on stdout.
+        #[arg(long)]
+        json: bool,
+        /// Maximum number of threads (default: all cores).
+        #[arg(short, long)]
+        jobs: Option<usize>,
+    },
+    /// Run a fixed-topology Monte Carlo batch.
+    Mc {
+        netlist: PathBuf,
+        #[arg(short = 'n', long)]
+        runs: usize,
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        #[arg(short, long)]
+        jobs: Option<usize>,
+        #[arg(long)]
+        json: bool,
+        /// Include the deck's saved waveforms in JSON.
+        #[arg(long, requires = "json")]
+        save_waves: bool,
+        #[command(flatten)]
+        gpu: GpuArgs,
+    },
+    /// Simulate several independent netlists in parallel and print one JSON line per netlist.
+    Batch {
+        /// Netlist files.
+        #[arg(required = true)]
+        netlists: Vec<PathBuf>,
+        /// Maximum number of threads (default: all cores).
+        #[arg(short, long)]
+        jobs: Option<usize>,
+    },
+    /// Parse and elaborate a netlist without simulating it.
+    Check {
+        /// Netlist file.
+        netlist: PathBuf,
+        /// Print diagnostics as JSON on stdout.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+enum JsonOut<'a> {
+    Ok {
+        diagnostics: &'a [Diagnostic],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        results: Option<&'a SimResults>,
+    },
+    Error {
+        diagnostics: &'a [Diagnostic],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        partial: Option<&'a SimResults>,
+    },
+}
+
+fn print_json(out: &impl Serialize) -> ExitCode {
+    let mut stdout = std::io::stdout().lock();
+    let ok = serde_json::to_writer(&mut stdout, out).is_ok() && writeln!(stdout).is_ok();
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    }
+}
+
+fn print_diags(diags: &[Diagnostic]) {
+    for d in diags {
+        eprintln!("{d}");
+    }
+}
+
+fn summary(results: &SimResults, intervals: &[u32]) {
+    let mut intervals = intervals.iter();
+    for a in &results.analyses {
+        match (a.kind, &a.data) {
+            (_, Data::Real { columns }) if a.scale.is_none() => {
+                println!("{}", a.kind.plot_name());
+                for (v, c) in a.variables.iter().zip(columns) {
+                    let val = c.first().copied().unwrap_or(f64::NAN);
+                    println!("  {:<20} {:>16.6e} {}", v.name, val, v.quantity.unit());
+                }
+            }
+            (AnalysisKind::Noise, Data::Real { columns }) => {
+                println!("{} ({} frequencies)", a.kind.plot_name(), a.len());
+                let every = intervals.next().copied().unwrap_or(0) as usize;
+                if every > 0 {
+                    for i in (0..a.len()).step_by(every) {
+                        println!("  {:.6e} Hz", a.scale_values[i]);
+                        for (v, col) in a.variables.iter().zip(columns) {
+                            println!("    {}  {:.6e} {}", v.name, col[i], v.quantity.unit())
+                        }
+                    }
+                }
+            }
+            (AnalysisKind::Four, Data::Real { columns }) => {
+                for (v, c) in a
+                    .variables
+                    .iter()
+                    .zip(columns)
+                    .filter(|(v, _)| v.name.starts_with("thd("))
+                {
+                    if let Some(value) = c.first() {
+                        println!("{} = {:.6} %", v.name, value)
+                    }
+                }
+            }
+            (AnalysisKind::Pz, Data::Complex { columns }) => {
+                for (v, c) in a.variables.iter().zip(columns) {
+                    if let Some((re, im)) = c.first() {
+                        println!("{} = {:.6e} {:+.6e}j rad/s", v.name, re, im);
+                    }
+                }
+            }
+            _ => println!(
+                "{}: {} points, {} variables",
+                a.kind.plot_name(),
+                a.len(),
+                a.variables.len()
+            ),
+        }
+    }
+    for table in &results.prints {
+        println!("{}", table.analysis.plot_name());
+        println!("Index\t{}", table.headings.join("\t"));
+        for i in 0..table.columns.first().map_or(0, Vec::len) {
+            print!("{i}");
+            for col in &table.columns {
+                print!("\t{:.8e}", col[i]);
+            }
+            println!();
+        }
+    }
+    if !results.measures.is_empty() {
+        println!("Measurements:");
+        for m in &results.measures {
+            match m.value {
+                Some(v) => println!("  {:<20} {:>16.6e}", m.name, v),
+                None => println!("  {:<20} {:>16}", m.name, "failed"),
+            }
+        }
+    }
+}
+
+fn write_raw(path: &PathBuf, format: RawFormat, results: &SimResults) -> Result<(), ExitCode> {
+    let file = std::fs::File::create(path).map_err(|e| {
+        eprintln!("error: cannot create {}: {e}", path.display());
+        ExitCode::from(2)
+    })?;
+    let mut w = std::io::BufWriter::new(file);
+    match format {
+        RawFormat::Ascii => sansho_output::write_raw_ascii(results, &mut w),
+        RawFormat::Binary => sansho_output::write_raw_binary(results, &mut w),
+    }
+    .and_then(|()| w.flush())
+    .map_err(|e| {
+        eprintln!("error: cannot write {}: {e}", path.display());
+        ExitCode::from(2)
+    })
+}
+
+/// Resolves `.include` / `.lib` relative to the netlist's directory.
+fn loader(path: &std::path::Path) -> sansho_netlist::FsLoader {
+    sansho_netlist::FsLoader {
+        base: path
+            .parent()
+            .map_or_else(PathBuf::new, std::path::Path::to_path_buf),
+    }
+}
+
+fn read(path: &PathBuf) -> Result<String, ExitCode> {
+    let _phase = sansho_diag::Phase::start("read");
+    std::fs::read_to_string(path).map_err(|e| {
+        eprintln!("error: cannot read {}: {e}", path.display());
+        ExitCode::from(2)
+    })
+}
+
+fn config(jobs: Option<usize>) -> sansho_engine::RunConfig {
+    sansho_engine::RunConfig {
+        threads: jobs.unwrap_or_else(sansho_engine::default_threads).max(1),
+    }
+}
+
+#[derive(Serialize)]
+struct BatchLine<'a> {
+    netlist: String,
+    #[serde(flatten)]
+    out: JsonOut<'a>,
+}
+
+fn batch(netlists: &[PathBuf], jobs: Option<usize>) -> Result<ExitCode, ExitCode> {
+    let mut parsed = Vec::with_capacity(netlists.len());
+    for p in netlists {
+        let text = read(p)?;
+        parsed.push(sansho_netlist::parse_with(&text, &loader(p)));
+    }
+    let good: Vec<sansho_netlist::Netlist> = parsed
+        .iter()
+        .filter_map(|r| r.as_ref().ok().filter(|nl| nl.controls.is_empty()).cloned())
+        .collect();
+    let mut outputs = sansho_engine::run_batch(&good, &config(jobs)).into_iter();
+    let mut ok = true;
+    let mut stdout = std::io::stdout().lock();
+    for (path, r) in netlists.iter().zip(&parsed) {
+        if let Ok(nl) = r
+            && !nl.controls.is_empty()
+        {
+            let options = ControlOptions {
+                output_dir: path.parent().map(Into::into),
+                ..Default::default()
+            };
+            let output = sansho_api::control::execute_with(nl, &options, config(jobs).threads);
+            let report = control_json(&output);
+            ok &= report.status == "ok";
+            #[derive(Serialize)]
+            struct ControlLine<'a> {
+                netlist: &'a std::path::Path,
+                #[serde(flatten)]
+                report: ControlJson<'a>,
+            }
+            if serde_json::to_writer(
+                &mut stdout,
+                &ControlLine {
+                    netlist: path,
+                    report,
+                },
+            )
+            .is_err()
+                || writeln!(stdout).is_err()
+            {
+                return Err(ExitCode::from(2));
+            }
+            continue;
+        }
+        let run = match r {
+            Ok(_) => outputs.next(),
+            Err(_) => None,
+        };
+        let out = match (r, &run) {
+            (Err(d), _) => JsonOut::Error {
+                diagnostics: d,
+                partial: None,
+            },
+            (Ok(_), Some(Ok(o))) => JsonOut::Ok {
+                diagnostics: &o.warnings,
+                results: Some(&o.results),
+            },
+            (Ok(_), Some(Err(e))) => JsonOut::Error {
+                diagnostics: &e.diagnostics,
+                partial: e.partial.as_ref(),
+            },
+            (Ok(_), None) => return Err(ExitCode::from(2)),
+        };
+        ok &= matches!(out, JsonOut::Ok { .. });
+        let line = BatchLine {
+            netlist: path.display().to_string(),
+            out,
+        };
+        if serde_json::to_writer(&mut stdout, &line).is_err() || writeln!(stdout).is_err() {
+            return Err(ExitCode::from(2));
+        }
+    }
+    Ok(if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
+}
+
+/// GPU batch options of `sansho mc`.
+#[derive(clap::Args, Debug)]
+struct GpuArgs {
+    /// Batch device evaluation on a CUDA GPU (requires the `gpu` build feature).
+    #[arg(long)]
+    gpu: bool,
+    /// Concurrently simulated runs on the GPU (default 256).
+    #[arg(long, requires = "gpu")]
+    gpu_lanes: Option<usize>,
+    /// Jacobian precision during Newton iterations: f64 or f32 (experimental).
+    #[arg(long, requires = "gpu", default_value = "f64", value_parser = ["f64", "f32"])]
+    gpu_jacobian: String,
+}
+
+#[cfg(feature = "gpu")]
+fn gpu_batch(
+    plan: &sansho_engine::monte_carlo::MonteCarlo,
+    seed: u64,
+    n: usize,
+    save_waves: bool,
+    args: &GpuArgs,
+) -> Result<sansho_engine::monte_carlo::Report, Vec<sansho_diag::Diagnostic>> {
+    use sansho_engine::gpu_batch::{GpuConfig, Jacobian};
+    let defaults = GpuConfig::default();
+    let config = GpuConfig {
+        lanes: args.gpu_lanes.unwrap_or(defaults.lanes),
+        jacobian: if args.gpu_jacobian == "f32" {
+            Jacobian::F32
+        } else {
+            Jacobian::F64
+        },
+        ..defaults
+    };
+    let (report, stats) = plan.batch_gpu(seed, n, save_waves, &config)?;
+    eprintln!(
+        "gpu: {} launches, {} group evaluations ({} with f32 Jacobians), {:.3} s in launches",
+        stats.launches,
+        stats.requests,
+        stats.f32_launches,
+        stats.launch_ns as f64 * 1e-9
+    );
+    Ok(report)
+}
+
+#[cfg(not(feature = "gpu"))]
+fn gpu_batch(
+    _plan: &sansho_engine::monte_carlo::MonteCarlo,
+    _seed: u64,
+    _n: usize,
+    _save_waves: bool,
+    _args: &GpuArgs,
+) -> Result<sansho_engine::monte_carlo::Report, Vec<sansho_diag::Diagnostic>> {
+    Err(vec![sansho_diag::Diagnostic::error(
+        "E-GPU-UNSUPPORTED",
+        "this sansho build has no GPU support; rebuild with --features gpu",
+    )])
+}
+
+fn mc(
+    netlist: &PathBuf,
+    n: usize,
+    seed: u64,
+    jobs: Option<usize>,
+    json: bool,
+    save_waves: bool,
+    gpu: &GpuArgs,
+) -> Result<ExitCode, ExitCode> {
+    let text = read(netlist)?;
+    let report =
+        sansho_engine::monte_carlo::MonteCarlo::prepare(&text, &loader(netlist)).and_then(|p| {
+            if gpu.gpu {
+                gpu_batch(&p, seed, n, save_waves, gpu)
+            } else {
+                p.batch(seed, n, save_waves, &config(jobs))
+            }
+        });
+    match report {
+        Ok(report) => {
+            let failed = report.runs.iter().filter(|r| !r.success).count();
+            let code = if json {
+                print_json(&report)
+            } else {
+                println!(
+                    "{} runs, {} failed, seed {}",
+                    report.runs.len(),
+                    failed,
+                    seed
+                );
+                for r in &report.runs {
+                    if !r.success {
+                        eprintln!("Run {}", r.index);
+                        print_diags(&r.diagnostics);
+                    }
+                    for m in &r.measures {
+                        if let Some(v) = m.value {
+                            println!("{} {} {v:e} {}", r.index, m.name, m.unit)
+                        } else {
+                            eprintln!(
+                                "run {} {} failed: {}",
+                                r.index,
+                                m.name,
+                                m.error.as_deref().unwrap_or("no value")
+                            );
+                        }
+                    }
+                }
+                let display =
+                    |v: Option<f64>| v.map_or_else(|| "n/a".into(), |x| format!("{x:.7e}"));
+                for s in &report.statistics {
+                    println!(
+                        "{} (n={}): mean {}, std {}, range {}..{}, p05/p50/p95 {}/{}/{}",
+                        s.name,
+                        s.count,
+                        display(s.mean),
+                        display(s.std),
+                        display(s.min),
+                        display(s.max),
+                        display(s.p05),
+                        display(s.p50),
+                        display(s.p95)
+                    );
+                }
+                ExitCode::SUCCESS
+            };
+            Ok(if failed > 0 { code.max_with(1) } else { code })
+        }
+        Err(d) => Ok(input_error(&d, json)),
+    }
+}
+
+fn input_error(d: &[Diagnostic], json: bool) -> ExitCode {
+    if json {
+        print_json(&JsonOut::Error {
+            diagnostics: d,
+            partial: None,
+        })
+        .max_with(1)
+    } else {
+        print_diags(d);
+        ExitCode::from(1)
+    }
+}
+
+#[derive(Serialize)]
+struct ControlJson<'a> {
+    status: &'static str,
+    diagnostics: &'a [Diagnostic],
+    control: &'a sansho_api::control::Transcript,
+    results: &'a SimResults,
+}
+fn control_json(output: &ControlOutput) -> ControlJson<'_> {
+    ControlJson {
+        status: if output.diagnostics.iter().any(Diagnostic::is_error) {
+            "error"
+        } else {
+            "ok"
+        },
+        diagnostics: &output.diagnostics,
+        control: &output.transcript,
+        results: &output.results,
+    }
+}
+
+fn run(
+    control: &ControlOptions,
+    netlist: &PathBuf,
+    raw: Option<&PathBuf>,
+    raw_format: RawFormat,
+    json: bool,
+    jobs: Option<usize>,
+    replay: Option<(u64, u64)>,
+) -> Result<ExitCode, ExitCode> {
+    let text = read(netlist)?;
+    let cfg = config(jobs);
+    let result = if let Some((seed, index)) = replay {
+        match sansho_engine::monte_carlo::MonteCarlo::prepare(&text, &loader(netlist)) {
+            Ok(plan) => plan.run_with(seed, index, &cfg),
+            Err(d) => return Ok(input_error(&d, json)),
+        }
+    } else {
+        match sansho_netlist::parse_with(&text, &loader(netlist)) {
+            Ok(nl) if !nl.controls.is_empty() => {
+                let output = sansho_api::control::execute_with(&nl, control, cfg.threads);
+                let report = control_json(&output);
+                if let Some(path) = raw {
+                    write_raw(path, raw_format, &output.results)?
+                }
+                let code = if json {
+                    print_json(&report)
+                } else {
+                    print_diags(&output.diagnostics);
+                    for line in &output.transcript.lines {
+                        println!("{line}")
+                    }
+                    ExitCode::SUCCESS
+                };
+                return Ok(if report.status == "error" {
+                    code.max_with(1)
+                } else {
+                    code
+                });
+            }
+            Ok(nl) => sansho_engine::run_with(&nl, &cfg),
+            Err(d) => return Ok(input_error(&d, json)),
+        }
+    };
+    let print_result = |out: JsonOut<'_>| {
+        #[derive(Serialize)]
+        struct Replay<'a> {
+            seed: u64,
+            index: u64,
+            #[serde(flatten)]
+            out: JsonOut<'a>,
+        }
+        match replay {
+            Some((seed, index)) => print_json(&Replay { seed, index, out }),
+            None => print_json(&out),
+        }
+    };
+    match result {
+        Ok(out) => {
+            let _phase = sansho_diag::Phase::start("output");
+            if let Some(p) = raw {
+                write_raw(p, raw_format, &out.results)?;
+            }
+            if json {
+                return Ok(print_result(JsonOut::Ok {
+                    diagnostics: &out.warnings,
+                    results: Some(&out.results),
+                }));
+            }
+            print_diags(&out.warnings);
+            summary(&out.results, &out.noise_summary_intervals);
+            for t in &out.tran_stats {
+                println!(
+                    "Transient: {} accepted steps, {} rejected, {} Newton iterations, {} assemblies",
+                    t.accepted_steps, t.rejected_steps, t.iterations, t.assemblies
+                );
+            }
+            for dc in &out.dc_stats {
+                println!(
+                    "DC {}: {:.2} Newton iterations/point ({} iterations, {} extra solves)",
+                    dc.source,
+                    dc.iterations as f64 / dc.points as f64,
+                    dc.iterations,
+                    dc.extra_solves
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(err) => {
+            if let (Some(p), Some(partial)) = (raw, &err.partial)
+                && !partial.analyses.is_empty()
+            {
+                write_raw(p, raw_format, partial)?;
+            }
+            if json {
+                return Ok(print_result(JsonOut::Error {
+                    diagnostics: &err.diagnostics,
+                    partial: err.partial.as_ref(),
+                })
+                .max_with(1));
+            }
+            print_diags(&err.diagnostics);
+            Ok(ExitCode::from(1))
+        }
+    }
+}
+
+fn check(netlist: &PathBuf, json: bool) -> Result<ExitCode, ExitCode> {
+    let text = read(netlist)?;
+    let result = sansho_netlist::parse_with(&text, &loader(netlist))
+        .and_then(|nl| sansho_engine::check(&nl).map(|c| c.warnings));
+    let (diags, ok) = match result {
+        Ok(w) => (w, true),
+        Err(d) => (d, false),
+    };
+    if json {
+        let out = if ok {
+            JsonOut::Ok {
+                diagnostics: &diags,
+                results: None,
+            }
+        } else {
+            JsonOut::Error {
+                diagnostics: &diags,
+                partial: None,
+            }
+        };
+        let code = print_json(&out);
+        return Ok(if ok { code } else { code.max_with(1) });
+    }
+    print_diags(&diags);
+    if ok {
+        println!("ok");
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(1))
+    }
+}
+
+trait MaxWith {
+    fn max_with(self, code: u8) -> ExitCode;
+}
+
+impl MaxWith for ExitCode {
+    /// Keep an I/O failure (2) but otherwise report `code`.
+    fn max_with(self, code: u8) -> ExitCode {
+        if self == ExitCode::from(2) {
+            self
+        } else {
+            ExitCode::from(code)
+        }
+    }
+}
+
+fn main() -> ExitCode {
+    let mut args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|arg| {
+        !arg.to_string_lossy().starts_with('-')
+            && !matches!(
+                arg.to_str(),
+                Some("run" | "mc" | "batch" | "check" | "help")
+            )
+    }) {
+        args.insert(1, "run".into());
+    }
+    let cli = Cli::parse_from(args);
+    let r = match &cli.command {
+        Command::Run {
+            netlist,
+            raw,
+            raw_format,
+            json,
+            jobs,
+            mc_seed,
+            mc_run,
+            output_dir,
+            allow_external_paths,
+            iteration_limit,
+        } => run(
+            &ControlOptions {
+                output_dir: output_dir
+                    .clone()
+                    .or_else(|| netlist.parent().map(Into::into)),
+                allow_external_paths: *allow_external_paths,
+                iteration_limit: *iteration_limit,
+            },
+            netlist,
+            raw.as_ref(),
+            *raw_format,
+            *json,
+            *jobs,
+            mc_seed.zip(*mc_run),
+        ),
+        Command::Mc {
+            netlist,
+            runs,
+            seed,
+            jobs,
+            json,
+            save_waves,
+            gpu,
+        } => mc(netlist, *runs, *seed, *jobs, *json, *save_waves, gpu),
+        Command::Batch { netlists, jobs } => batch(netlists, *jobs),
+        Command::Check { netlist, json } => check(netlist, *json),
+    };
+    r.unwrap_or_else(|code| code)
+}

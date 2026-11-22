@@ -1,0 +1,18 @@
+R10 load sweep with repeated measurements
+* Provenance: original Sansho R10 circuit.
+Vtest in 0 1
+Rfeed in out 1k
+Rload out 0 1k
+.control
+let loadval = 1000
+repeat 3
+  alter rload = $&loadval
+  dc vtest 0 2 0.25
+  meas dc endpoint find v(out) at=2
+  print endpoint * 2
+  setplot const
+  let loadval = loadval + 1000
+end
+quit
+.endc
+.end

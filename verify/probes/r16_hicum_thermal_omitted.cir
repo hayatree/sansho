@@ -1,0 +1,11 @@
+Fifth pin omitted on a thermally enabled card
+* Provenance: original Sansho R16 circuit.
+* sweep: thermal_omitted 0 200 500
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 flsh=2 rth={probe} re=2)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

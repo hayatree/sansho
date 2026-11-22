@@ -1,0 +1,14 @@
+TXL port loading in DC and AC
+* Provenance: original Sansho R18b circuit.
+* sweep: source_resistance 25 50 100
+* known-difference: 25 50 100 | v(a) v(x) i(vin)
+.param probe=25
+Vin src 0 dc 1 ac 1
+Rs src a {probe}
+Y1 a 0 x 0 wire len=1.5
+.model wire txl length=1 r=16 l=250n g=.8m c=100p
+Rx x 0 80
+.op
+.ac dec 2 100k 1g
+.save v(a) v(x) i(Vin)
+.end

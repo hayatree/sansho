@@ -1,0 +1,21 @@
+BSIM3 loaded CMOS inverter switching both edges
+* Provenance: original Sansho circuit and parameter choices from the BSIM3v3.3 parameter list.
+.model nch nmos level=8 version=3.3
++ tox=8n xj=0.13u nch=2.1e17 vth0=0.54 k1=0.52 k2=-0.023
++ u0=460 vsat=92000 rdsw=85 pclm=1.15
++ lint=9n wint=15n cgso=170p cgdo=150p cf=65p capmod=3
+.model pch pmos level=49 version=3.3.0
++ tox=8n xj=0.13u nch=2.1e17 vth0=-0.58 k1=0.52 k2=-0.023
++ u0=185 vsat=76000 rdsw=130 pclm=1.15
++ lint=9n wint=15n cgso=170p cgdo=150p cf=65p capmod=3
+Vdd rail 0 1.8
+.subckt inv in out rail
+Mn out in 0 0 nch w=1.5u l=0.45u ad=0.5p as=0.5p pd=3u ps=3u
+Mp out in rail rail pch w=3.4u l=0.45u ad=1p as=1p pd=5u ps=5u
+.ends
+Vin in 0 pulse(0 1.8 0.5n 80p 80p 1.5n 3.2n)
+X1 in out rail inv
+Cl out 0 24f
+.tran 10p 6.4n
+.save v(in) v(out) i(Vdd)
+.end

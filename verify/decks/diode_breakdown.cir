@@ -1,0 +1,10 @@
+Diode reverse breakdown with recombination, area and sidewall scaling
+* Provenance: original R4 verification circuit.
+Vbias in 0 DC 0.6 AC 1
+Rs in d 50
+D1 d 0 junction area=2 pj=10u
+.model junction d(is=1e-14 n=1 bv=3 ibv=1m nbv=1.2 tbv1=0.0007 tbv2=1u
++ isr=5p nr=1.8
++ ikf=1m jsw=1e-10 cjp=1u php=0.8 mjsw=0.3 cjo=1p)
+.dc Vbias -3.1 1.0 0.05
+.end

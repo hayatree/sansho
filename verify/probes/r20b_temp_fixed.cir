@@ -1,0 +1,23 @@
+Fixed ambient temperature at the R20 temperature-sweep bias
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: temperature 0 20 50 80 100
+* Each setting starts fresh. Compare with the corresponding R20 DC temperature step.
+.param probe=0
+Vdrive drive 0 0
+.temp {probe}
+Vtest drive node_test 0
+Dtest node_test 0 mtest
+.model mtest numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon tn=2n tp=3n
++ doping uniform n.type conc=1e16
++ doping uniform p.type conc=2e16 x.high=1.2
++ models tempmob srh concmob
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.dc Vdrive 0.44 0.46 0.01
+.save i(vtest)
+.end

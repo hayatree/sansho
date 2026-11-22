@@ -1,0 +1,12 @@
+Differential junction capacitance through its forward continuation
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: vbs .60 .665 .72
+.param probe=.60
+Vd d 0 0
+Vb b 0 {probe} ac 1
+M1 d 0 0 0 b dev l=.48u w=2.4u
+.model dev nmos(level=10 k1=.42 tox=4.6n tsi=75n cjswg=2n pbswg=.7
++ mjswg=.5 cgso=0 cgdo=0 cf=0 isbjt=0 isdif=0 isrec=0)
+.ac lin 2 1meg 2meg
+.save i(Vd) i(Vb)
+.end

@@ -1,0 +1,14 @@
+Case shunt and ambient heat drive versus explicit RTHCA
+* Provenance: original Sansho R9c black-box experiment.
+* sweep: 100 400 1000
+.param probe=100
+Vcase tc 0 10
+Mclamped 0 0 0 tj tc p thermal
+Iclamped 0 tj 0.25
+Mfree 0 0 0 jf cf p thermal
+Ifree 0 jf 0.25
+.model p vdmos(rthjc=5 rthca={probe} cthj=100u)
+.options temp=40
+.dc Vcase 0 20 5
+.save v(tj) v(tc) i(Vcase) v(jf) v(cf)
+.end

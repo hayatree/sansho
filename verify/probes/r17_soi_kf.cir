@@ -1,0 +1,13 @@
+Drain-current spectrum varying kf
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: kf 0 1e-26 5e-26
+.param probe=0
+Vd d 0 0.95
+Vg g 0 .83 ac 1
+Ve e 0 0
+Hread out 0 Vd 1k
+Rload out 0 1k
+M1 d g 0 e dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 fnoimod=0 kf={probe})
+.noise v(out) Vg dec 5 1 10G
+.end

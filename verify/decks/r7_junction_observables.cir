@@ -1,0 +1,13 @@
+Junction bias outputs across a base voltage sweep
+* Provenance: original Sansho R7 circuit.
+* verify: atol_v=1e-12 atol_i=1e-13
+Vbias b 0 0.55
+Vrail c 0 1
+D1 b 0 dj
+.model dj d(is=1e-14 cjo=2p)
+Q1 c b 0 qb
+.model qb npn(is=2e-15 bf=80 vaf=50 cje=3p cjc=1p)
+.dc Vbias 0.50 0.62 0.02
+.save v(b) @d1[id] @d1[gd] @q1[ic] @q1[gm] @q1[gpi]
+.print dc @d1[id] @q1[gm]
+.end

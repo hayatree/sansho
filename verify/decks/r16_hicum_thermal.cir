@@ -1,0 +1,9 @@
+Junction rise and cooling across a base pulse
+* Provenance: original Sansho R16 circuit.
+Vc c 0 1.5
+Vb b 0 pulse(.58 .78 1u 100n 100n 20u 50u)
+Q1 c b 0 0 tj dev
+.model dev npn(level=8 flsh=2 rth=270 cth=25n rbi0=20 re=1.5 rcx=2)
+.tran .25u 45u
+.save v(tj) i(Vc) i(Vb)
+.end

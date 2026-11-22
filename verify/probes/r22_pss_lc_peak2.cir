@@ -1,0 +1,9 @@
+Soft-limited parallel tank, voltage scale 2 V
+* Provenance: original Sansho oscillator probe for R22.
+* sansho-verify: pending-reference
+* sansho-verify: pss-ng v(out)
+Lt out 0 2m
+Ct out 0 2u ic=2
+Bnl out 0 I={0.003*v(out)*(v(out)*v(out)/4-1)}
+.pss 2.5k 8m out 384 17 50 0.005 uic
+.end

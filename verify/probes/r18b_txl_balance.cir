@@ -1,0 +1,13 @@
+Matched TXL on either side of equal loss rates
+* Provenance: original Sansho R18b circuit.
+* sweep: leakage 3.99m 4m 4.01m
+* reference-error: 4m | Error: Gaussian elimination fails during setup of TXL
+.param probe=3.99m
+Vin src 0 pulse(0 1 1n .1n .1n 20n 50n)
+Ra src a 50
+Y1 a 0 x 0 wire
+.model wire txl length=1 r=10 l=250n g={probe} c=100p
+Rx x 0 50
+.tran .02n 18n
+.save v(a) v(x) i(Vin)
+.end

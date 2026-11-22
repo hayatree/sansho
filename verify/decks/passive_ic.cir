@@ -1,0 +1,8 @@
+Stored electric and magnetic energy at startup
+* Provenance: original circuit for Sansho release-prep verification.
+Cstore cap 0 2n ic=0.8
+Rleak cap 0 1k
+Lstore coil 0 1m ic=2m
+Rloop coil 0 500
+.tran 20n 10u uic
+.end

@@ -1,0 +1,12 @@
+Noise scaling with AREA
+* Provenance: original Sansho R15 circuit.
+* sweep: noise_area .5 1 4
+.param probe=.5
+Vc c 0 2
+Vb b 0 .70 ac 1
+Hread out 0 Vb 1k
+Rload out 0 1k
+Q1 c b 0 dev area={probe}
+.model dev npn(level=4 kfn=1e-16 afn=1.4)
+.noise v(out) Vb dec 4 1 10meg
+.end

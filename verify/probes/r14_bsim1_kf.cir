@@ -1,0 +1,12 @@
+BSIM1 KF channel noise spectrum
+* Provenance: original Sansho R14 circuit.
+* sweep: kf 0 1e-26 1e-24
+.param probe=0
+Vd d 0 1.5
+Vg g 0 1.4 ac 1 ac 1
+Vb b 0 -.25
+M1 d g 0 b dev w=4u l=1.2u
+.model dev nmos(level=4 phi=.7 vfb=-.52 k1=.55 tox=.025 muz=470 u0=.12 u1=.1 eta=.012 vdd=3 temp=27 n0=1.45 xpart=0 k2=.025 af=1.1 kf={probe})
+Hsense out 0 Vd 1k
+.noise v(out) Vg dec 4 1 100meg
+.end

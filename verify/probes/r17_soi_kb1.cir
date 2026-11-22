@@ -1,0 +1,13 @@
+AC coupling and access impedance varying kb1
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: kb1 .2 1 2
+.param probe=.2
+Vd d 0 0.95
+Vg g 0 .78
+Ve e 0 .22 ac 1
+Vb b 0 .08
+M1 d g 0 e b dev l=.48u w=2.4u ad=3p as=2p
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 kb1={probe})
+.ac dec 5 10k 100G
+.save i(Vg) i(Vd) i(Ve) i(Vb)
+.end

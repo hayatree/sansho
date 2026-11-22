@@ -1,0 +1,15 @@
+SPICE2 differential multiplier and current-controlled cubic
+* Provenance: original R3 verification circuit.
+Va a 0 dc 0.6 ac 1
+Vb b 0 0.35
+Vref ref 0 0.1
+Eproduct xy 0 poly(2) a ref b 0 0 0 0 0 1
+Rs a sense 1k
+Vs sense 0 0
+Hcubic cube 0 poly(1) Vs 0 100 0 1e9
+Rxy xy 0 10k
+Rcube cube 0 10k
+.save v(xy) v(cube)
+.dc Va -1 1 0.05
+.ac lin 1 1k 1k
+.end

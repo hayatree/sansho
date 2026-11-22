@@ -1,0 +1,11 @@
+JFET2 tnom junction and channel response
+* Provenance: original Sansho R14 circuit.
+* sweep: tnom 0 27 85
+.param probe=0
+Vd d 0 1.8
+Vg g 0 -.6 ac 1
+J1 d g 0 dev
+.model dev njf(level=2 beta=0.7m vto=-1.6 cgs=4p cgd=1p tnom={probe})
+.dc Vg -3 .35 .025
+.save i(Vd) i(Vg)
+.end

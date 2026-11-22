@@ -1,0 +1,9 @@
+Body-biased MOS1 temperature sweep
+* Provenance: original circuit for Sansho release-prep verification.
+Vd d 0 1.5
+Vg g 0 1.2
+Vb b 0 -0.3
+M1 d g 0 b nch W=8u L=2u
+.model nch NMOS(level=1 vto=0.6 kp=35u gamma=0.4 phi=0.65 tnom=30)
+.dc temp 10 90 10
+.end

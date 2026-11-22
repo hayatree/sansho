@@ -1,0 +1,22 @@
+Delayed buffer pulse width and overtaking edges
+* Provenance: original Sansho R12b black-box experiment.
+* sweep: 0.5n 3n
+.param probe=0.5n
+Vin in 0 PULSE(0 1 3n 0.2n 0.2n {probe} 30n)
+Ain [in] [din] adc
+Ab din buf fixed
+Aa din asym variable
+Ai din inv inverter
+.model adc adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0 fall_delay=0)
+.model fixed d_buffer(rise_delay=2n fall_delay=2n)
+.model variable d_buffer(rise_delay=2n fall_delay=0.25n)
+.model inverter d_inverter(rise_delay=2n fall_delay=2n)
+.control
+tran 0.05n 12n
+eprint din
+eprint buf
+eprint asym
+eprint inv
+quit
+.endc
+.end

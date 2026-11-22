@@ -1,4 +1,5 @@
 CMOS inverter, level 1
+* Provenance: original Sansho verification fixture.
 VDD vdd 0 3.3
 VIN in 0 DC 0 PULSE(0 3.3 1n 0.2n 0.2n 5n 10n)
 MP out in vdd vdd pch l=1u w=4u ad=8p as=8p pd=12u ps=12u

@@ -1,0 +1,5 @@
+B4SOIV3 Parameter Check
+Model = dev
+W = 2.4e-06, L = 4.8e-07
+Warning: Pd = 0 is less than W.
+Warning: Ps = 0 is less than W.

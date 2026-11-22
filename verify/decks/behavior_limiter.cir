@@ -1,0 +1,11 @@
+Soft current limiter and incremental transconductance
+* Provenance: original circuit for Sansho release-prep verification.
+Vin in 0 DC 0.25 AC 1
+Blim 0 out I={1m*tanh(2*v(in))}
+Rload out 0 1k
+Etable command 0 table={v(in)} (-2,-0.6) (0,0) (2,0.6)
+Gload 0 trace value={v(command)*1m}
+Rtrace trace 0 1k
+.dc Vin -1.5 1.5 0.05
+.ac dec 2 10 100
+.end

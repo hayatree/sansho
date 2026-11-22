@@ -1,4 +1,5 @@
 Library sections, includes and corner parameters
+* Provenance: original Sansho verification fixture.
 * The ff corner shifts the threshold through a library parameter.
 .lib 'lib/models.lib' ff
 .include lib/cells.inc

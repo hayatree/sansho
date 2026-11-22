@@ -1,0 +1,31 @@
+Default delays and input loads with light and heavy digital fanout
+* Provenance: original Sansho R12b black-box experiment.
+* sweep: 1p 100p
+.param probe=1p
+Vin in 0 PULSE(0 5 4n 1n 1n 6n 20n)
+Aa [in] [src] adc
+Al src light buf
+Ah src heavy buf
+An [light heavy] nandout gate
+Ainv src complement inv
+Ald light left buf
+Ahd heavy right loaded
+.model gate d_nand
+.model inv d_inverter
+.model adc adc_bridge
+.model buf d_buffer
+.model loaded d_buffer(input_load={probe})
+.control
+tran 0.05n 18n
+edisplay
+eprint src
+eprint light
+eprint heavy
+eprint nandout
+eprint complement
+eprint left
+eprint right
+showmod
+quit
+.endc
+.end

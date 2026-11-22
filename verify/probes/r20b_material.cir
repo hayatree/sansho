@@ -1,0 +1,38 @@
+Equilibrium silicon material report and intrinsic conductance
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: temperature 0 27 55 85 110
+* Keep the log from output material. The compensated slab gives q ni (mu_n + mu_p) A/L.
+.param probe=0
+Vdrive drive 0 0
+.temp {probe}
+Vdefault drive node_default 0
+Ddefault node_default 0 mdefault
+.model mdefault numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform n.type conc=1e13
++ doping uniform p.type conc=1e13
++ output material
++ end
+Vintrinsic drive node_intrinsic 0
+Dintrinsic node_intrinsic 0 mintrinsic
+.model mintrinsic numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform n.type conc=1e13
++ doping uniform p.type conc=1e13
++ mobility material=1 electron majority mumax=1000
++ mobility material=1 electron minority mumax=1000
++ mobility material=1 hole majority mumax=500
++ mobility material=1 hole minority mumax=500
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.dc Vdrive -0.01 0.01 0.005
+.save i(vdefault) i(vintrinsic)
+.end

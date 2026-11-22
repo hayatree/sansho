@@ -1,0 +1,11 @@
+Emitter breakdown offset override
+* Provenance: original Sansho R15 circuit.
+* sweep: ebbe 0 1e-18 1e-6
+.param probe=0
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 vbbe=4 ibbe=1u nbbe=1.5 ebbe={probe})
+.dc Vb -4.05 0 .05
+.save i(Vb)
+.end

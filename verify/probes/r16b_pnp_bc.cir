@@ -1,0 +1,18 @@
+An isolated BC diode with mirrored NPN and PNP drives
+* Provenance: original Sansho R16b black-box experiment.
+* sweep: pnp_bc 0 1e-16 3e-16
+* known-difference: 1e-16 3e-16 | i(vbp) i(vc)
+.param probe=0
+Vb b 0 0
+Ebn bn 0 b 0 -1
+Vc c 0 -1
+Vcn cn 0 1
+Vbp b bp 0
+Vbn bn bn1 0
+Qp c bp 0 0 p
+Qn cn bn1 0 0 n
+.model p pnp(level=8 c10=0 ibeis=0 ibcis={probe})
+.model n npn(level=8 c10=0 ibeis=0 ibcis={probe})
+.dc Vb -1.15 -.4 .015
+.save i(Vbp) i(Vbn) i(Vc) i(Vcn)
+.end

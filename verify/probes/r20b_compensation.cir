@@ -1,0 +1,79 @@
+Equal donor and acceptor increments at fixed net junction doping
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: pairs 1e12 1e16 1e17 3e17 1e18
+* Separate total-impurity dependence of narrowing, mobility and concentration-dependent lifetime.
+.param probe=1e12
+Vdrive drive 0 0
+Vnone drive node_none 0
+Dnone node_none 0 mnone
+.model mnone numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon tn=2n tp=3n
++ doping uniform p.type conc=3e17 x.high=1.2
++ doping uniform n.type conc=3e17 x.low=1.2
++ doping uniform n.type conc={probe}
++ doping uniform p.type conc={probe}
++ end
+Vgap drive node_gap 0
+Dgap node_gap 0 mgap
+.model mgap numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon tn=2n tp=3n
++ doping uniform p.type conc=3e17 x.high=1.2
++ doping uniform n.type conc=3e17 x.low=1.2
++ doping uniform n.type conc={probe}
++ doping uniform p.type conc={probe}
++ models bgn
++ end
+Vmob drive node_mob 0
+Dmob node_mob 0 mmob
+.model mmob numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon tn=2n tp=3n
++ doping uniform p.type conc=3e17 x.high=1.2
++ doping uniform n.type conc=3e17 x.low=1.2
++ doping uniform n.type conc={probe}
++ doping uniform p.type conc={probe}
++ models concmob
++ end
+Vsrh drive node_srh 0
+Dsrh node_srh 0 msrh
+.model msrh numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon tn=2n tp=3n
++ doping uniform p.type conc=3e17 x.high=1.2
++ doping uniform n.type conc=3e17 x.low=1.2
++ doping uniform n.type conc={probe}
++ doping uniform p.type conc={probe}
++ models srh
++ end
+Vtau drive node_tau 0
+Dtau node_tau 0 mtau
+.model mtau numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon tn=2n tp=3n
++ doping uniform p.type conc=3e17 x.high=1.2
++ doping uniform n.type conc=3e17 x.low=1.2
++ doping uniform n.type conc={probe}
++ doping uniform p.type conc={probe}
++ models srh conctau
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.dc Vdrive 0.30 0.54 0.03
+.save i(vnone) i(vgap) i(vmob) i(vsrh) i(vtau)
+.end

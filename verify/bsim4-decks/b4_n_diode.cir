@@ -1,5 +1,5 @@
 * BSIM4 NMOS body diodes for diomod 0, 1 and 2
-* Provenance: original BSIM4 test circuit; generic parameter values chosen for spx.
+* Provenance: original BSIM4 test circuit; generic parameter values chosen for Sansho.
 .model j0 nmos
 + level=54 version=4.8 binunit=1 paramchk=1 mobmod=0 capmod=2
 + igcmod=0 igbmod=0 geomod=0 diomod=0 rdsmod=0 rbodymod=0

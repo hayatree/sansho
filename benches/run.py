@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Time fresh spx processes on the five PSP decks, in milliseconds.
+"""Time fresh Sansho processes on the five PSP decks, in milliseconds.
 
 Provenance: original benchmark driver using Python's monotonic clock.
 """
@@ -20,12 +20,12 @@ DECKS = [ROOT / "verify/va-decks" / (name + ".cir") for name in (
 
 
 def sample(binary, deck, jobs, cache, profile):
-    env = dict(os.environ, SPX_CACHE_DIR=cache, SPX_CACHE="1", SPX_VA_JIT="1")
-    env.pop("SPX_PROFILE_DEVICES", None)
+    env = dict(os.environ, SANSHO_CACHE_DIR=cache, SANSHO_CACHE="1", SANSHO_VA_JIT="1")
+    env.pop("SANSHO_PROFILE_DEVICES", None)
     if profile:
-        env["SPX_PROFILE"] = "1"
+        env["SANSHO_PROFILE"] = "1"
     else:
-        env.pop("SPX_PROFILE", None)
+        env.pop("SANSHO_PROFILE", None)
     begin = perf_counter_ns()
     run = subprocess.run([binary, "run", *jobs, deck], env=env,
                          stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
@@ -34,10 +34,10 @@ def sample(binary, deck, jobs, cache, profile):
         raise RuntimeError(run.stderr)
     times = {"wall": wall}
     for line in run.stderr.splitlines():
-        if line.startswith("spx-phase "):
+        if line.startswith("sansho-phase "):
             _, name, value = line.split()
             times[name] = times.get(name, 0) + float(value)
-        elif line.startswith("spx-code "):
+        elif line.startswith("sansho-code "):
             times["code_bytes"] = times.get("code_bytes", 0) + int(line.split()[-1])
     if profile:
         if "analysis" not in times or "I-VA-JIT" in run.stderr:
@@ -51,8 +51,8 @@ def sample(binary, deck, jobs, cache, profile):
 
 
 def device_sample(binary, deck, cache, jobs):
-    env = dict(os.environ, SPX_CACHE_DIR=cache, SPX_CACHE="1", SPX_VA_JIT="1",
-               SPX_PROFILE_DEVICES="1", SPX_PROFILE="1")
+    env = dict(os.environ, SANSHO_CACHE_DIR=cache, SANSHO_CACHE="1", SANSHO_VA_JIT="1",
+               SANSHO_PROFILE_DEVICES="1", SANSHO_PROFILE="1")
     run = subprocess.run([binary, "run", *jobs, deck], env=env, check=True,
                          capture_output=True, text=True)
     tran = re.search(r"^Transient: (\d+) accepted steps, (\d+) rejected, (\d+) Newton iterations",
@@ -63,25 +63,25 @@ def device_sample(binary, deck, cache, jobs):
     analysis = 0.0
     counts = Counter()
     for line in run.stderr.splitlines():
-        if line.startswith("spx-phase analysis "):
+        if line.startswith("sansho-phase analysis "):
             analysis += float(line.split()[-1])
-        elif line.startswith("spx-device "):
+        elif line.startswith("sansho-device "):
             n, i, r, ns = map(int, line.split()[1:])
             native += n
             interpreted += i
             reused += r
             elapsed += ns
-        elif line.startswith("spx-pair "):
+        elif line.startswith("sansho-pair "):
             a, f, _ = map(int, line.split()[1:])
             attempted += a
             finished += f
-        elif line.startswith("spx-groups "):
+        elif line.startswith("sansho-groups "):
             workers, n, ns = map(int, line.split()[1:])
             assemblies += n
             group_ns += ns
-        elif line.startswith("spx-factor "):
+        elif line.startswith("sansho-factor "):
             steps, factor = map(int, line.split()[1:])
-        elif line.startswith("spx-newton "):
+        elif line.startswith("sansho-newton "):
             _, t, step_iterations, total_lu = line.split()
             if float(t) > 0 or deck in DECKS[:2]:
                 counts[int(step_iterations)] += 1
@@ -159,7 +159,7 @@ def warm_timing(baseline, binary, runs, decks, jobs, metric):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", type=Path, default=ROOT / "target/release/spx")
+    parser.add_argument("--binary", type=Path, default=ROOT / "target/release/sansho")
     parser.add_argument("--wall-binary", type=Path, help="optional uninstrumented baseline executable")
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--profile", action="store_true")

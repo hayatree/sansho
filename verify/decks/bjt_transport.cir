@@ -1,0 +1,14 @@
+Base spreading, collector depletion partition and forward transport delay
+* Provenance: original R4 verification circuit.
+Vdrive input 0 DC 0.72 AC 1 SIN(0.72 5m 5meg)
+Rdrive input b 500
+Vcc rail 0 3
+Rc rail c 1k
+Q1 c b 0 qn
+.model qn npn(is=1e-16 bf=100 rb=150 rbm=20 irb=2u cjc=3p xcjc=0.35
++ tf=1n ptf=40 itf=1m xtf=0.3 vtf=5 cje=1p)
+.dc Vdrive 0.6 0.76 0.01
+.ac dec 5 1meg 1g
+.tran 0.2n 50n 0 0.2n
+.save v(b) v(c) i(Vdrive)
+.end

@@ -1,0 +1,18 @@
+Loaded two-conductor AC with noncommuting loss
+* Provenance: original Sansho R18 circuit.
+* sansho-verify: known-difference Manual §6.4 limits CPL to transient. The full-matrix AC solution is independently checked in kspice.rs.
+* sansho-verify: reference-error doAnalyses: matrix is singular
+Vin src 0 dc 0 ac 1 pulse(0 1 1n .16n .12n 20n 50n)
+Rs0 a src 50
+Rs1 b 0 50
+Rl0 x 0 75
+Rl1 y 0 80
+P1 a b 0 x y 0 wire
+.model wire cpl length=1
++ r=8 1 25
++ l=300n 65n 270n
++ g=.5m -.1m .8m
++ c=115p -13p 98p
+.ac dec 8 100k 2g
+.save v(a) v(b) v(x) v(y) i(Vin)
+.end

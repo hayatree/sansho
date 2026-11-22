@@ -1,0 +1,15 @@
+BSIM2 inverter supply-current timestep refinement with trap integration
+* Provenance: original Sansho R14b circuit.
+* sweep: tmax 25p 5p 1p
+.param probe=25p
+.option method=trap
+Vcc cc 0 3
+Vin in 0 pulse(0 3 1n .3n .3n 3n 7n)
+Mn out in 0 0 n w=6u l=1.2u
+Mp out in cc cc p w=10u l=1.2u
+.model n nmos(level=5 phi=.7 vfb=-.52 k1=.55 k2=.025 tox=.025 mu0=470 ua0=.12 ub0=.02 u10=.1 eta0=.012 vdd=3 temp=27 n0=1.45 xpart=0)
+.model p pmos(level=5 phi=.7 vfb=-.52 k1=.55 k2=.025 tox=.025 mu0=200 ua0=.12 ub0=.02 u10=.1 eta0=.012 vdd=3 temp=27 n0=1.45 xpart=0)
+Cl out 0 40f
+.tran .025n 12n 0 {probe}
+.save v(in) v(out) i(Vcc)
+.end

@@ -1,0 +1,11 @@
+Electric field dependence of reverse emitter tunnelling
+* Provenance: original Sansho R16 circuit.
+* sweep: abet 2 6 20
+.param probe=2
+Vc c 0 .05
+Vb b 0 0
+Q1 c b 0 0 dev
+.model dev npn(level=8 ibets=1u abet={probe})
+.dc Vb -4 -.2 .1
+.save i(Vb)
+.end

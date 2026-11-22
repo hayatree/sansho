@@ -1,0 +1,17 @@
+Equal lossless velocities with mutual series loss
+* Provenance: original Sansho R18 circuit.
+* sweep: mutual 0 2 6
+* reference-error: 0 2 6 | Error in CPL p1: Forbidden combination of model parameters!
+.param probe=0
+Vin src 0 pulse(0 1 1n .1n .1n 12n 30n)
+Ra src a 50
+Rb b 0 50
+P1 a b 0 x y 0 pair
+.model pair cpl length=1
++ r=10 {probe} 10 l=250n 0 250n
++ g=0 0 0 c=100p 0 100p
+Rx x 0 50
+Ry y 0 50
+.tran .04n 20n
+.save v(a) v(b) v(x) v(y)
+.end

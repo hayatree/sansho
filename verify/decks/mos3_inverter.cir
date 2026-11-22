@@ -1,0 +1,12 @@
+Level 3 complementary inverter with a capacitive load
+* Provenance: original R3 verification circuit.
+Vdd rail 0 3
+Vin gate 0 pulse(0 3 1n 2n 2n 12n 30n)
+Mn out gate 0 0 nch w=16u l=3u ad=12p as=12p
+Mp out gate rail rail pch w=32u l=3u ad=24p as=24p
+.model nch nmos(level=3 vto=0.55 kp=80u phi=0.65 gamma=0.45 tox=30n theta=0.08)
+.model pch pmos(level=3 vto=-0.6 kp=40u phi=0.65 gamma=0.4 tox=30n theta=0.08)
+Cl out 0 0.2p
+.save v(out) v(gate) i(Vdd)
+.tran 0.1n 40n
+.end

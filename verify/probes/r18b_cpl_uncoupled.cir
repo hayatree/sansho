@@ -1,0 +1,16 @@
+Uncoupled storage with equal or distinct delays
+* Provenance: original Sansho R18b circuit.
+* sweep: storage 225n 250n 275n
+* reference-error: 225n 250n 275n | Error in CPL p1: Forbidden combination of model parameters!
+.param probe=225n
+Vin src 0 pulse(0 1 1n .1n .1n 20n 50n)
+Ra src a 50
+Rb b 0 50
+P1 a b 0 x y 0 pair
+.model pair cpl length=1 r=10 0 10 g=0 0 0
++ l=250n 0 {probe} c=100p 0 100p
+Rx x 0 50
+Ry y 0 50
+.tran .04n 18n
+.save v(a) v(b) v(x) v(y)
+.end

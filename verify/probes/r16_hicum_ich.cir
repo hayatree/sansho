@@ -1,0 +1,11 @@
+Forward numerator compression under strong injection
+* Provenance: original Sansho R16 circuit.
+* sweep: ich 0 1m 10m
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 ich={probe})
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

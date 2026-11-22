@@ -1,0 +1,15 @@
+Complementary inverter charge history at three loads
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: load 20f 45f 90f
+.param probe=20f
+Vdd rail 0 1.2
+Vin in 0 pulse(0 1.2 1n .25n .25n 4n 10n)
+M1 out in 0 0 nfilm l=.42u w=1.8u
+M2 out in rail 0 pfilm l=.42u w=3.6u
+.model nfilm nmos(level=10 soimod=1 tox=5n tsi=44n tbox=100n k1=.44 vth0=.47 u0=.052)
+.model pfilm pmos(level=10 soimod=1 tox=5n tsi=44n tbox=100n k1=.42 vth0=-.46 u0=.024)
+Cl out 0 {probe}
+.options itl4=60
+.tran .02n 7n
+.save v(out) i(Vdd) @m1[vbs] @m2[vbs] @m1[vth] @m2[vth] @m1[ids] @m2[ids]
+.end

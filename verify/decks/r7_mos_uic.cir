@@ -1,0 +1,12 @@
+MOS gate-overlap relaxation under UIC
+* Provenance: original Sansho R7 circuit.
+* sansho-verify: pending-reference
+M1 d g 0 0 mn w=4u l=1u ic=0.1,0.2,0
+.model mn nmos(level=1 vto=0.6 kp=50u cgso=400p cgdo=400p)
+Rd d 0 10k
+Rg g 0 10k
+* The two overlap modes decay in 6.11 ps and 41.89 ps.
+.options method=gear maxord=1
+.tran 0.05p 250p 0 0.05p uic
+.save v(d) v(g)
+.end

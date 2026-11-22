@@ -1,0 +1,12 @@
+Thermal conductance and capacitance scaling with an external load
+* Provenance: original Sansho R16 circuit.
+* sweep: thermal_area 1 2 4
+.param probe=1
+Vc c 0 1.5
+Vb b 0 pulse(.58 .78 1u 100n 100n 20u 50u)
+Renv tj 0 500
+Q1 c b 0 0 tj dev area={probe}
+.model dev npn(level=8 flsh=2 rth=200 cth=15n)
+.tran .25u 45u
+.save v(tj) i(Vc) i(Vb)
+.end

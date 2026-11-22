@@ -1,0 +1,52 @@
+One-sided concentration-dependent minority lifetime
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: reference 3e16 1e17 3e17 1e18
+* Compare the default lifetime correction with one reference density overridden, with mobilities fixed.
+.param probe=3e16
+Vdrive drive 0 0
+Voff drive node_off 0
+Doff node_off 0 moff
+.model moff numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=39.5 n=25
++ x.mesh loc=40.5 n=126
++ x.mesh loc=80 n=150
++ domain num=1 material=1
++ material num=1 silicon tn=2n tp=3n
++ doping uniform p.type conc=3e17 x.high=40
++ doping uniform n.type conc=3e18 x.low=40
++ models srh
++ end
+Von drive node_on 0
+Don node_on 0 mon
+.model mon numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=39.5 n=25
++ x.mesh loc=40.5 n=126
++ x.mesh loc=80 n=150
++ domain num=1 material=1
++ material num=1 silicon tn=2n tp=3n
++ doping uniform p.type conc=3e17 x.high=40
++ doping uniform n.type conc=3e18 x.low=40
++ models srh conctau
++ end
+Vtest drive node_test 0
+Dtest node_test 0 mtest
+.model mtest numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=39.5 n=25
++ x.mesh loc=40.5 n=126
++ x.mesh loc=80 n=150
++ domain num=1 material=1
++ material num=1 silicon tn=2n tp=3n srh.nref={probe}
++ doping uniform p.type conc=3e17 x.high=40
++ doping uniform n.type conc=3e18 x.low=40
++ models srh conctau
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.dc Vdrive 0.30 0.54 0.03
+.save i(voff) i(von) i(vtest)
+.end

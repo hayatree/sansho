@@ -1,0 +1,9 @@
+JFET2 drain family including drain-source reversal
+* Provenance: original Sansho R14 circuit.
+Vd d 0 1.5
+Vg g 0 -0.5
+J1 d g 0 dev
+.model dev njf(level=2 beta=0.7m vto=-1.6 cgs=4p cgd=1p)
+.dc Vd -0.3 3 .05 Vg -1.2 -0.3 .3
+.save i(Vd) i(Vg)
+.end

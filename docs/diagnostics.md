@@ -1,13 +1,22 @@
 # Diagnostic codes
 
-<!-- Generated from crates/spx-diag/src/codes.rs; do not edit by hand.
-     Regenerate with `SPX_BLESS=1 cargo test -p spx-diag`. -->
+<!-- Generated from crates/sansho-diag/src/codes.rs; do not edit by hand.
+     Regenerate with `SANSHO_BLESS=1 cargo test -p sansho-diag`. -->
 
 Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (the input cannot be simulated); `W-` codes are warnings and `I-` codes are informational. Diagnostics may also carry `culprits` (implicated nodes, branches and devices), `attempts` (strategies that were tried) and `suggestions` (specific remedies).
 
 | Code | Severity | Summary |
 |---|---|---|
+| [`I-CIDER-MATERIAL`](#i-cider-material) | info | Silicon material report |
+| [`E-CIDER-MODEL`](#e-cider-model) | error | Invalid numerical semiconductor structure |
 | [`E-PARSE-COND`](#e-parse-cond) | error | Invalid conditional netlist block |
+| [`E-LINE-PARAM`](#e-line-param) | error | Invalid transmission line parameters |
+| [`E-LINE-MATRIX`](#e-line-matrix) | error | Invalid transmission line matrix |
+| [`E-POLY-ARITY`](#e-poly-arity) | error | Invalid polynomial dimension or controls |
+| [`E-COUPLING-K`](#e-coupling-k) | error | Invalid coupling coefficient |
+| [`E-COUPLING-L`](#e-coupling-l) | error | Undefined or invalid winding |
+| [`E-BSOURCE-EXPR`](#e-bsource-expr) | error | Invalid behavioural source expression |
+| [`E-SWITCH-MODEL`](#e-switch-model) | error | Invalid switch model or control |
 | [`I-VA-JIT`](#i-va-jit) | info | Verilog-A interpreter selected |
 | [`E-VA-SEMA`](#e-va-sema) | error | Invalid Verilog-A semantics |
 | [`E-VA-EVAL`](#e-va-eval) | error | Verilog-A evaluation failed |
@@ -27,11 +36,25 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-PARSE-SUBCKT`](#e-parse-subckt) | error | Invalid subcircuit |
 | [`E-PARSE-UNEXPECTED`](#e-parse-unexpected) | error | Unexpected token |
 | [`E-PARSE-VALUE`](#e-parse-value) | error | Invalid value |
-| [`W-PARSE-CONTROL`](#w-parse-control) | warning | `.control` block skipped |
+| [`E-CONTROL`](#e-control) | error | Invalid control program |
+| [`E-CONTROL-LIMIT`](#e-control-limit) | error | Control iteration limit exceeded |
+| [`E-CONTROL-OUTPUT`](#e-control-output) | error | Control output denied or failed |
+| [`W-CONTROL-GRAPHICS`](#w-control-graphics) | warning | Graphics command skipped |
 | [`W-PARSE-IGNORED`](#w-parse-ignored) | warning | Parameter ignored |
 | [`W-PARSE-UNSUPPORTED`](#w-parse-unsupported) | warning | Control card ignored |
 | [`W-OPT-IGNORED`](#w-opt-ignored) | warning | Option ignored |
+| [`E-OUTPUT-VECTOR`](#e-output-vector) | error | Unknown device output |
+| [`E-PRINT`](#e-print) | error | Invalid print card |
+| [`W-PRINT`](#w-print) | warning | Unavailable print column |
+| [`W-PLOT-IGNORED`](#w-plot-ignored) | warning | ASCII plot skipped |
+| [`W-OPT-INTERP`](#w-opt-interp) | warning | Transient output interpolation unavailable |
 | [`E-ELAB-CONTROL`](#e-elab-control) | error | Invalid controlling source |
+| [`E-XSPICE-FILE`](#e-xspice-file) | error | Invalid code-model data file |
+| [`E-XSPICE-PORT`](#e-xspice-port) | error | Invalid code-model port |
+| [`E-XSPICE-OSCILLATION`](#e-xspice-oscillation) | error | Event iteration limit |
+| [`E-XSPICE-VALUE`](#e-xspice-value) | error | Invalid real event |
+| [`E-XSPICE-TIME`](#e-xspice-time) | error | Invalid event time |
+| [`E-XSPICE-MODEL`](#e-xspice-model) | error | Unsupported code model |
 | [`E-ELAB-EMPTY`](#e-elab-empty) | error | Empty netlist |
 | [`E-ELAB-INTERNAL`](#e-elab-internal) | error | Internal elaboration error |
 | [`E-ELAB-MODEL`](#e-elab-model) | error | Unsupported model |
@@ -41,8 +64,10 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`W-ELAB-NODC`](#w-elab-nodc) | warning | No DC path to ground |
 | [`W-ELAB-NODE`](#w-elab-node) | warning | Unknown node in `.ic` / `.nodeset` |
 | [`W-ELAB-VLOOP`](#w-elab-vloop) | warning | Loop of voltage sources or inductors |
-| [`E-UNSUPPORTED`](#e-unsupported) | error | Unsupported device selector |
+| [`E-UNSUPPORTED`](#e-unsupported) | error | Unsupported device or external code model |
+| [`W-BSIM3-PARAM`](#w-bsim3-param) | warning | BSIM3 parameter check |
 | [`W-BSIM4-PARAM`](#w-bsim4-param) | warning | BSIM4 parameter check |
+| [`W-HICUM-SOA`](#w-hicum-soa) | warning | HICUM terminal voltage exceeds its rated limit |
 | [`W-MODEL-IGNORED`](#w-model-ignored) | warning | Model parameter ignored |
 | [`W-MODEL-TEMP`](#w-model-temp) | warning | Temperature not applied |
 | [`W-LINT-UNIT-MILLI`](#w-lint-unit-milli) | warning | `M` means milli |
@@ -54,21 +79,88 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-CONV-OP`](#e-conv-op) | error | Operating point did not converge |
 | [`E-CONV-DC`](#e-conv-dc) | error | DC sweep did not converge |
 | [`E-CONV-TRAN`](#e-conv-tran) | error | Timestep too small |
+| [`E-CONV-PSS`](#e-conv-pss) | error | Periodic shooting did not converge |
+| [`W-CONV-PSS`](#w-conv-pss) | warning | Autonomous shooting exhausted its iteration budget |
+| [`E-PSS-NOOSC`](#e-pss-noosc) | error | Oscillation could not be resolved |
+| [`E-ANALYSIS`](#e-analysis) | error | Invalid small-signal or Fourier analysis |
 | [`E-DC-SOURCE`](#e-dc-source) | error | Invalid DC sweep source |
 | [`E-SOLVE-SINGULAR`](#e-solve-singular) | error | Singular matrix |
 | [`E-SOLVE-BACKEND`](#e-solve-backend) | error | Linear solver failure |
 | [`W-MEAS-FAILED`](#w-meas-failed) | warning | Measurement failed |
 | [`W-RUN-NOANALYSIS`](#w-run-noanalysis) | warning | No analysis |
+| [`E-MC-COUNT`](#e-mc-count) | error | Invalid Monte Carlo run count |
+| [`E-MC-PARAM`](#e-mc-param) | error | Invalid statistical parameter |
+| [`E-MC-TOPOLOGY`](#e-mc-topology) | error | Statistical topology change |
+| [`E-GPU`](#e-gpu) | error | GPU batch failure |
+| [`E-GPU-UNSUPPORTED`](#e-gpu-unsupported) | error | GPU batch unavailable |
 | [`E-API-INPUT`](#e-api-input) | error | Invalid request |
 | [`E-API-UNKNOWN-ID`](#e-api-unknown-id) | error | Unknown circuit or job |
 | [`E-API-UNKNOWN-SIGNAL`](#e-api-unknown-signal) | error | Unknown signal |
 | [`E-API-ALTER`](#e-api-alter) | error | Cannot alter parameter |
+
+## I-CIDER-MATERIAL
+
+**Silicon material report.** The numerical device requested its operating-temperature silicon properties with output material.
+
+
+## E-CIDER-MODEL
+
+**Invalid numerical semiconductor structure.** A numerical device model has an invalid mesh, spatial region, dopant profile, material constant or contact.
+
+- Use increasing mesh coordinates and positive spacing, area, width and absolute temperature. Level one requires 3–4096 silicon vertices. The two-dimensional limit is 1024 tensor-product vertices with at least two on each axis.
+- For a planar device, give every terminal an electrode on the active mesh. Use disjoint vertices for different terminals. Mesh indices start at one. Check the IDs of regions, materials, interfaces and contacts.
+- A failed planar equilibrium solve produces this diagnostic during elaboration. Check gate work function in eV, interface charge in C/cm², doping in cm⁻³ and mesh spacings in µm.
+- For level-one NBJT, place the base contact in the opposite-doped region between like-doped end contacts.
 
 ## E-PARSE-COND
 
 **Invalid conditional netlist block.** A conditional directive is misplaced, unbalanced or has an invalid expression.
 
 - Check the parameter scope and the nesting of .if, .elseif, .else and .endif.
+
+## E-LINE-PARAM
+
+**Invalid transmission line parameters.** The line parameters do not define a supported passive two-port or RC ladder.
+
+- For Y and P, supply a positive model LENGTH and a positive instance LEN when overriding it. Ground both TXL references.
+- For T, supply Z0 and either TD in seconds or F in hertz with optional NL in wavelengths.
+- For O, specify positive LEN and RLC, RC, LC or RG per-unit-length parameters. For U, specify positive L and K greater than one. An explicit N must be an integer from 1 through 4096.
+
+## E-LINE-MATRIX
+
+**Invalid transmission line matrix.** A per-unit-length line matrix has an incompatible size, a non-finite entry or an inadmissible eigenvalue.
+
+- Supply N(N+1)/2 upper-triangle entries in row order. R and G also accept N diagonal entries. L and C must be positive definite, R and G positive semidefinite.
+
+## E-POLY-ARITY
+
+**Invalid polynomial dimension or controls.** The control list and coefficients must match the dimension of the polynomial.
+
+- Give a positive integer dimension, one node pair (E/G) or branch name (F/H) per input, and at least one coefficient.
+
+## E-COUPLING-K
+
+**Invalid coupling coefficient.** A mutual inductance requires distinct windings and a finite coefficient in [-1, 1].
+
+- Check the winding names and the signed coupling coefficient.
+
+## E-COUPLING-L
+
+**Undefined or invalid winding.** A coupled winding must reference an inductor with positive effective inductance.
+
+- Use two existing L instance names in the same scope.
+
+## E-BSOURCE-EXPR
+
+**Invalid behavioural source expression.** A source expression contains an invalid function, probe or non-finite value or derivative.
+
+- Check the function arguments, node and branch names and the expression domain at the operating point.
+
+## E-SWITCH-MODEL
+
+**Invalid switch model or control.** A switch requires a matching SW or CSW model, positive resistances and a resolvable control.
+
+- Check the model type and parameters and the controlling branch of a W element.
 
 ## I-VA-JIT
 
@@ -122,7 +214,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 **Wrong number of fields.** An element or control card has too few or too many positional fields.
 
-- Compare the line with the usage shown in the note.
+- Compare the line with the usage shown in the diagnostic. DC requires one or two complete source/start/stop/step groups. OP takes no arguments. A thermal VDMOS instance requires five nodes in drain, gate, source, junction and case order.
 
 ## E-PARSE-DUPLICATE
 
@@ -134,7 +226,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 **Unsupported element type.** The first letter of the line does not name a supported element type.
 
-- Check the element letter; subcircuits (`X`) and some sources are not supported yet.
+- Check the element letter against the supported devices in docs/compatibility.md.
 
 ## E-PARSE-EXPR
 
@@ -152,7 +244,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 **Invalid `.meas` card.** A `.meas` card could not be parsed.
 
-- See `docs/architecture.md` for the supported `.meas` forms.
+- Check event qualifiers, derivative location and PARAM expression syntax. See docs/analyses.md.
 
 ## E-PARSE-MODEL
 
@@ -184,11 +276,29 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 - Use a finite value in the valid range for the parameter.
 
-## W-PARSE-CONTROL
+## E-CONTROL
 
-**`.control` block skipped.** ngspice `.control` scripts are not executed by spx.
+**Invalid control program.** A batch command, expression, or block could not be evaluated.
 
-- Use analysis cards and `.meas` instead of control scripts.
+- Check the command and source location against docs/control.md.
+
+## E-CONTROL-LIMIT
+
+**Control iteration limit exceeded.** The script exhausted its shared iteration budget.
+
+- Check loop conditions and increments.
+
+## E-CONTROL-OUTPUT
+
+**Control output denied or failed.** The output policy or filesystem prevented a control command from writing its file.
+
+- Use a permitted output directory and a relative filename.
+
+## W-CONTROL-GRAPHICS
+
+**Graphics command skipped.** Batch execution has no plotting window.
+
+- Use print, write or wrdata to inspect values.
 
 ## W-PARSE-IGNORED
 
@@ -208,11 +318,77 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 - Check the option name; unsupported options have no effect.
 
+## E-OUTPUT-VECTOR
+
+**Unknown device output.** The requested internal vector does not identify a supported instance and parameter.
+
+- Use the flattened instance name and a parameter listed in docs/analyses.md.
+
+## E-PRINT
+
+**Invalid print card.** The batch table needs an analysis name and at least one output selector.
+
+- Specify .print followed by op, dc, ac, tran or noise and the requested signals.
+
+## W-PRINT
+
+**Unavailable print column.** A print request names a missing analysis or signal.
+
+- Check the analysis card and the selected nodes, branches or vectors.
+
+## W-PLOT-IGNORED
+
+**ASCII plot skipped.** Sansho recognizes .plot and produces tabular output through .print.
+
+- Use .print for a table or save the raw plot.
+
+## W-OPT-INTERP
+
+**Transient output interpolation unavailable.** INTERP requests a uniform output grid. The output contains the solver's accepted timepoints.
+
+- Use the time column when processing transient results.
+
 ## E-ELAB-CONTROL
 
 **Invalid controlling source.** A current-controlled source (F, H) references a name that is not a voltage source.
 
 - Point the controlling name at an independent voltage source (`V...`).
+
+## E-XSPICE-FILE
+
+**Invalid code-model data file.** The model data file could not be opened inside the deck directory or contains invalid records.
+
+- Use a relative path to a regular file and check its format against the model description.
+
+## E-XSPICE-PORT
+
+**Invalid code-model port.** A port has an invalid type, terminal count or vector shape, or a node connects both analog and digital terminals.
+
+- Check the port order and types in docs/xspice.md.
+
+## E-XSPICE-OSCILLATION
+
+**Event iteration limit.** A digital or mixed feedback loop did not settle at the indicated time.
+
+- Check feedback polarity and propagation delays in the loop.
+
+## E-XSPICE-VALUE
+
+**Invalid real event.** A real-valued driver, sum of drivers or analog bridge produced a nonfinite value.
+
+- Check model gains, offsets and the sum of the real drivers.
+
+## E-XSPICE-TIME
+
+**Invalid event time.** A scheduled edge or ramp endpoint cannot be represented at the current simulation time.
+
+- Check the units of the timing and frequency parameters.
+
+## E-XSPICE-MODEL
+
+**Unsupported code model.** The A element references an unsupported code-model family.
+
+- See docs/xspice.md for the supported families.
 
 ## E-ELAB-EMPTY
 
@@ -222,7 +398,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## E-ELAB-INTERNAL
 
-**Internal elaboration error.** An internal consistency check failed. This is a bug in spx.
+**Internal elaboration error.** An internal consistency check failed. This is a bug in Sansho.
 
 - Please report the netlist that triggers it.
 
@@ -230,7 +406,7 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 **Unsupported model.** The model level or type is not supported.
 
-- Use a supported model level. Built-in MOSFETs support levels 1 and 54.
+- Use NJF/PJF level 1 or 2 for J devices. Built-in MOS channels accept levels 1–6, 8, 9, 49 and 54. See docs/compatibility.md for parameter coverage.
 
 ## E-ELAB-NOGROUND
 
@@ -243,6 +419,9 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Invalid instance parameter.** An instance parameter is out of range (e.g. a non-positive channel length).
 
 - Fix the instance parameter.
+- For HICUM/L2, check the version, AREA, M, QP0, junction parameters and FLSH/FLNQS/TUNODE selectors. [Parameter domains](hicum.md)
+- For VBIC, check AREA, M, nominal temperature, positive emission coefficients and built-in potentials, nonnegative resistances, the WBE and WSP partitions, and the SELFT and QBM selectors.
+- BSIM1/2 require positive effective dimensions, TOX in micrometres, PHI and low-field mobility. For JFET2, check the junction potential, exponents, geometry, lead impedances and relaxation times.
 
 ## W-ELAB-DANGLING
 
@@ -270,9 +449,17 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 ## E-UNSUPPORTED
 
-**Unsupported device selector.** The selected device equation or analysis mode is unavailable.
+**Unsupported device or external code model.** The selected device equation or analysis mode is unavailable, or the deck requests an external XSPICE process or shared library.
 
-- See docs/bsim4.md for the available BSIM4 selectors.
+- See docs/bsim3.md and docs/bsim4.md for the available MOS selectors.
+- NUMD and NBJT accept levels one and two. NUMOS selects the planar solver. Unknown CIDER cards and unsupported physical models give this diagnostic. See docs/cider.md.
+- Use a built-in model in place of d_process, d_cosim or a library loaded with codemodel. See docs/xspice.md.
+
+## W-BSIM3-PARAM
+
+**BSIM3 parameter check.** A binned BSIM3 coefficient falls outside a recommended range in Appendix A.10.
+
+- Check the reported value and its geometry coefficients.
 
 ## W-BSIM4-PARAM
 
@@ -280,17 +467,27 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 - Inspect the named parameter, its units and the effective geometry.
 
+## W-HICUM-SOA
+
+**HICUM terminal voltage exceeds its rated limit.** With .option warn=1, an accepted OP, DC or transient sample exceeded a level-eight bipolar terminal voltage limit.
+
+- Inspect the device, electrode pair, measured voltage and rating. The maxwarns option limits messages per device and rating.
+
 ## W-MODEL-IGNORED
 
 **Model parameter ignored.** A `.model` parameter is not implemented in this version and has no effect.
 
 - Check the model documentation for the supported parameters.
+- JFET2 ignores AFAC, CDSS, LD, LG, LS, NFING and RG. MOS9 rejects XD, ALPHA and INPUT_DELTA. BSIM1/2 ignore WDF and DELL. VDMOS accepts TEXP0 and TEXP1.
+- BSIMSOI reports unused model and instance keys, including unsupported bin coefficients. [Level 10 coverage](bsimsoi.md)
+- VBIC reports unconsumed card keys. It accepts EBBE as an explicit dimensionless emitter-breakdown offset. [Native VBIC](vbic.md)
+- For a diode, TBV1 and TBV2 are unrecognized. Use TCV (V/K) to subtract TCV × (T − TNOM) from BV.
 
 ## W-MODEL-TEMP
 
-**Temperature not applied.** Temperature scaling of model parameters is not implemented yet.
+**Temperature not applied.** Older Sansho releases reported this warning when they left nominal semiconductor parameters unscaled.
 
-- Simulate at TNOM (27 °C) until temperature scaling lands.
+- Use a release with temperature scaling for the selected model.
 
 ## W-LINT-UNIT-MILLI
 
@@ -348,11 +545,40 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 - Look at the culprit nodes for discontinuities (ideal switches, very fast edges).
 - Give sources finite rise and fall times; increase `.options itl4`.
 
+## E-CONV-PSS
+
+**Periodic shooting did not converge.** A transient stage or the periodic sensitivity system failed, or driven shooting exhausted its iteration budget.
+
+- Check the frequency guess and initial conditions. Allow more stabilization time or shooting iterations. Tighten reltol to refine the shooting grid for sharp transitions.
+
+## W-CONV-PSS
+
+**Autonomous shooting exhausted its iteration budget.** The output comes from the completed shot with the smallest mean normalized endpoint mismatch.
+
+- Increase sciter or extend stabilization and check the reported residual and frequency.
+
+## E-PSS-NOOSC
+
+**Oscillation could not be resolved.** The selected oscillator node or branch has insufficient swing or too few rising crossings to identify a cycle.
+
+- Choose a node or branch that oscillates. Check the startup excitation and extend tstab.
+
+## E-ANALYSIS
+
+**Invalid small-signal or Fourier analysis.** An analysis requires resolvable ports, a defined transfer, finite model noise and a valid analysis range.
+
+- Check the named source, output probe, transient duration and model parameters.
+- For .sp, check port numbering, finite port conversions, and two-port forward gain when requesting noise. Invalid Z0 or a nonintegral port number is a parse error.
+- For .disto, the diagnostic names the device or bipolar extension whose higher derivatives are unavailable. Analytic support covers the diode, MOS1 and the Gummel–Poon subset in the analysis notes.
+- HICUM/L2 requires a finite positive junction temperature. Its DISTO derivatives are unavailable.
+- VBIC reports the instance when junction temperature becomes nonpositive or nonfinite. DISTO reports unavailable higher derivatives for the native level-four device.
+- A self-heated VDMOS requires finite positive absolute junction temperature. Invalid RTHJC, RTHCA, CTHJ and channel parameters yield E-ELAB-PARAM.
+
 ## E-DC-SOURCE
 
-**Invalid DC sweep source.** The `.dc` source is not an independent voltage or current source.
+**Invalid DC sweep source.** The sweep target must be a resistor, independent voltage or current source, or TEMP.
 
-- Sweep a `V` or `I` element.
+- Check both target names on a nested DC card. Each must identify a distinct resistor, independent source or TEMP.
 
 ## E-SOLVE-SINGULAR
 
@@ -371,13 +597,44 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 
 **Measurement failed.** A `.meas` could not be evaluated (e.g. the trigger condition never occurred).
 
-- Check the condition level and the analysis range.
+- Check the condition, event count and analysis range. DERIV requires two distinct samples. PARAM names must have a successful value at the point of evaluation.
 
 ## W-RUN-NOANALYSIS
 
 **No analysis.** The netlist contains no analysis card.
 
 - Add `.op`, `.dc`, `.ac` or `.tran`.
+
+## E-MC-COUNT
+
+**Invalid Monte Carlo run count.** A statistical batch requires a positive run count.
+
+- Choose a count within the interface limit.
+
+## E-MC-PARAM
+
+**Invalid statistical parameter.** A statistical expression is unsupported in this field or produced an invalid numeric value.
+
+- Check the parameter expression and Gaussian sigma divisor.
+
+## E-MC-TOPOLOGY
+
+**Statistical topology change.** A statistical binding requires different device connectivity, internal nodes or stamps.
+
+- Use separate decks for different topologies.
+
+## E-GPU
+
+**GPU batch failure.** The CUDA driver or NVRTC could not be loaded, a kernel failed to compile or launch, or a batch lane stopped early.
+
+- Check that an NVIDIA driver and the CUDA run-time compiler are installed.
+- Run the batch without `--gpu` to use the CPU.
+
+## E-GPU-UNSUPPORTED
+
+**GPU batch unavailable.** The build has no GPU support, or no device group of the circuit has a GPU kernel.
+
+- Rebuild with `--features gpu`, or run the batch on the CPU.
 
 ## E-API-INPUT
 

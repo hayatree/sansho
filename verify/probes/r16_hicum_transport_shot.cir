@@ -1,0 +1,12 @@
+Collector shot spectrum in reverse and forward transport
+* Provenance: original Sansho R16 circuit.
+* sweep: transport_shot -1 0 1
+.param probe=-1
+Vc c 0 {.15*probe}
+Vb b 0 .69 ac 1
+Hread out 0 Vc 1k
+Rload out 0 1k
+Q1 c b 0 0 dev
+.model dev npn(level=8 t0=5p)
+.noise v(out) Vb dec 4 1 100meg
+.end

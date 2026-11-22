@@ -1,0 +1,12 @@
+Separate thermal changes of critical current and emitter storage
+* Provenance: original Sansho R16b black-box experiment.
+* sweep: knee_temperature -.003 0 .003
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 n
+.model n npn(level=8 t0=2p tef0=50p vlim=.12 alvs={probe})
+.dc temp -30 120 10
+* 44.2 writes the time observable as v(@q1[tf]) in ASCII raw.
+.save i(Vc) @q1[ick] @q1[tf]
+.end

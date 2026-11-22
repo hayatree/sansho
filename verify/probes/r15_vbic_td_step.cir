@@ -1,0 +1,11 @@
+Forward transport step with variable delay
+* Provenance: original Sansho R15 circuit.
+* sweep: td_step 0 200p 1n
+.param probe=0
+Vc c 0 2
+Vb b 0 pulse(.65 .7 2n 100p 100p 6n 20n)
+Q1 c b 0 dev
+.model dev npn(level=4 td={probe})
+.tran 25p 14n
+.save i(Vc)
+.end

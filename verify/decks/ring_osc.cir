@@ -1,4 +1,5 @@
 Five-stage CMOS ring oscillator
+* Provenance: original Sansho verification fixture.
 * verify: rtol_tran=3e-2
 * The waveforms drift in phase; the oscillation period itself agrees to about 0.05 %.
 VDD vdd 0 1.8

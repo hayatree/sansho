@@ -1,0 +1,12 @@
+Matched resistive pad noise figure versus circuit temperature
+* Provenance: original Sansho R9b black-box experiment.
+* sweep: 0 16.85 27 80
+.param probe=0
+.temp 0
+V1 a 0 portnum=1 z0=50
+V2 b 0 portnum=2 z0=50
+Ra a m 16.66666666666667
+Rb b m 16.66666666666667
+Rc m 0 66.66666666666667
+.sp lin 1 1k 1k 1
+.end

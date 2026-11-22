@@ -1,0 +1,16 @@
+Floating film noise and admittance with controlled body return
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: rbody 100 100k 100meg
+.param probe=100
+Vd d 0 .95
+Vg g 0 .83 ac 1
+Vp p 0 0
+M1 d g 0 0 p dev l=.48u w=2.4u
+.model dev nmos(level=10 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42
++ vth0=.48 u0=.047 rbsh={probe} noif=1 alpha0=.00012 beta2=.24 vdsatii0=.8)
+Hread out 0 Vd 1k
+Rload out 0 1k
+.ac dec 5 1 10G
+.noise v(out) Vg dec 5 1 10G
+.save v(out) i(Vp)
+.end

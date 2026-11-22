@@ -1,0 +1,14 @@
+Diode TCV at a fixed reverse current
+* Provenance: original Sansho paired-diode experiment based on the R8c TBV probe.
+* sweep: -20 20 60 100
+.temp 20
+Itest test 0 1m
+Icontrol control 0 1m
+Dtest test 0 coeff
+Dcontrol control 0 nominal
+.model coeff d(is=2p rs=3 bv=6.2 ibv=1m tnom=20 trs1=0.004 trs2=2u
++ tcv=0.0007)
+.model nominal d(is=2p rs=3 bv=6.2 ibv=1m tnom=20 trs1=0.004 trs2=2u)
+.op
+.save v(test) v(control)
+.end

@@ -1,0 +1,12 @@
+Live voltage probe inside a referenced parameter body
+* Provenance: original Sansho node-order probe for R22b.
+* Sansho expects a parameter-evaluation error. If ngspice substitutes the
+* body at the B card, expect first, out, late, middle.
+.param sample={v(late)}
+Rf first 0 1k
+Bfirst out 0 I={1m*sample}
+Ro out 0 1k
+Rm middle 0 1k
+Vl late 0 1
+.op
+.end

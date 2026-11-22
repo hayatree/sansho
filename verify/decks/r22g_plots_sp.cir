@@ -1,0 +1,10 @@
+duplicate sp
+* Provenance: original R22g black-box regression deck. Two SP cards: reverse card order within the family.
+V1 in 0 dc 0 ac 1 portnum=1 z0=50
+V2 o2 0 dc 0 ac 0 portnum=2 z0=50
+R1 in o2 100
+R2 in 0 300
+R3 o2 0 200
+.sp lin 3 1k 2k
+.sp lin 4 1k 2k
+.end

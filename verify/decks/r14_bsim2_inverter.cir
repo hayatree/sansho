@@ -1,0 +1,13 @@
+BSIM2 loaded complementary inverter rise and fall
+* Provenance: original Sansho R14 circuit.
+* sansho-verify: known-difference 44.2 trap gives 248.31 uA at 1.300 ns on the 25 ps grid, with a 164.94 uA interval mean. Gear at 1 ps gives 165.20 uA; both 1 ps comparisons pass. See docs/r14-models.md.
+Vcc cc 0 3
+Vin in 0 pulse(0 3 1n .3n .3n 3n 7n)
+Mn out in 0 0 n w=6u l=1.2u
+Mp out in cc cc p w=10u l=1.2u
+.model n nmos(level=5 phi=.7 vfb=-.52 k1=.55 k2=.025 tox=.025 mu0=470 ua0=.12 ub0=.02 u10=.1 eta0=.012 vdd=3 temp=27 n0=1.45 xpart=0)
+.model p pmos(level=5 phi=.7 vfb=-.52 k1=.55 k2=.025 tox=.025 mu0=200 ua0=.12 ub0=.02 u10=.1 eta0=.012 vdd=3 temp=27 n0=1.45 xpart=0)
+Cl out 0 40f
+.tran .025n 12n
+.save v(in) v(out) i(Vcc)
+.end

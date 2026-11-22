@@ -1,0 +1,21 @@
+Plot order with two SP ports, forward
+* Provenance: original Sansho R22f plot-order probe. Two ports because 44.2 rejects SP with one; no .sens, which aborts once port nodes exist.
+Vdrive in 0 dc 0.4 ac 1 distof1 1m portnum=1 z0=50 sin(0.4 0.2 1k)
+Rdrive in sense 1k
+Rfeed sense out 1k
+Clead sense out 10n
+Rload out 0 2k
+Ddet out 0 dj
+Vport2 port 0 dc 0 ac 0 portnum=2 z0=50
+Rport port out 100
+.model dj d(is=1e-14)
+.tran 10u 4m
+.sp lin 3 1k 2k
+.tf v(out) Vdrive
+.pz sense 0 out 0 vol pz
+.noise v(out) Vdrive lin 3 1k 2k
+.op
+.disto lin 3 1k 2k
+.dc Vdrive 0.3 0.5 0.1
+.ac lin 2 700 2.6k
+.end

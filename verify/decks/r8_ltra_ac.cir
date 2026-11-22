@@ -1,0 +1,14 @@
+Distributed loss, group delay and static shunt leakage
+* sansho-verify: known-difference ngspice 44.2 gives the static RLC divider across the AC sweep
+* Provenance: original Sansho R8 circuit.
+Vin in 0 dc 1 ac 1
+Rs in near 50
+O1 near 0 far 0 wire
+.model wire ltra(r=30 l=250n g=0 c=100p len=2)
+Rload far 0 75
+O2 in 0 leak 0 strip
+.model strip ltra(r=180 g=0.5m len=2)
+Rleak leak 0 1k
+.ac dec 10 100k 1g
+.save v(far) v(leak) i(vin)
+.end

@@ -1,0 +1,25 @@
+Automatic URC lump count versus design frequency
+* Provenance: original Sansho R8b black-box experiment.
+* sweep: 100meg 700meg 850meg 1g 1.3g 1.5g 1.7g
+.param probe=1g
+Vin in 0 ac 1
+Uauto in a 0 wire l=2m
+Ra a 0 500
+.model wire urc(k=1.6 fmax={probe} rperl=100k cperl=30n)
+U1 in e1 0 wire l=2m n=1
+R1 e1 0 500
+U2 in e2 0 wire l=2m n=2
+R2 e2 0 500
+U3 in e3 0 wire l=2m n=3
+R3 e3 0 500
+U4 in e4 0 wire l=2m n=4
+R4 e4 0 500
+U5 in e5 0 wire l=2m n=5
+R5 e5 0 500
+U6 in e6 0 wire l=2m n=6
+R6 e6 0 500
+U7 in e7 0 wire l=2m n=7
+R7 e7 0 500
+.ac lin 1 1g 1g
+.save v(a) v(e1) v(e2) v(e3) v(e4) v(e5) v(e6) v(e7)
+.end

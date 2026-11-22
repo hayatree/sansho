@@ -1,0 +1,10 @@
+Node with no terminal, with a shunt for every analog node
+* Provenance: original Sansho node-order probe for R22b.
+* Sansho expects an unknown-node diagnostic. If ngspice creates ghost,
+* rshunt gives it a DC path and the expected voltage order is out, ghost, middle.
+Bfirst out 0 I={1m*v(ghost)}
+Ro out 0 1k
+Rm middle 0 1k
+.options rshunt=1e9
+.op
+.end

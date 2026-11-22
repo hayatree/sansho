@@ -1,0 +1,20 @@
+Asymmetric divider duty and initial count
+* Provenance: original Sansho R12b black-box experiment.
+* sweep: 0 1 2 3
+.param probe=0
+Vin in 0 PULSE(0 1 3n 0.2n 0.2n 2n 6n)
+Aa [in] [clk] adc
+Ad clk narrow one
+Ab clk wide three
+.model adc adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0 fall_delay=0)
+.model one d_fdiv(div_factor=4 high_cycles=1 i_count={probe})
+.model three d_fdiv(div_factor=4 high_cycles=3 i_count={probe})
+.control
+tran 0.1n 55n
+eprint clk
+eprint narrow
+eprint wide
+showmod
+quit
+.endc
+.end

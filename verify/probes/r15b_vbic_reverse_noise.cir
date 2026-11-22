@@ -1,0 +1,12 @@
+Collector shot noise at zero Vbe and forward Vbc
+* Provenance: original Sansho R15b circuit.
+* sweep: ibci 0 1e-16 5e-16
+.param probe=0
+Vc c 0 -.62 ac 1
+Vb b 0 0
+Hread out 0 Vc 1k
+Rload out 0 1k
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibci={probe} rci=0 rbi=0 rbp=0)
+.noise v(out) Vc dec 2 1k 100k
+.end

@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest. This project is dual-licensed under Apache-2.0 OR MIT, and keeping
+Thank you for your interest. Sansho is dual-licensed under Apache-2.0 OR MIT, and keeping
 that promise requires some rules that are stricter than usual.
 
 ## 1. Clean-room policy
@@ -63,3 +63,13 @@ When in doubt, ask in an issue before writing code.
 By submitting a contribution you certify that you have the right to submit it under both
 licenses and that it complies with this policy. Add a `Signed-off-by:` line to your commits
 ([Developer Certificate of Origin](https://developercertificate.org/)).
+
+## 7. Releases
+
+Sansho currently distributes binaries through GitHub Releases. crates.io publication is
+deferred. All workspace packages inherit `publish = false`.
+
+Update the changelog and workspace version together. After fetching the locked dependencies,
+run `python3 tools/third_party_licenses.py` to regenerate the binary notices offline.
+Run the release workflow manually with its dry-run option to test the packages. A matching
+version tag builds and tests the native targets, attests the archives and prepares a draft.

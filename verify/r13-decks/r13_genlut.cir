@@ -1,0 +1,16 @@
+Word lookup with two output delays and a high-impedance entry
+* Provenance: original Sansho verification circuit.
+Asrc [a b] addr
+Alut [a b] [c d] word
+Apull d weak
+.model weak d_pulldown
+Aout [c d] [first second] levels
+Rload0 first 0 10k
+Rload1 second 0 10k
+.model addr d_source(input_file="address.dat")
+.model word d_genlut(table_values="0110Z101" input_delay=[0.2n 0.3n] rise_delay=[0.4n 0.6n] fall_delay=[0.3n 0.5n])
+.model levels dac_bridge(out_low=0 out_high=1 out_undef=0.45 t_rise=0.2n t_fall=0.2n)
+.tran 0.1n 24n
+.save v(first) v(second)
+.print tran v(first) v(second)
+.end

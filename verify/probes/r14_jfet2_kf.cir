@@ -1,0 +1,11 @@
+JFET2 KF noise versus frequency
+* Provenance: original Sansho R14 circuit.
+* sweep: kf 0 1e-22 1e-20
+.param probe=0
+Vg g 0 -.5 ac 1
+Vd d 0 2
+Hsense out 0 Vd 1k
+J1 d g 0 core
+.model core njf(level=2 beta=.4m kf={probe} af=1)
+.noise v(out) Vg dec 4 1 100meg
+.end

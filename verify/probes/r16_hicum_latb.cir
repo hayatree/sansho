@@ -1,0 +1,11 @@
+Lateral spreading of collector storage above the Kirk knee
+* Provenance: original Sansho R16 circuit.
+* sweep: latb 0 1 3
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 thcs=120p vlim=.1 latb={probe} latl=.4)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

@@ -1,0 +1,16 @@
+Independent junction temperatures under a shared bias
+* Provenance: original circuit for Sansho release-prep verification.
+.temp 55
+Vbias b 0 0.6
+Vd b d 0
+D1 d 0 dd temp=25
+Vd2 b warm 0
+D2 warm 0 dd dtemp=15
+Vca ca 0 1
+Vcb cb 0 1
+Q1 ca b 0 qq temp=25
+Q2 cb b 0 qq dtemp=15
+.model dd D(is=5e-15)
+.model qq npn(is=1e-16 bf=80 xtb=1)
+.op
+.end

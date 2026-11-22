@@ -1,0 +1,10 @@
+Forward transport and recombination at fixed applied voltage
+* Provenance: original Sansho R15 circuit.
+* verify: rtol=5e-4 atol_i=1p
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=1e-18 iben=2e-14 tnom=20 xis=3 xii=2 xin=1 ea=1.10 eaie=1.05 eane=.95 re=2 xre=.8)
+.dc temp -20 100 10
+.save i(Vc) i(Vb)
+.end

@@ -1,0 +1,11 @@
+JFET2 common-source pulse response with gate and thermal relaxation
+* Provenance: original Sansho R14 circuit.
+Vcc cc 0 5
+Rload cc d 1.8k
+Vdrive in 0 pulse(-0.9 -0.65 20n 2n 2n 90n 200n)
+Rg in g 2k
+J1 d g 0 dev
+.model dev njf(level=2 beta=0.7m vto=-1.6 cgs=4p cgd=1p lfgam=.012 hfgam=.004 taug=15n delta=8 taud=60n)
+.tran 1n 300n
+.save v(g) v(d) i(Vcc)
+.end

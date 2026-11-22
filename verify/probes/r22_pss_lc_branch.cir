@@ -1,0 +1,9 @@
+LC tank sustained by a saturating negative conductance
+* Provenance: original parallel tank, cubic current gives a stable cycle.
+* sansho-verify: pss-ng v(out)
+Ltank out 0 1m
+Ctank out 0 1u ic=0.5
+Bactive out 0 I={0.004*(v(out)*v(out)-1)*v(out)}
+.options reltol=1e-5
+.pss 4k 2m ltank#branch 256 10 25 1e-3 uic
+.end

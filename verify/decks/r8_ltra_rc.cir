@@ -1,0 +1,9 @@
+Diffusion of a voltage step on an open-ended resistive line
+* Provenance: original Sansho R8 circuit.
+Vin in 0 pwl(0 0 1n 0 2n 1 70n 1)
+O1 in 0 far 0 sheet
+.model sheet ltra(r=200 l=0 g=0 c=80p len=1)
+Rload far 0 1meg
+.tran 0.25n 65n
+.save v(far) i(vin)
+.end

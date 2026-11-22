@@ -1,0 +1,11 @@
+AJC smoothing near the forward depletion knee
+* Provenance: original Sansho R15 circuit.
+* sweep: ajc -0.5 .005 .10
+.param probe=-0.5
+Vc c 0 .18 ac 1
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 cjc=10p pc=.75 mc=.5 fc=.7 ajc={probe})
+.ac lin 2 1meg 2meg
+.save i(Vc)
+.end

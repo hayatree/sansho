@@ -1,0 +1,15 @@
+Normalized low pass followed by time differentiation and integration
+* Provenance: original Sansho circuit.
+* sansho-verify: pending-reference
+Vin in 0 dc 0 ac 1
+Alow in low lp
+Arate low rate dd
+Aarea rate area ii
+Rload area 0 10k
+.model lp s_xfer(num_coeff=[1] den_coeff=[1 1] denormalized_freq=1000)
+.model dd d_dt(gain=0.001 out_lower_limit=-10 out_upper_limit=10)
+.model ii int(gain=1000 out_ic=0 out_lower_limit=-10 out_upper_limit=10)
+.ac dec 5 10 10k
+.save v(low) v(rate) v(area)
+.print ac vr(low) vi(low) vr(rate) vi(rate) vr(area) vi(area)
+.end

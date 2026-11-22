@@ -1,0 +1,13 @@
+Deeply saturated bipolar switch and stored collector charge
+* sansho-verify: known-difference ngspice 44.2 QCO transient is non-physical
+* Provenance: original Sansho R8 circuit.
+Vcc rail 0 5
+Rc rail c 100
+Vdrive in 0 pulse(0 3 5n 1n 1n 80n 200n)
+Rb in b 250
+Q1 c b 0 0 sw area=1 areab=2 areac=3
+.model sw npn(is=1e-15 bf=150 br=3 rb=1 rc=0.5 re=0.2
++ rco=3 gamma=1e-11 qco=1p vo=10 tf=0.5n tr=8n cje=2p cjc=4p cjs=3p)
+.tran 0.5n 130n
+.save v(c) v(b) i(vcc) i(vdrive)
+.end

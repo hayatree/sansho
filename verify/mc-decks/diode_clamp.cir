@@ -1,0 +1,16 @@
+Half-wave rectifier with zener clamp
+* Provenance: original circuit for GPU batch checks. Varies the rectifier
+* saturation current, series resistance and the load.
+.param isv=agauss(1e-14,1.5e-15,1) rsv=agauss(0.5,0.05,1) rl=agauss(1k,50,1)
+.model drect d is={isv} n=1.05 rs={rsv} cjo=2p vj=0.7 m=0.4 tt=5n bv=60 ibv=1u
+.model dzen d is=1e-15 n=1.2 rs=2 cjo=5p bv=3.3 ibv=1m isr=1e-12 ikf=0.1
+Vin in 0 sin(0 5 1k)
+D1 in out drect
+D2 0 in drect
+Dz 0 out dzen
+Rl out 0 {rl}
+Cf out 0 2u
+.tran 10u 4m
+.meas tran vavg avg v(out) from=2m to=4m
+.meas tran vmax max v(out) from=2m to=4m
+.end

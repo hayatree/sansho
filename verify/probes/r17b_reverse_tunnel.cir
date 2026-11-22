@@ -1,0 +1,13 @@
+Reverse tunnelling residual at the second DC sweep point
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: start -.48 -.45 -.42
+.param probe=-.48
+Vd d 0 .45
+Vg g 0 .15
+Vb b 0 0
+M1 d g 0 0 b dev l=.48u w=2.4u
+.model dev nmos(level=10 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047
++ isdif=0 isbjt=0 isrec=0 vtun0=1.3 ntun=3 istun=.1)
+.dc Vb {probe} -.30 .03
+.save i(Vb) i(Vd) @m1[vbs]
+.end

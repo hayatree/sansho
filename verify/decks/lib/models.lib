@@ -1,4 +1,5 @@
-* Toy level-1 model library with corners and length bins (for spx verification only).
+* Toy level-1 model library with corners and length bins (for Sansho verification only).
+* Provenance: original Sansho verification fixture.
 .lib tt
 .param dvt=0
 .include bins.inc

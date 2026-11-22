@@ -1,0 +1,13 @@
+TEXP1 at elevated junction temperature
+* Provenance: original Sansho R14 circuit.
+* sweep: texp1 -1 .3 2
+.param probe=-1
+Vd d 0 1
+Vg g 0 6
+Vj tj 0 60
+Vc tc 0 27
+M1 d g 0 tj tc pw thermal
+.model pw vdmos(vto=1 kp=3 mu=0 rd=0 rq=.6 vq=1 texp1={probe})
+.dc Vd .2 3 .1
+.save i(Vd)
+.end

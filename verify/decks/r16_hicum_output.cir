@@ -1,0 +1,9 @@
+Collector output family across saturation and base push-out
+* Provenance: original Sansho R16 circuit.
+Vc c 0 1
+Ib 0 b 20u
+Q1 c b 0 0 dev
+.model dev npn(level=8 qp0=40f rci0=90 vlim=.6 t0=2p thcs=40p rbx=6 rbi0=15 rcx=1 re=.8)
+.dc Vc .03 1.83 .03 Ib 5u 35u 10u
+.save i(Vc) v(b)
+.end

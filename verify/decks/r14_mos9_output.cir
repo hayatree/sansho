@@ -1,0 +1,10 @@
+MOS9 short-channel output family with mask and threshold offsets
+* Provenance: original Sansho R14 circuit.
+Vd d 0 1.5
+Vg g 0 1.4
+Vb b 0 -.25
+M1 d g 0 b dev w=4u l=1.2u
+.model dev nmos(level=9 vto=0.65 kp=65u phi=.7 gamma=.4 theta=.12 vmax=9e4 nsub=2e16 xj=.14u xl=.05u xw=-.2u delvto=.08)
+.dc Vd 0 3 .05 Vg .8 2.4 .4
+.save i(Vd)
+.end

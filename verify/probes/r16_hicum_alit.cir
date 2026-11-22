@@ -1,0 +1,11 @@
+Forward current phase lag
+* Provenance: original Sansho R16 circuit.
+* sweep: alit 0 .333 1
+.param probe=0
+Vc c 0 1
+Vb b 0 .76 ac 1
+Q1 c b 0 0 dev
+.model dev npn(level=8 alit={probe} alqf=0 flnqs=1 t0=50p)
+.ac dec 4 1meg 100G
+.save i(Vc) i(Vb)
+.end

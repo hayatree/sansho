@@ -1,0 +1,19 @@
+Stored-carrier extraction after forward bias
+* Provenance: original Sansho numerical-device fixture.
+Vdrive src 0 pulse(0.62 -0.25 1n 0.3n 0.3n 10n 25n)
+Rdrive src a 1k
+Djunction a 0 crystal
+.model crystal numd level=1
++ options defa=1e-10 diode
++ x.mesh location=0 number=1
++ x.mesh location=2.4 number=62
++ domain number=1 material=1
++ material number=1 silicon tn=2n tp=3n
++ doping uniform n.type conc=1e+16
++ doping uniform p.type conc=2e+16 x.high=1.2
++ models srh concmob
++ end
+.options itl1=150 itl2=100
+.tran 0.1n 5n
+.save v(a) i(vdrive)
+.end

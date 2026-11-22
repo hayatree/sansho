@@ -1,0 +1,8 @@
+Single-frequency noise
+* Provenance: original R22g black-box regression deck. A one-point noise grid writes the spectrum without an integrated plot.
+V1 in 0 dc 0 ac 1
+R1 in out 1k
+R2 out 0 1k
+.noise v(out) V1 dec 1 1k 1k
+.noise v(out) V1 lin 2 1k 2k
+.end

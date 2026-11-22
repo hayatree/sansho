@@ -1,0 +1,16 @@
+BSIM3 NMOS short and long channel current versus Vd
+* Provenance: original Sansho circuit and parameter choices from the BSIM3v3.3 parameter list.
+.model nch nmos level=8 version=3.3
++ tox=8n xj=0.13u nch=2.1e17 vth0=0.54 k1=0.52 k2=-0.023
++ u0=460 vsat=92000 rdsw=85 pclm=1.15
++ lint=9n wint=15n cgso=170p cgdo=150p cf=65p mobmod=1 k3=28 ags=0.09 prwg=0.08 alpha0=0.15u beta0=2.7
+Vd bias 0 0
+Vg gate 0 0
+Vb bulk 0 -0.45
+Vsht bias ds 0
+Vlng bias dl 0
+Ms ds gate 0 bulk nch w=2.4u l=0.38u
+Ml dl gate 0 bulk nch w=2.4u l=2.2u
+.dc Vd 0 1.8 0.025 Vg 0.65 1.65 0.5
+.save i(Vsht) i(Vlng) i(Vb)
+.end

@@ -1,0 +1,12 @@
+JFET2 gate charge with source, gate and drain sensed at the cutoff knee
+* Provenance: original Sansho R14b circuit.
+* sweep: xc 0 .2 .6
+.param probe=0
+Vd d 0 1.8
+Vg g 0 -1.65 ac 1
+Vs s 0 0
+J1 d g s dev
+.model dev njf(level=2 vto=-1.6 beta=.7m cgs=4p cgd=1p xc={probe})
+.ac lin 1 1meg 1meg
+.save i(Vg) i(Vs) i(Vd)
+.end

@@ -1,0 +1,17 @@
+Asymmetric digital oscillator startup, period and output delay
+* Provenance: original Sansho R12b black-box experiment.
+* sweep: 0.25 0.75
+.param probe=0.25
+Vctl ctl 0 1
+Ao ctl clk osc
+Ad ctl delayed defaultosc
+.model osc d_osc(cntl_array=[0 2] freq_array=[100Meg 100Meg] duty_cycle={probe} rise_delay=0 fall_delay=0)
+.model defaultosc d_osc(cntl_array=[0 2] freq_array=[100Meg 100Meg] duty_cycle={probe})
+.control
+tran 0.1n 31n
+eprint clk
+eprint delayed
+showmod
+quit
+.endc
+.end

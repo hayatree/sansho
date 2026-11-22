@@ -1,0 +1,10 @@
+Scaled MOS geometry with area and perimeter junction capacitance
+* Provenance: original circuit for Sansho release-prep verification.
+.options scale=1u
+Vd supply 0 1.5
+Rd supply d 10k
+Vg g 0 DC 1 AC 1
+M1 d g 0 0 core L=2 W=6 AD=6 AS=6 PD=14 PS=14
+.model core NMOS(level=1 vto=0.5 kp=20u cj=1m cjsw=0.3n)
+.ac dec 3 1k 100meg
+.end

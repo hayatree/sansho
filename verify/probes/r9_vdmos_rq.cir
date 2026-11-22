@@ -1,0 +1,11 @@
+Drain-field sweep with source access loss at two gate biases
+* Provenance: original Sansho R9b black-box experiment.
+* sweep: 0 0.3 0.9
+.param probe=0
+Vd d 0 1
+Vg g 0 4
+M1 d g 0 p
+.model p vdmos(vto=1 kp=1 rd=0.05 rs=0.2 rq={probe} vq=1.4)
+.dc Vd 0 3 0.05 Vg 3 5 2
+.save i(Vd)
+.end

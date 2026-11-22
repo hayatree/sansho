@@ -1,0 +1,12 @@
+VDMOS junction temperature and current with a fixed case and pulsed gate
+* Provenance: original Sansho R9 circuit.
+Vcc cc 0 6
+Rload cc d 3
+Vgate g 0 pulse(0 4 50u 1u 1u 1m 3m)
+Vcase tc 0 27
+M1 d g 0 tj tc power thermal
+.model power vdmos(vto=1.5 kp=0.8 rd=0.08 rs=0.02
++ rthjc=5 cthj=100u mu=-1.5 phi=0.6)
+.tran 5u 2m
+.save v(tj) v(d) i(Vcc)
+.end

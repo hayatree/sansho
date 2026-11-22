@@ -1,0 +1,11 @@
+Collector exponent precedence
+* Provenance: original Sansho R15 circuit.
+* sweep: xrcx 0 1 2
+.param probe=0
+Vc c 0 .2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 rcx=60 rci=10 xrc=1.5 xrci=.5 xrcx={probe})
+.dc temp -20 100 10
+.save i(Vc) i(Vb)
+.end

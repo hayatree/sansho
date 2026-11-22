@@ -1,0 +1,11 @@
+JFET2 descriptive model ID at several gate biases
+* Provenance: original Sansho R14b circuit.
+* sweep: vgs -1.5 -1 -.5
+.param probe=-1
+Vd d 0 1
+Vg g 0 {probe}
+J1 d g 0 dev
+.model dev njf(level=2 id=PF1 beta=.7m vto=-1.6)
+.dc Vd .2 2 .2
+.save i(Vd)
+.end

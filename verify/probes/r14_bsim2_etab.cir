@@ -1,0 +1,12 @@
+BSIM2 ETAB bias and geometry response
+* Provenance: original Sansho R14 circuit.
+* sweep: etab -.04 0 .04
+.param probe=-.04
+Vd d 0 1.5
+Vg g 0 1.4
+Vb b 0 -.25
+M1 d g 0 b dev w=4u l=1.2u
+.model dev nmos(level=5 phi=.7 vfb=-.52 k1=.55 tox=.025 mu0=470 ua0=.12 ub0=.02 u10=.1 eta0=.012 vdd=3 temp=27 n0=1.45 xpart=0 k2=.025 etab={probe})
+.dc Vg -.2 2.2 .05 Vd .2 3 1.4
+.save i(Vg) i(Vd)
+.end

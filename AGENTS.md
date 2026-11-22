@@ -1,6 +1,6 @@
 # Instructions for AI coding agents (Codex and others)
 
-This project is a clean-room, Apache-2.0 OR MIT licensed SPICE simulator in Rust.
+Sansho is a clean-room, Apache-2.0 OR MIT licensed SPICE simulator in Rust.
 Read `CONTRIBUTING.md` and `docs/architecture.md` before making changes.
 
 ## Hard rules

@@ -1,4 +1,5 @@
 Verilog-A diode rectifier
+* Provenance: original Sansho example circuit.
 .hdl "va/diode.va"
 .model junction vadiode IS=1e-14 N=1 RS=2 TT=1n CJ0=2p
 V1 in 0 SIN(0 1 1meg)

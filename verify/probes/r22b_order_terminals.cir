@@ -1,0 +1,12 @@
+Output terminals, voltage pairs and repeated references
+* Provenance: original Sansho node-order probe for R22b.
+* Assume voltage order p, n, z, a, 01, middle. Repeated and ground probes take no slot.
+Bfirst p n I={1m*(v(z,a)+v(01,0)+v(z))}
+Rp p 0 1k
+Rn n 0 1k
+Rmid middle 0 1k
+Vone 01 0 1
+Va a 0 2
+Vz z 0 4
+.op
+.end

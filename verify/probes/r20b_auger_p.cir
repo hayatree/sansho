@@ -1,0 +1,93 @@
+Auger coefficient and SRH switch interaction
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: coefficient 0 1e-31 3e-31 1e-30
+* The paired branches distinguish an omitted coefficient, an explicit coefficient and SRH gating.
+.param probe=0
+Vdrive drive 0 0
+Voff drive node_off 0
+Doff node_off 0 moff
+.model moff numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=39.5 n=25
++ x.mesh loc=40.5 n=126
++ x.mesh loc=80 n=150
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc=3e18 x.high=40
++ doping uniform n.type conc=1e19 x.low=40
++ end
+Vdefault drive node_default 0
+Ddefault node_default 0 mdefault
+.model mdefault numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=39.5 n=25
++ x.mesh loc=40.5 n=126
++ x.mesh loc=80 n=150
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc=3e18 x.high=40
++ doping uniform n.type conc=1e19 x.low=40
++ models auger
++ end
+Vtest drive node_test 0
+Dtest node_test 0 mtest
+.model mtest numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=39.5 n=25
++ x.mesh loc=40.5 n=126
++ x.mesh loc=80 n=150
++ domain num=1 material=1
++ material num=1 silicon cp={probe}
++ doping uniform p.type conc=3e18 x.high=40
++ doping uniform n.type conc=1e19 x.low=40
++ models auger
++ end
+Vsrhonly drive node_srhonly 0
+Dsrhonly node_srhonly 0 msrhonly
+.model msrhonly numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=39.5 n=25
++ x.mesh loc=40.5 n=126
++ x.mesh loc=80 n=150
++ domain num=1 material=1
++ material num=1 silicon tn=1 tp=1
++ doping uniform p.type conc=3e18 x.high=40
++ doping uniform n.type conc=1e19 x.low=40
++ models srh
++ end
+Vboth drive node_both 0
+Dboth node_both 0 mboth
+.model mboth numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=39.5 n=25
++ x.mesh loc=40.5 n=126
++ x.mesh loc=80 n=150
++ domain num=1 material=1
++ material num=1 silicon tn=1 tp=1
++ doping uniform p.type conc=3e18 x.high=40
++ doping uniform n.type conc=1e19 x.low=40
++ models auger srh
++ end
+Vwithsrh drive node_withsrh 0
+Dwithsrh node_withsrh 0 mwithsrh
+.model mwithsrh numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=39.5 n=25
++ x.mesh loc=40.5 n=126
++ x.mesh loc=80 n=150
++ domain num=1 material=1
++ material num=1 silicon tn=1 tp=1 cp={probe}
++ doping uniform p.type conc=3e18 x.high=40
++ doping uniform n.type conc=1e19 x.low=40
++ models auger srh
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.dc Vdrive 0.40 0.72 0.04
+.save i(voff) i(vdefault) i(vtest) i(vsrhonly) i(vboth) i(vwithsrh)
+.end

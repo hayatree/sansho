@@ -1,0 +1,11 @@
+Effective emitter area scaling
+* Provenance: original Sansho R16 circuit.
+* sweep: area .5 1 2
+.param probe=.5
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev area={probe}
+.model dev npn(level=8 t0=8p re=1 rbi0=10)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

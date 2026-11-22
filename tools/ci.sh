@@ -2,7 +2,8 @@
 # Local CI: the checks every change must pass before it is merged to main.
 # Provenance: original script for this repository.
 #
-# Usage: tools/ci.sh [--quick]
+# Usage: tools/ci.sh [--quick|--cached]
+#   --cached  run full CI offline with the local ngspice reference cache
 #   --quick  only fmt, clippy (default features) and tests (default features)
 #
 # GitHub Actions runs only on pushes to main (and manual runs) to save minutes;
@@ -13,10 +14,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 quick=0
+verify_args=()
+deny_args=()
 case "${1:-}" in
   "") ;;
   --quick) quick=1 ;;
-  *) echo "usage: tools/ci.sh [--quick]" >&2; exit 2 ;;
+  --cached) verify_args=(--cached); deny_args=(--offline); export CARGO_NET_OFFLINE=true ;;
+  *) echo "usage: tools/ci.sh [--quick|--cached]" >&2; exit 2 ;;
 esac
 
 export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}"
@@ -36,11 +40,30 @@ skip() {
   skipped+=("$1: $2")
 }
 
+verify_r13() {
+  cargo test -q -p sansho-engine --test xspice_library
+  local deck
+  local refs=()
+  for deck in verify/r13-decks/*.cir; do
+    local stem=${deck##*/}
+    if [[ ${#verify_args[@]} == 0 || -e "verify/out/${stem%.cir}.ref.raw" ]]; then
+      refs+=("$deck")
+    fi
+  done
+  if (( ${#refs[@]} )); then
+    cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" "${refs[@]}"
+  else
+    echo "R13 circuits passed Sansho checks. No local R13 oracle raws."
+  fi
+}
+
 step "fmt" cargo fmt --all --check
 step "clippy" cargo clippy --workspace --all-targets -- -D warnings
 step "test" cargo test --workspace
 
 if (( !quick )); then
+  step "fetch locked release dependencies" cargo fetch --locked
+  step "third-party notices" python3 tools/third_party_licenses.py --check
   step "clippy (all features)" cargo clippy --workspace --all-targets --all-features -- -D warnings
   step "test (all features)" cargo test --workspace --all-features
 
@@ -52,26 +75,38 @@ if (( !quick )); then
   fi
 
   if command -v cargo-deny >/dev/null 2>&1; then
-    step "cargo-deny" cargo deny check
+    step "cargo-deny" cargo deny "${deny_args[@]}" check
   else
     skip "cargo-deny" "run 'cargo install cargo-deny'"
   fi
 
-  if docker image inspect spx-ngspice:latest >/dev/null 2>&1; then
-    step "verify vs ngspice" cargo run -q --release -p spx-verify --features jit
-    step "verify BSIM4 decks" cargo run -q --release -p spx-verify -- verify/bsim4-decks
+  step "verify R19 PSS (analytic)" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" --out target/verify-pss verify/pss-decks
+
+  if [[ "${1:-}" == --cached ]] || docker image inspect sansho-ngspice-pss:latest >/dev/null 2>&1; then
+    step "verify R22 PSS vs ngspice 44.2" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" verify/pss-ng-decks
+  else
+    skip "verify R22 PSS vs ngspice 44.2" "PSS oracle image unavailable"
+  fi
+
+  if [[ "${1:-}" == --cached ]] || docker image inspect sansho-ngspice:latest >/dev/null 2>&1; then
+    step "verify vs ngspice" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}"
+    step "verify R11 analog code models" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" verify/r11-decks
+    step "verify R12 digital code models" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" verify/r12-decks
+    step "verify R13 code models" verify_r13
+    step "verify BSIM3 decks" cargo run -q --release -p sansho-verify -- "${verify_args[@]}" verify/bsim3-decks
+    step "verify BSIM4 decks" cargo run -q --release -p sansho-verify -- "${verify_args[@]}" verify/bsim4-decks
     if [[ -d va-models/volare-sky130 ]]; then
-      step "verify SKY130 decks" cargo run -q --release -p spx-verify -- verify/sky130-decks
+      step "verify SKY130 decks" cargo run -q --release -p sansho-verify -- "${verify_args[@]}" verify/sky130-decks
     else
       skip "verify SKY130 decks" "va-models/volare-sky130 is missing"
     fi
     if [[ -d va-models ]]; then
-      step "verify Verilog-A decks" cargo run -q --release -p spx-verify --features jit -- verify/va-decks
+      step "verify Verilog-A decks" cargo run -q --release -p sansho-verify --features jit -- "${verify_args[@]}" verify/va-decks
     else
       skip "verify Verilog-A decks" "va-models/ is missing"
     fi
   else
-    skip "verify vs ngspice" "run 'docker build -t spx-ngspice:latest tools/ngspice'"
+    skip "verify vs ngspice" "run 'docker build -t sansho-ngspice:latest tools/ngspice'"
   fi
 fi
 

@@ -1,0 +1,11 @@
+Linear thermal change of forward current gain
+* Provenance: original Sansho R16 circuit.
+* sweep: alb -.002 0 .002
+.param probe=-.002
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 alb={probe} ibeis=4e-18)
+.dc temp -30 120 10
+.save i(Vc) i(Vb)
+.end

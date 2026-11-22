@@ -1,0 +1,33 @@
+Graded mesh convergence with a fixed junction and endpoints
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: ratio 1.10 1.20 1.35 1.6
+* Compare against the fixed fine grid. Vary only the geometric spacing ratio.
+.param probe=1.10
+Vdrive drive 0 -0.2 ac 1
+Vuniform drive node_uniform 0
+Duniform node_uniform 0 muniform
+.model muniform numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=241
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc=1e16 x.high=1.2
++ doping uniform n.type conc=1e16 x.low=1.2
++ end
+Vgraded drive node_graded 0
+Dgraded node_graded 0 mgraded
+.model mgraded numd level=1
++ options diode defa=1e-10
++ x.mesh loc=0 n=1
++ x.mesh loc=1.2 h.end=0.015 h.max=0.2 ratio={probe}
++ x.mesh width=1.2 h.start=0.015 h.max=0.2 ratio={probe}
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc=1e16 x.high=1.2
++ doping uniform n.type conc=1e16 x.low=1.2
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.ac dec 2 10k 1gig
+.save i(vuniform) i(vgraded)
+.end

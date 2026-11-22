@@ -1,0 +1,7 @@
+Single real transmission zero and pole
+* Provenance: original R2 verification circuit.
+Rin in out 2k
+Clead in out 1n
+Rload out 0 2k
+.pz in 0 out 0 vol pz
+.end

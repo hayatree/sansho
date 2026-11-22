@@ -1,0 +1,12 @@
+BSIM1 rail approach at fixed strong gate drive
+* Provenance: original Sansho R14b circuit.
+* sweep: mus 0 200 470
+.param probe=0
+Vd d 0 1.5
+Vg g 0 3
+Vb b 0 -.25
+M1 d g 0 b dev w=4u l=1.2u
+.model dev nmos(level=4 phi=.7 vfb=-.52 k1=.55 k2=.025 tox=.025 muz=470 u0=.12 u1=.1 eta=.012 vdd=3 temp=27 n0=1.45 xpart=0 mus={probe})
+.dc Vd -5u 5u .25u
+.save i(Vg) i(Vd)
+.end

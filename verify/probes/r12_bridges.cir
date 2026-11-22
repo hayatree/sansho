@@ -1,0 +1,27 @@
+ADC equality and window, default DAC levels and interrupted slews
+* Provenance: original Sansho R12b black-box experiment.
+* sweep: 1.5
+.param probe=1.5
+Vi in 0 PWL(0 0 3n 0 4n 1 8n 1 9n {probe} 14n {probe} 15n 2 20n 2 21n 5 26n 5 27n 2 32n 2 33n {probe} 38n {probe} 39n 1 44n 1 45n 0)
+Ad [in] [d] adc
+Az [in] [instant] window
+Ac [in] [cmp] comp
+Adef [d] [out] dac
+Aslew [d] [slew] asym
+Rout out 0 10k
+Rslew slew 0 10k
+.model adc adc_bridge
+.model window adc_bridge(rise_delay=0 fall_delay=0)
+.model comp adc_bridge(in_low={probe} in_high={probe} rise_delay=0 fall_delay=0)
+.model dac dac_bridge
+.model asym dac_bridge(out_low=-1 out_high=3 t_rise=20n t_fall=8n)
+.control
+tran 0.1n 48n
+eprint d
+eprint instant
+eprint cmp
+print v(in) v(out) v(slew)
+showmod
+quit
+.endc
+.end

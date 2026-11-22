@@ -1,4 +1,5 @@
 Diode I-V sweep with breakdown
+* Provenance: original Sansho verification fixture.
 V1 a 0 0
 D1 a 0 dz
 .model dz d is=1e-14 n=1.05 rs=2 bv=5.1 ibv=1m cjo=10p

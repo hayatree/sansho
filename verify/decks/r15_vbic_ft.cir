@@ -1,0 +1,10 @@
+Short-circuit current gain from complex collector and base currents
+* Provenance: original Sansho R15 circuit.
+* verify: rtol=1e-8 atol_i=1p
+Vc c 0 2
+Vb b 0 .70 ac 1
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=1e-18 rbi=10 tf=.3n td=12p cje=1p cjc=.35p)
+.ac dec 8 100k 10G
+.save i(Vc) i(Vb)
+.end

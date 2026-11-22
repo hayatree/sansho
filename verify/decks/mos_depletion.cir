@@ -1,0 +1,16 @@
+Drain depletion in short channels at two body biases
+* Provenance: original R4 verification circuit.
+Vd rail 0
+Vb bulk 0
+Vg gate 0 1.8
+V2 rail d2 0
+V3 rail d3 0
+M2 d2 gate 0 bulk two w=6u l=1.5u
+M3 d3 gate 0 bulk three w=6u l=1.5u
+.model two nmos(level=2 vto=0.65 kp=70u tox=25n phi=0.65 nsub=8e16
++ xj=0.2u ld=0.05u vmax=9e4 neff=2)
+.model three nmos(level=3 vto=0.65 kp=70u tox=25n phi=0.65 nsub=8e16
++ xj=0.2u ld=0.05u vmax=9e4 kappa=0.3)
+.dc Vd 0 2.5 0.05 Vb 0 -0.5 -0.5
+.save i(V2) i(V3)
+.end

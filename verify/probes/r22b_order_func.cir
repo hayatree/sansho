@@ -1,0 +1,16 @@
+Probe ordering after function expansion
+* Provenance: original Sansho node-order probe for R22b.
+* Assume voltage order first, out, body, arg, middle, unused.
+* An unused definition introduces no node; the used body precedes its argument here.
+.func never(x) {v(unused)+x}
+.func sample(x) {v(body)+x}
+.param gain=2
+Rf first 0 1k
+Bfirst out 0 I={gain*1m*sample(v(arg))}
+Ro out 0 1k
+Rm middle 0 1k
+Ru unused 0 1k
+Va arg 0 1
+Vb body 0 2
+.op
+.end

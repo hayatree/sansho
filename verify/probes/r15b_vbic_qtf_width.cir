@@ -1,0 +1,11 @@
+Transit storage at nonunit depletion width and high injection
+* Provenance: original Sansho R15b circuit.
+* sweep: qtf 0 .5 2
+.param probe=0
+Vc c 0 2
+Vb b 0 .76 ac 1
+Q1 c b 0 dev
+.model dev npn(level=4 ver=2 vef=3 ikf=.2m tf=1n qtf={probe})
+.ac dec 6 1meg 1G
+.save i(Vc) i(Vb)
+.end

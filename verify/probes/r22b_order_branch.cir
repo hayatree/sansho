@@ -1,0 +1,12 @@
+Forward branch reference between voltage probes
+* Provenance: original Sansho node-order probe for R22b.
+* Assume voltage order out, z, a, middle, sense. i(Vsense) adds only a branch input.
+Bfirst out 0 I={v(z)*1m+i(Vsense)+v(a)*1m}
+Ro out 0 1k
+Rmid middle 0 1k
+Vsense sense 0 1
+Rs sense 0 1k
+Ra a 0 1k
+Rz z 0 1k
+.op
+.end

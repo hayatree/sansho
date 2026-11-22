@@ -1,0 +1,17 @@
+Compare HICUM PNP pin counts at identical junction biases
+* Provenance: original Sansho R16b black-box experiment.
+* sweep: pnp_pins -.45 -.60 -.75
+* known-difference: -.45 -.60 -.75 | i(vthree) i(vfour) i(vfive)
+.param probe=-.45
+Vb b 0 {probe}
+Vc c 0 -1
+Vthree c c3 0
+Vfour c c4 0
+Vfive c c5 0
+Q3 c3 b 0 p
+Q4 c4 b 0 0 p
+Q5 c5 b 0 0 0 p
+.model p pnp(level=8)
+.dc Vc -1 .2 .02
+.save i(Vthree) i(Vfour) i(Vfive)
+.end

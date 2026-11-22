@@ -1,0 +1,11 @@
+High-current charge partition with unequal GICCR weights
+* Provenance: original Sansho R16 circuit.
+* sweep: fthc 0 .5 1
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 fthc={probe} hfc=4 hf0=1 thcs=100p vlim=.15)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

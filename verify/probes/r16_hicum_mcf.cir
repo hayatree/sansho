@@ -1,0 +1,11 @@
+Forward emission coefficient across emitter-collector reversal
+* Provenance: original Sansho R16 circuit.
+* sweep: mcf 1 1.03 1.1
+.param probe=1
+Vc c 0 1
+Vb b 0 .79
+Q1 c b 0 0 dev
+.model dev npn(level=8 mcf={probe})
+.dc Vc -.05 2 .025
+.save i(Vc) i(Vb)
+.end

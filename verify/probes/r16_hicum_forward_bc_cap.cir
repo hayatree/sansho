@@ -1,0 +1,11 @@
+Capacitance ceiling for a strongly forward-biased BC junction
+* Provenance: original Sansho R16 circuit.
+* sweep: forward_bc_cap -.2 0 .2
+.param probe=-.2
+Vc c 0 {probe}
+Vb b 0 .76 ac 1
+Q1 c b 0 0 dev
+.model dev npn(level=8 c10=0 ibeis=0 ibcis=0 cjci0=2p vdci=.72)
+.ac dec 4 1meg 100G
+.save i(Vc) i(Vb)
+.end

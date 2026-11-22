@@ -1,0 +1,16 @@
+Three-state sequencer with file-defined transitions
+* Provenance: original Sansho verification circuit.
+Aclock [clk] ticks
+Aenable run pull
+Afsm [run] clk NULL [qa qb] seq
+Aout [qa qb] [a b] levels
+Rload0 a 0 10k
+Rload1 b 0 10k
+.model ticks d_source(input_file="clock.dat")
+.model pull d_pullup
+.model seq d_state(state_file="sequencer.dat" clk_delay=1n)
+.model levels dac_bridge(out_low=0 out_high=1 out_undef=0.45 t_rise=0.2n t_fall=0.2n)
+.tran 0.2n 28n
+.save v(a) v(b)
+.print tran v(a) v(b)
+.end

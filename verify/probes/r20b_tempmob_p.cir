@@ -1,0 +1,32 @@
+Isolated majority-carrier temperature mobility
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: temperature 0 27 55 85 110
+* Use the on/off ratio at fixed small field to remove charge density and geometry.
+.param probe=0
+Vdrive drive 0 0
+.temp {probe}
+Voff drive node_off 0
+Doff node_off 0 moff
+.model moff numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc=1e16
++ end
+Von drive node_on 0
+Don node_on 0 mon
+.model mon numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform p.type conc=1e16
++ models tempmob
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.dc Vdrive -0.01 0.01 0.005
+.save i(voff) i(von)
+.end

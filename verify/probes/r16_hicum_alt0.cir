@@ -1,0 +1,11 @@
+Temperature dependence of transit time and hole charge
+* Provenance: original Sansho R16 circuit.
+* sweep: alt0 -.002 0 .002
+.param probe=-.002
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 alt0={probe} t0=20p)
+.dc temp -30 120 10
+.save i(Vc) i(Vb)
+.end

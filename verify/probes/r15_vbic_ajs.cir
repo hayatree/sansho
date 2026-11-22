@@ -1,0 +1,12 @@
+AJS smoothing near the forward depletion knee
+* Provenance: original Sansho R15 circuit.
+* sweep: ajs -0.5 .005 .10
+.param probe=-0.5
+Vc c 0 .12
+Vb b 0 .69
+Vs s 0 .64 ac 1
+Q1 c b 0 s dev
+.model dev npn(level=4 cjcp=10p ps=.75 ms=.5 fc=.7 ajs={probe})
+.ac lin 2 1meg 2meg
+.save i(Vs)
+.end

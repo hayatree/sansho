@@ -1,0 +1,12 @@
+Loaded output stage and supply return currents
+* Provenance: original Sansho verification circuit.
+Vcmd cmd 0 0
+Vpos vp 0 3
+Vneg vn 0 -3
+Adriver cmd vp vn out stage
+Rload out 0 100
+.model stage ilimit(r_out_source=5 r_out_sink=10 i_limit_source=8m i_limit_sink=12m)
+.dc Vcmd -4 4 0.05
+.save v(out) i(Vpos) i(Vneg)
+.print dc v(out) i(Vpos) i(Vneg)
+.end

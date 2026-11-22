@@ -1,0 +1,9 @@
+MOS level 2 short-channel stress
+* Provenance: original circuit for release-prep verification.
+Vd d 0 0
+Vg g 0 1.5
+Vb b 0 -1
+M1 d g 0 b nch w=5u l=1u
+.model nch nmos(level=2 vto=0.6 kp=60u phi=0.7 gamma=0.5 tox=20n ld=0.1u ucrit=2e4 uexp=0.15 vmax=5e4 neff=2 delta=0.5 nfs=1e11 xj=0.3u lambda=0)
+.dc Vd 0 3 0.05
+.end

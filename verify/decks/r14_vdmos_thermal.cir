@@ -1,0 +1,11 @@
+VDMOS self-heating pulse with distinct drain resistance exponents
+* Provenance: original Sansho R14 circuit.
+Vcc rail 0 8
+Rload rail d 2
+Vgate g 0 pulse(1 5 10u .5u .5u 400u 1m)
+Vc tc 0 27
+M1 d g 0 tj tc pw thermal
+.model pw vdmos(vto=1.2 kp=1 rd=.22 rq=.45 vq=1.8 texp0=2.7 texp1=-.8 rthjc=5 cthj=40u)
+.tran 2u 800u
+.save v(tj) v(d) i(Vcc)
+.end

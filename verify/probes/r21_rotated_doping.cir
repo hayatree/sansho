@@ -1,0 +1,25 @@
+R21 rotated implant probe
+* Provenance: original Sansho fixture, ngspice 44 manual chapter 26.
+* sweep: ratio 0.25 0.5 1
+.param probe=0.25
+Vbias a 0 dc -0.15 ac 1
+Djunction a 0 pn
+.model pn numd level=2
++ options diode defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=32
++ y.mesh loc=0 n=1
++ y.mesh loc=1 n=3
++ region num=1 mat=1
++ material num=1 silicon tn=2n tp=3n
++ electrode num=1 ix.h=1
++ electrode num=2 ix.l=32
++ doping uniform n.type conc=1e15
++ doping gauss lat.rotate n.type conc=2e16 x.l=0.8 x.h=1.6 y.h=0.25 y.l=0
++ + char.length=0.25 ratio.lat={probe}
++ method ac.analysis=direct
++ end
+.options itl1=150 itl2=100
+.ac lin 1 100k 100k
+.save i(vbias)
+.end

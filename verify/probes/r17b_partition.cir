@@ -1,0 +1,14 @@
+Four terminal charge derivatives at three partition settings
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: xpart 0 .5 1
+.param probe=0
+Vd d 0 .95
+Vg g 0 .78 ac 1
+Vs s 0 0
+Vb b 0 .08
+M1 d g s 0 b dev l=.48u w=2.4u
+.model dev nmos(level=10 tox=4.6n tsi=75n k1=.42 vth0=.48 capmod=2
++ fbody=2 xpart={probe} cgso=0 cgdo=0 cf=0)
+.ac lin 2 1meg 2meg
+.save i(Vd) i(Vg) i(Vs) i(Vb)
+.end

@@ -1,0 +1,12 @@
+Emitter resistance flicker noise
+* Provenance: original Sansho R16 circuit.
+* sweep: kfre 0 1e-12 1e-9
+.param probe=0
+Vc c 0 1
+Vb b 0 .76 ac 1
+Hread out 0 Vb 1k
+Rload out 0 1k
+Q1 c b 0 0 dev
+.model dev npn(level=8 kfre={probe} re=30 afre=1.2)
+.noise v(out) Vb dec 4 1 100meg
+.end

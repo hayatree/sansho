@@ -1,0 +1,13 @@
+Film-current balance through the back-gate lower bound
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: unified_floor -.65 -.2 .25
+.param probe=-.65
+Vd d 0 0.95
+Vg g 0 .8
+Ve e 0 {probe}
+Vb b 0 0
+M1 d g 0 e b dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=45n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 soimod=1)
+.dc Vb -.4 .45 .025
+.save i(Vb) i(Vd)
+.end

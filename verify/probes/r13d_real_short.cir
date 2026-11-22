@@ -1,0 +1,22 @@
+Real bridge with a nonzero initial input and a short transition time
+* Provenance: original Sansho follow-up to the ngspice 44.2 R13c bridge sweeps.
+* sweep: transition_time 0 0.025n 0.05n 0.1n
+.param probe=0.05n
+Vbit in 0 PWL(0 0 2n 0 2.1n 1 3n 1 3.1n 0)
+Abits [in] [bit] bits
+Acode bit NULL value convert
+Aunity value unity unit
+Again value scaled amp
+Runit unity 0 1k
+Rgain scaled 0 1k
+.model bits adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0 fall_delay=0)
+.model convert d_to_real(zero=0.5 one=1.5 delay=0.3n)
+.model unit real_to_v(gain=1 transition_time={probe})
+.model amp real_to_v(gain=2 transition_time={probe})
+.control
+tran 0.05n 6n
+eprint value
+print v(unity) v(scaled)
+quit
+.endc
+.end

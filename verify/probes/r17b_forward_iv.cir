@@ -1,0 +1,19 @@
+Forward film threshold, collector and current beyond the surface potential
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: vds .15 .6 1.15
+.param probe=.15
+Vd d 0 {probe}
+Vg g 0 1.2
+Vb b 0 0
+M1 d g 0 0 b nfilm l=.42u w=1.8u
+.model nfilm nmos(level=10 soimod=1 tox=5n tsi=44n tbox=100n k1=.44 vth0=.47 u0=.052)
+Vrail rail 0 1.2
+Epd pd0 rail d 0 -1
+Epb pb0 rail b 0 -1
+Vpd pd0 pd 0
+Vpb pb0 pb 0
+M2 pd 0 rail 0 pb pfilm l=.42u w=3.6u
+.model pfilm pmos(level=10 soimod=1 tox=5n tsi=44n tbox=100n k1=.42 vth0=-.46 u0=.024)
+.dc Vb .55 .98 .01
+.save i(Vd) i(Vb) @m1[vth] @m1[ic] @m1[ids] i(Vpd) i(Vpb) @m2[vth] @m2[ic] @m2[ids]
+.end

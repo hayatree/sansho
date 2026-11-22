@@ -1,0 +1,13 @@
+Uniform RC lines with explicit and automatic segmentation
+* Provenance: original Sansho R8 circuit.
+Vin in 0 dc 0 ac 1 pulse(0 1 1n 0.5n 0.5n 30n 60n)
+U1 in out 0 strip l=2m n=5
+.model strip urc(k=1.6 fmax=1g rperl=100k cperl=30n)
+Rl out 0 500
+U2 in auto 0 diff l=2m
+.model diff urc(k=1.6 fmax=1g rperl=100k cperl=30n isperl=10n rsperl=300)
+Rauto auto 0 500
+.ac dec 6 100k 1g
+.tran 0.25n 40n
+.save v(out) v(auto) i(vin)
+.end

@@ -1,4 +1,4 @@
-rs-spice
+Sansho
 Copyright (c) 2026 hayatree
 
 Licensed under either of
@@ -8,7 +8,10 @@ at your option.
 
 Third-party material
 --------------------
-This repository currently contains no third-party source code.
+Sansho contains no vendored third-party source code. The release binaries
+include Sansho’s original sparse LU, ordering and dense QZ implementations and
+link the Rust crates from Cargo.lock. Their license declarations, component
+notices and full license texts are in THIRD-PARTY-LICENSES.md.
 
 Any code ported from third-party projects (for example BSD-licensed parts of
 ngspice) must be listed here together with its original copyright notice and
@@ -16,6 +19,8 @@ license, and recorded in docs/PROVENANCE.md.
 
 Trademarks
 ----------
+The name SPICE originated at the University of California, Berkeley. Sansho
+is unaffiliated with Berkeley, ngspice and simulator vendors.
 HSPICE and PrimeSim are trademarks of Synopsys, Inc. Spectre and PSpice are
 trademarks of Cadence Design Systems, Inc. LTspice is a trademark of Analog
 Devices, Inc. All other trademarks are the property of their respective owners.

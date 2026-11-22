@@ -1,0 +1,9 @@
+disto lin 3 points
+* Provenance: original R22g black-box regression deck. A linear distortion grid of np points gives np + 2 frequencies.
+Vin in 0 dc 0.6 ac 1 distof1 1m
+R1 in out 1k
+D1 out 0 dj
+.model dj d(is=1e-14)
+.disto lin 3 1k 2k
+.ac lin 3 1k 2k
+.end

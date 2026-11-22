@@ -1,0 +1,11 @@
+Legacy compatibility selector at high injection
+* Provenance: original Sansho R16 circuit.
+* sweep: flcomp 0 1 2
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 flcomp={probe} t0=5p thcs=30p tef0=3p)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

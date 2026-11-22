@@ -1,0 +1,39 @@
+Same-polarity conductance through a gaussian tail
+* Provenance: original Sansho R20b black-box experiment.
+* sweep: length 0.10 0.25 0.50 1.0
+* Test the resistivity integral using fixed mobility and a uniform background.
+.param probe=0.10
+Vdrive drive 0 0
+Vref drive node_ref 0
+Dref node_ref 0 mref
+.model mref numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform n.type conc=1e16
++ mobility material=1 electron majority mumax=1000
++ mobility material=1 electron minority mumax=1000
++ mobility material=1 hole majority mumax=500
++ mobility material=1 hole minority mumax=500
++ end
+Vtail drive node_tail 0
+Dtail node_tail 0 mtail
+.model mtail numd level=1
++ options resistor defa=1e-8
++ x.mesh loc=0 n=1
++ x.mesh loc=2.4 n=62
++ domain num=1 material=1
++ material num=1 silicon
++ doping uniform n.type conc=1e16
++ doping gaussian n.type conc=3e16 x.low=0 x.high=0.4 char.length={probe}
++ mobility material=1 electron majority mumax=1000
++ mobility material=1 electron minority mumax=1000
++ mobility material=1 hole majority mumax=500
++ mobility material=1 hole minority mumax=500
++ end
+.options itl1=200 itl2=120 reltol=1e-5 abstol=1e-15
+.dc Vdrive -0.01 0.01 0.005
+.save i(vref) i(vtail)
+.end

@@ -1,0 +1,10 @@
+Loss and repeated reflections on a mismatched interconnect
+* Provenance: original Sansho R8 circuit.
+Vin in 0 pulse(0 1 2n 0.5n 0.5n 8n 100n)
+Rs in near 25
+O1 near 0 far 0 trace
+.model trace ltra(r=18 l=250n g=0 c=100p len=1 lininterp)
+Rl far 0 120
+.tran 0.15n 38n
+.save v(near) v(far)
+.end

@@ -1,0 +1,17 @@
+Bind unused and late ports across two instances
+* Provenance: original R22c circuit for black-box hierarchy and helper names.
+* An internal resistor appears before any output or input port in the body.
+.subckt cell unused input output
+Rlocal local 0 1k
+Edrive output 0 value={v(input,local)}
+.ends
+Xfirst later z one cell
+Xsecond other a two cell
+V1 z 0 2
+V2 a 0 4
+Rone one 0 1k
+Rtwo two 0 1k
+Ru later 0 1k
+Rv other 0 1k
+.op
+.end

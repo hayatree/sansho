@@ -1,0 +1,10 @@
+Complex parameter sensitivities of an RC low pass
+* Provenance: original R2 verification circuit.
+* sansho-verify: missing-sens v(c1:cap) v(c1:cj) v(c1:cjsw) v(c1:narrow) v(c1:short) v(c1:del) v(c1:tc1) v(c1:tc2) v(c1:di) v(c1:thick) v(c1:bv_max) v(c1_w) v(c1_l) v(c1_bv_max) v(r1:rsh) v(r1:narrow) v(r1:short) v(r1:tc1) v(r1:tc2) v(r1:tce) v(r1:kf) v(r1:af) v(r1:r) v(r1:bv_max) v(r1:lf) v(r1:wf) v(r1:ef) v(r1_l) v(r1_w) v(r1_tce) v(r1_bv_max) v(vin_z0) v(vin_pwr) v(vin_freq) v(vin_phase)
+* sansho-verify: known-sens-value r1
+* sansho-verify: known-difference ngspice 44 v(r1) AC sensitivity is zero above the first frequency; Sansho matches the analytic derivative and ngspice v(r1_ac)
+Vin in 0 dc 0 ac 1
+R1 in out 1k
+C1 out 0 10n
+.sens v(out) ac dec 4 1k 100k
+.end

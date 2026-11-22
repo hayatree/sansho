@@ -1,0 +1,15 @@
+Loaded transformer with a piecewise-linear magnetic core
+* Provenance: original Sansho verification circuit.
+Vs source 0 SIN(0 0.2 10k)
+Rprimary source winding 15
+Ap %hd(winding 0) %hd(mp 0) primary
+As %hd(out 0) %hd(ms 0) secondary
+Ac %gd(mp ms) material
+Rl out 0 120
+.model primary lcouple(num_turns=50)
+.model secondary lcouple(num_turns=30)
+.model material core(area=1e-4 length=0.04 H_array=[-20 -0.15 0 0.15 20] B_array=[-0.006 -0.00045 0 0.00045 0.006])
+.tran 0.5u 220u
+.save v(winding) v(out) i(Vs)
+.print tran v(winding) v(out) i(Vs)
+.end

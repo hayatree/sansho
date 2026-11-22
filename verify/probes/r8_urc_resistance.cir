@@ -1,0 +1,11 @@
+Diode access resistance versus explicit URC lump count
+* Provenance: original Sansho R8b black-box experiment.
+* sweep: 1 2 4 5 8
+.param probe=5
+Vin in 0 dc 0 ac 1
+U1 in far 0 wire l=2m n={probe}
+.model wire urc(k=1.6 rperl=100k cperl=30n isperl=10n rsperl=300)
+Rload far 0 500
+.ac dec 3 10meg 1g
+.save v(far) i(vin)
+.end

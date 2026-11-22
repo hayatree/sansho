@@ -1,0 +1,11 @@
+Reverse stored charge under collector excitation
+* Provenance: original Sansho R15 circuit.
+* sweep: tr 0 .2n 2n
+.param probe=0
+Vc c 0 .09 ac 1
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 tr={probe} cjc=.2p)
+.ac dec 8 100k 10G
+.save i(Vc) i(Vb)
+.end

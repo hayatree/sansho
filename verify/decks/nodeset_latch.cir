@@ -1,4 +1,5 @@
 Cross-coupled inverter latch: .nodeset selects the state
+* Provenance: original Sansho verification fixture.
 VDD vdd 0 1.8
 MP1 q qb vdd vdd pch l=1u w=2u
 MN1 q qb 0 0 nch l=1u w=1u

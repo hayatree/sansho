@@ -1,0 +1,13 @@
+Thermal selector with an external thermometer
+* Provenance: original Sansho R15 circuit.
+* sweep: selft 0 1
+.param probe=0
+Vc c 0 2
+Vb drv 0 pulse(.55 .76 1u 100n 100n 35u 80u)
+Rb drv b 100
+Rcase tj 0 2k
+Q1 c b 0 0 tj dev
+.model dev npn(level=4 is=1e-16 ibei=1e-18 re=4 selft={probe} rth=200 cth=60n)
+.tran .4u 80u
+.save v(tj) i(Vc) i(Vb)
+.end

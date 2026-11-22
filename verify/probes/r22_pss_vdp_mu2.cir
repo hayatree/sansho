@@ -1,0 +1,11 @@
+Van der Pol pair, mu=2
+* Provenance: original Sansho oscillator probe for R22.
+* sansho-verify: pending-reference
+* sansho-verify: pss-ng v(out)
+Cx out 0 1m
+Cy y 0 1m
+Bx 0 out I={v(y)}
+By 0 y I={2*(1-v(out)*v(out))*v(y)-v(out)}
+.ic v(out)=1 v(y)=0
+.pss 135 70m out 512 20 40 0.003
+.end

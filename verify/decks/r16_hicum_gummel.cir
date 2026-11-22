@@ -1,0 +1,9 @@
+Forward Gummel plot from leakage to high injection
+* Provenance: original Sansho R16 circuit.
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 ireis=3e-16 t0=3p tef0=1p cjei0=8f cjci0=3f)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

@@ -1,0 +1,15 @@
+Junction-to-case step response to one watt, varying RTHJC
+* Provenance: original Sansho R9b black-box experiment.
+* sweep: 1 3 5
+.param probe=1
+Vcase tc 0 0
+M1 0 0 0 tj tc p thermal
+Vd d 0 2
+Vg g 0 pulse(0 2 50u 1u 1u 3m 7m)
+M2 d g 0 tjpower tc p thermal
+.model p vdmos(vto=1 kp=1 mu=0 tcvth=0 cgs=0 cgdmin=0 cgdmax=0 cjo=0
++ rthjc={probe} cthj=100u)
+Iheat 0 tj pulse(0 1 50u 1u 1u 3m 7m)
+.tran 2u 6m
+.save v(tj) v(tjpower) v(tc) i(Vd) i(Vcase)
+.end

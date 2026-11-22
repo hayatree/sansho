@@ -85,7 +85,7 @@ def main():
     print("Run  Points  Mean |dV| (mV)  Crossings  Crossing diff")
     print(f"ngspice gold  {len(times)}  0  {sum(counts)}  0")
     reference = CACHE / f"{args.deck}.ref.raw"
-    candidates = args.candidate or [CACHE / f"{args.deck}.spx.raw"]
+    candidates = args.candidate or [CACHE / f"{args.deck}.sansho.raw"]
     for path in [reference, *candidates]:
         t, y = read(path)
         if not (isclose(t[0], times[0]) and isclose(t[-1], times[-1])):

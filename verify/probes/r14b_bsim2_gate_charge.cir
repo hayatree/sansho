@@ -1,0 +1,13 @@
+BSIM2 gate-driven charge across threshold
+* Provenance: original Sansho R14b circuit.
+* sweep: vgs -.2 0 .2 .4 .6 .8 1 1.4 2.2
+.param probe=0
+Vd d 0 1.5
+Vg g 0 {probe} ac 1
+Vb b 0 -.25
+Vs s 0 0
+M1 d g s b dev w=4u l=1.2u
+.model dev nmos(level=5 phi=.7 vfb=-.52 k1=.55 k2=.025 tox=.025 mu0=470 ua0=.12 ub0=.02 u10=.1 eta0=.012 vdd=3 temp=27 n0=1.45 xpart=0)
+.ac dec 4 10k 100meg
+.save i(Vg) i(Vd) i(Vs) i(Vb)
+.end

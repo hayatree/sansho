@@ -1,0 +1,11 @@
+Transfer denominator through the high injection knee
+* Provenance: original Sansho R16 circuit.
+* sweep: qp0 10f 20f 80f
+.param probe=10f
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 qp0={probe} t0=10p)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

@@ -1,0 +1,43 @@
+Mid-cell abrupt junction on three successively refined meshes
+* Provenance: original Sansho numerical-device fixture.
+* sweep: nominal 1
+V1 a1 0 dc -0.2 ac 1
+D1 a1 0 m1
+V2 a2 0 dc -0.2 ac 1
+D2 a2 0 m2
+V3 a3 0 dc -0.2 ac 1
+D3 a3 0 m3
+.model m1 numd level=1
++ options defa=1e-10 diode
++ x.mesh location=0 number=1
++ x.mesh location=2.4 number=32
++ domain number=1 material=1
++ material number=1 silicon tn=2n tp=3n
++ doping uniform n.type conc=1e+16
++ doping uniform p.type conc=2e+16 x.high=1.2
++ models srh concmob
++ end
+.model m2 numd level=1
++ options defa=1e-10 diode
++ x.mesh location=0 number=1
++ x.mesh location=2.4 number=62
++ domain number=1 material=1
++ material number=1 silicon tn=2n tp=3n
++ doping uniform n.type conc=1e+16
++ doping uniform p.type conc=2e+16 x.high=1.2
++ models srh concmob
++ end
+.model m3 numd level=1
++ options defa=1e-10 diode
++ x.mesh location=0 number=1
++ x.mesh location=2.4 number=122
++ domain number=1 material=1
++ material number=1 silicon tn=2n tp=3n
++ doping uniform n.type conc=1e+16
++ doping uniform p.type conc=2e+16 x.high=1.2
++ models srh concmob
++ end
+.options itl1=150 itl2=100
+.ac lin 1 100k 100k
+.save i(v1) i(v2) i(v3)
+.end

@@ -1,0 +1,19 @@
+Batch scalar, complex and scale field precision
+* Provenance: original Sansho R14 circuit.
+* sweep: numdgt 4 7 12 -6
+V1 a 0 0
+R1 a 0 3
+.control
+set numdgt=4
+dc v1 -1 1 0.5
+let z = i(v1) + j(v(a))
+print col v(a) i(v1) z
+print line z
+meas dc endpoint find i(v1) at=1
+echo measured $&endpoint
+set wr_singlescale
+set wr_vecnames
+wrdata fields.dat z
+quit
+.endc
+.end

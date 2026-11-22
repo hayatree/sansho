@@ -1,0 +1,31 @@
+Real gain startup with separate converter and gain delays
+* Provenance: original Sansho follow-up to the ngspice 44.2 R13c gain sweep.
+* sweep: delay 0.1n 0.4n 0.7n
+.param probe=0.4n
+Vbit in 0 PWL(0 0 4n 0 4.1n 1)
+Abits [in] [bit] bits
+Afast bit NULL fast instant
+Aslow bit NULL slow delayed
+Aa fast a amp
+Ab slow b amp
+Ac fast c seeded
+Aout b out bridge
+Rout out 0 1k
+.model bits adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0 fall_delay=0)
+.model instant d_to_real(zero=0.25 one=1.25 delay=0)
+.model delayed d_to_real(zero=0.25 one=1.25 delay=0.3n)
+.model amp real_gain(gain=2 delay={probe})
+.model seeded real_gain(gain=2 delay={probe} ic=-1)
+.model bridge real_to_v(gain=1 transition_time=0.2n)
+.control
+tran 0.025n 7n
+eprint bit
+eprint fast
+eprint slow
+eprint a
+eprint b
+eprint c
+print v(out)
+quit
+.endc
+.end

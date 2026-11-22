@@ -1,0 +1,17 @@
+Two coupled lines with near and far victim terminations
+* Provenance: original Sansho R18 circuit.
+* sansho-verify: known-difference 44.2 gives -301.29 mV on the first victim front, within 2 mV of a lossless control. The physical odd-mode front has attenuation exp(-0.14646). See docs/distributed-lines.md.
+Vin src 0 dc 0 ac 1 pulse(0 1 1n .16n .12n 20n 50n)
+Rs0 a src 50
+Rs1 b 0 50
+Rl0 x 0 75
+Rl1 y 0 80
+P1 a b 0 x y 0 wire
+.model wire cpl length=1
++ r=12 0 12
++ l=300n 65n 300n
++ g=.3m 0 .3m
++ c=115p -13p 115p
+.tran .05n 32n
+.save v(a) v(b) v(x) v(y) i(Vin)
+.end

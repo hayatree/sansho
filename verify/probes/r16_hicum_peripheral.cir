@@ -1,0 +1,11 @@
+Peripheral emitter base current and spreading resistance
+* Provenance: original Sansho R16 circuit.
+* sweep: peripheral 0 1e-16 4e-16
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 ibeps={probe} mbep=1.2 ireps=2e-15 mrep=2.2 rbi0=90)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

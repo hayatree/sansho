@@ -1,0 +1,13 @@
+Matched and mismatched 50 ohm lines with a finite ramp
+* Provenance: original R3 verification circuit.
+Vin drive 0 dc 0 ac 1 pwl(0 0 2n 0 2.5n 1 45n 1)
+Rm drive a 50
+Tm a 0 b 0 z0=50 td=5n
+Rmatched b 0 50
+Ru drive c 25
+Tu c 0 d 0 z0=50 f=50meg nl=0.25
+Rload d 0 150
+.save v(a) v(b) v(c) v(d)
+.ac lin 11 10meg 110meg
+.tran 0.2n 42n
+.end

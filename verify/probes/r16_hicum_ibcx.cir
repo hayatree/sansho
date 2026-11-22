@@ -1,0 +1,11 @@
+External BC current near saturation
+* Provenance: original Sansho R16 circuit.
+* sweep: ibcx 0 1e-16 4e-16
+.param probe=0
+Vc c 0 1
+Vb b 0 .79
+Q1 c b 0 0 dev
+.model dev npn(level=8 ibcxs={probe} mbcx=1.2 ibcis=3e-17 rbi0=40)
+.dc Vc -.05 2 .025
+.save i(Vc) i(Vb)
+.end

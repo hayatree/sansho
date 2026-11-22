@@ -1,0 +1,17 @@
+Junction charge relaxation and line prehistory
+* Provenance: original Sansho R7 circuit.
+Q1 c b 0 qb ic=0.2,0.4
+.model qb npn(is=1e-15 cje=4p cjc=2p)
+Rc c 0 5k
+Rb b 0 4k
+J1 jd jg 0 nj ic=0.1,-0.1
+.model nj njf(vto=-1 beta=1m cgs=4p cgd=2p)
+Rjd jd 0 5k
+Rjg jg 0 5k
+T1 near 0 far 0 z0=50 td=5n ic=0.2,0,0,0
+Rnear near 0 50
+Rfar far 0 50
+.options method=gear maxord=1
+.tran 100p 20n uic
+.save v(b) v(c) v(jd) v(jg) v(near) v(far)
+.end

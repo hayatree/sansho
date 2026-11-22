@@ -29,7 +29,7 @@ static void sample(int unused, siginfo_t *info, void *raw) {
 }
 
 __attribute__((constructor)) static void start(void) {
-    const char *fd = getenv("SPX_SAMPLE_FD");
+    const char *fd = getenv("SANSHO_SAMPLE_FD");
     if (!fd) return;
     sample_fd = atoi(fd);
     struct sigaction sa = { .sa_sigaction = sample, .sa_flags = SA_SIGINFO | SA_RESTART };

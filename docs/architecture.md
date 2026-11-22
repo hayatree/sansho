@@ -4,9 +4,7 @@
 - Status: Draft
 - Background: private OSS landscape survey (not included in the repository)
 
-> **Working name:** The survey found `JaimeHW/RSpice` (non-commercial license). To avoid a name
-> collision, this document uses the provisional crate prefix `spx-`. The final name will be chosen
-> after trademark and crates.io checks.
+> Sansho (山椒) uses the crate prefix `sansho-`.
 
 ---
 
@@ -29,7 +27,7 @@
 
 - GUI / schematic editor (use Xschem etc.)
 - fast-SPICE approximations that trade accuracy (table models, partitioned approximations)
-- Mixed-signal digital (XSPICE equivalent), device simulation (CIDER equivalent)
+- Full XSPICE library compatibility
 
 ---
 
@@ -41,7 +39,7 @@
 | D2 | **Fix the matrix pattern at elaboration** and precompute each device's stamp targets as indices into the value array | No runtime hashing or insertion. Symbolic factorization (ordering) is reusable. Suits GPU offload. |
 | D3 | Store devices as **SoA batches per model type** | Batch evaluation via SIMD, threads, or GPU. Dynamic dispatch happens per group, not per instance. |
 | D4 | **Deterministic reduction**: devices write contributions to slot arrays, which are summed into the matrix in a fixed order | Bit-identical results regardless of thread count (agent reproducibility, stable regression tests). |
-| D5 | Linear solver behind a trait. Initial backend: faer. Target: our own KLU-style solver (BTF + AMD + Gilbert–Peierls + pivot-reuse refactor) | Avoids linking KLU (LGPL). Circuit-specific refactorization is key to speed. |
+| D5 | Linear solver behind a trait. Original BTF, approximate minimum degree ordering and Gilbert–Peierls LU with pivot reuse | Avoids linking KLU (LGPL). Circuit-specific refactorization is key to speed. |
 | D6 | **The library is the product**; CLI / MCP / Python are thin shells | Agent-native requirements (sessions, structured results) are met at the library API level. |
 | D7 | f64 everywhere; Complex<f64> for AC. Options may loosen tolerances but never internal precision | Accuracy is the top priority. |
 | D8 | The library never panics; everything returns `Result<_, Diagnostic>` | Agents can handle failures structurally. |
@@ -52,51 +50,51 @@
 
 ```
            ┌─────────────┐  ┌────────────┐  ┌────────────┐
- Front     │  spx-cli    │  │  spx-mcp   │  │  spx-py    │  (thin shells)
+ Front     │ sansho-cli  │  │ sansho-mcp │  │ sansho-py  │  (thin shells)
            └──────┬──────┘  └─────┬──────┘  └─────┬──────┘
                   └───────────────┼───────────────┘
-           ┌──────────────────────▼───────────────────────┐
- API       │ spx-api : Session / Job / Result / Diagnostic │
-           └──────┬───────────────────────────┬───────────┘
-           ┌──────▼──────┐             ┌──────▼──────┐
- Input     │ spx-netlist │  ───AST───▶ │ spx-elab    │ ──▶ Circuit IR
-           │ (parse)     │             │ (flatten,   │
-           └─────────────┘             │  params)    │
+           ┌──────────────────────▼──────────────────────────────────┐
+ API       │ sansho-api : Session / Job / Result / Diagnostic        │
+           └──────┬───────────────────────────┬──────────────────────┘
+           ┌──────▼─────────┐          ┌──────▼──────┐
+ Input     │ sansho-netlist │ ───AST──▶│ sansho-elab │ ──▶ Circuit IR
+           │ (parse)        │          │ (flatten,   │
+           └────────────────┘          │  params)    │
                                        └──────┬──────┘
-           ┌──────────────────────────────────▼───────────┐
- Engine    │ spx-engine : MNA assembly / Newton / analyses │
-           │   OP · DC sweep · AC · TRAN · (Noise · PSS/HB)│
-           └───┬──────────────┬───────────────┬───────────┘
-           ┌───▼────────┐ ┌───▼──────────┐ ┌──▼──────────┐
- Kernel    │ spx-devices│ │ spx-sparse   │ │ spx-output  │
-           │ builtin +  │ │ LU / order / │ │ waveform,   │
-           │ spx-osdi   │ │ solve        │ │ raw, .meas  │
-           └───┬────────┘ └──────────────┘ └─────────────┘
-           ┌───▼────────┐
- Accel     │ spx-gpu    │ (batched device eval, optional feature)
-           └────────────┘
-           spx-verify : regression / accuracy harness (runs ngspice/Xyce externally as oracles)
+           ┌──────────────────────────────────▼──────────────────────┐
+ Engine    │ sansho-engine : MNA assembly / Newton / analyses        │
+           │   OP · DC · AC · TRAN · noise · TF · sens · Fourier · PZ│
+           └───┬────────────────┬────────────────┬───────────────────┘
+           ┌───▼────────────┐ ┌─▼────────────┐ ┌─▼─────────────┐
+ Kernel    │ sansho-devices │ │ sansho-sparse│ │ sansho-output │
+           │ builtin +      │ │ LU / order / │ │ waveform,     │
+           │ sansho-osdi    │ │ solve        │ │ raw, .meas    │
+           └───┬────────────┘ └──────────────┘ └───────────────┘
+           ┌───▼────────────┐
+ Accel     │ sansho-gpu     │ (batched device eval, optional feature)
+           └────────────────┘
+           sansho-verify : regression / accuracy harness (runs ngspice/Xyce externally as oracles)
 ```
 
 ### 3.1 Crates
 
 | Crate | Responsibility | Main external deps (all permissive) |
 |---|---|---|
-| `spx-netlist` | Lexing / parsing. Lossless AST with line/column spans. `.include/.lib/.param/.func/.subckt/.model`, expression evaluation | none (hand-written parser) |
-| `spx-elab` | Subcircuit flattening, parameter resolution, model binning, node numbering, topology checks (floating nodes, V loops, I cutsets) | — |
-| `spx-ir` | Post-elaboration circuit IR. JSON schema via serde (also accepted as agent input) | serde, schemars |
-| `spx-sparse` | CSC pattern, AMD/COLAMD, BTF, LU (real & complex), refactor, triangular solves, `LinearSolver` trait | faer (initial backend) |
-| `spx-devices` | `DeviceGroup` trait. Built-ins (R/L/C/K/V/I/E/F/G/H/switches/diode/BJT (GP)/MOS1/BSIM4) | — |
-| `spx-va` | Clean-room Verilog-A analog subset, binding specialization, register interpretation and optional native evaluation | Cranelift (optional) |
-| `spx-osdi` | OSDI 0.3/0.4 loader (independently implemented from the spec); exposes `.osdi` models as `DeviceGroup` | libloading |
-| `spx-engine` | MNA assembly, Newton, homotopy, time integration, analyses | rayon |
-| `spx-output` | Columnar waveform store, ngspice raw writer (ASCII/binary), `.meas` evaluation | — |
-| `spx-api` | Session / Job API, structured results, diagnostics, determinism hash | rayon |
-| `spx-cli` | `spx run deck.cir`, `--json`, ngspice-like batch mode | clap |
-| `spx-mcp` | MCP server (stdio; HTTP later) | serde_json (no SDK) |
-| `spx-py` | Python bindings | pyo3 |
-| `spx-gpu` | Batched device evaluation (feature flag) | wgpu / cudarc (dynamic loading) |
-| `spx-verify` | Regression suites, oracle comparison, report generation | — |
+| `sansho-netlist` | Lexing / parsing. Lossless AST with line/column spans. `.include/.lib/.param/.func/.subckt/.model`, expression evaluation | none (hand-written parser) |
+| `sansho-elab` | Subcircuit flattening, parameter resolution, model binning, node numbering, topology checks (floating nodes, V loops, I cutsets) | — |
+| `sansho-ir` | Post-elaboration circuit IR. JSON schema via serde (also accepted as agent input) | serde, schemars |
+| `sansho-sparse` | CSC pattern, ordering, BTF, real and complex LU, refactor, transpose solves and dense QZ | rayon |
+| `sansho-devices` | `DeviceGroup` trait. Built-ins (R/L/C/K/V/I/E/F/G/H/switches/T/JFET/diode/BJT (GP)/MOS1–3/BSIM4) | — |
+| `sansho-va` | Clean-room Verilog-A analog subset, binding specialization, register interpretation and optional native evaluation | Cranelift (optional) |
+| `sansho-osdi` | OSDI 0.3/0.4 loader (independently implemented from the spec); exposes `.osdi` models as `DeviceGroup` | libloading |
+| `sansho-engine` | MNA assembly, Newton, homotopy, time integration, analyses | rayon |
+| `sansho-output` | Columnar waveform store, ngspice raw writer (ASCII/binary), `.meas` evaluation | — |
+| `sansho-api` | Session / Job API, structured results, diagnostics, determinism hash | rayon |
+| `sansho-cli` | `sansho run deck.cir`, `--json`, ngspice-like batch mode | clap |
+| `sansho-mcp` | MCP server (stdio; HTTP later) | serde_json (no SDK) |
+| `sansho-py` | Python bindings | pyo3 |
+| `sansho-gpu` | Batched device evaluation (feature flag) | wgpu / cudarc (dynamic loading) |
+| `sansho-verify` | Regression suites, oracle comparison, report generation | — |
 
 ---
 
@@ -139,7 +137,7 @@ pub trait DeviceGroup: Send + Sync {
     /// Charge/flux states to be integrated, exposed for LTE estimation.
     fn charges(&self, st: &GroupState) -> &[f64];
 
-    /// Noise sources (added later).
+    /// Independent local noise generators and their residual coefficients.
     fn noise(&self, ...) {}
 }
 ```
@@ -154,7 +152,8 @@ pub trait DeviceGroup: Send + Sync {
    positions within a group are fixed.
 2. The gather map stores a per-group scatter table in the original accumulation
    order. Native circuits stream these tables, with conductance and charge
-   assembly in independent tasks. Circuits containing Verilog-A devices also
+   assembly in independent tasks. Large native nonlinear circuits can also
+   split a table by destination tile while preserving its source order. Circuits containing Verilog-A devices also
    have a CSR-style table for arrays above 2,048 destinations.
 3. The summation can be parallelized per matrix value k (each k is independent; its summation order
    is fixed).
@@ -176,8 +175,8 @@ time point and signal on one, two and five threads.
 
 ### 4.4 Native Verilog-A evaluation (VA-5b)
 
-The optional `jit` feature on spx-cli, spx-verify, spx-engine and spx-devices
-forwards to spx-va. The scalar specializer lowers into the same register program
+The optional `jit` feature on sansho-cli, sansho-verify, sansho-engine and sansho-devices
+forwards to sansho-va. The scalar specializer lowers into the same register program
 used by the interpreter. Cranelift compiles the bias-dependent equations into a
 host function with one scalar SSA value per live partial. A compiled module owns
 its finalized code and specialization cache. The device adapter prepares kernels
@@ -198,6 +197,13 @@ publication. Section 16 describes two-lane native circuit evaluation and timing 
 
 ## 5. Numerical engine
 
+AC, noise, transfer, sensitivity and pole-zero analyses share the operating-point
+linearization. A device supplies a one-sided noise spectrum and signed local MNA
+coefficients. Each frequency requires one complex transpose solve. Contributions
+accumulate in stable instance order. DC parameter derivatives reuse one real
+adjoint. Small pole-zero pencils use an original real double-shift QZ iteration. Fourier analysis consumes the completed transient before public
+signal projection. [Analysis algorithms and limits](analyses.md)
+
 ### 5.1 Nonlinear solve (Newton)
 
 - Residual `F(x) = f(x) + α·q(x) − r_hist − b` (α and r_hist supplied by the integrator), Jacobian
@@ -210,7 +216,7 @@ publication. Section 16 describes two-lane native circuit evaluation and timing 
   `f(x̃) + G·(x − x̃)` so the Newton step stays consistent; limiting marks the iteration as not
   converged (`Slots::noncon`). Junctions use Nagel's logarithmic limiting; FET control voltages use
   an original step clamp.
-- Device Jacobians come from forward-mode dual numbers (`spx-devices/src/dual.rs`): model
+- Device Jacobians come from forward-mode dual numbers (`sansho-devices/src/dual.rs`): model
   equations are written once and their derivatives are exact.
 - Device state (`StateRef`): an `accepted` copy (last accepted solution, read-only during a solve)
   and a `current` copy (per iteration). Used for limiting history and incremental charge models
@@ -226,8 +232,9 @@ publication. Section 16 describes two-lane native circuit evaluation and timing 
 - A BSIM4 chunk without internal resistive nodes combines intrinsic, overlap and
   junction contributions into a four-terminal MNA stamp. It checks the limiters
   before reuse, and compares the junction `gmin` with the anchor. The chunk
-  preserves all twelve component charges for LTE. Exact scalar charge sampling
-  at the converged voltages also updates the five limiter histories before commit.
+  preserves all twelve component charges for LTE. Scalar charge sampling at the
+  converged voltages also updates the five limiter histories before commit. With
+  `bypass=1` it expands the last linearization when every terminal is within `vntol`.
   Chunks with internal nodes keep their separate network stamps and evaluate
   overlap and junctions on every visit. Gate resistance modes 2 and 3 evaluate
   the full intrinsic model.
@@ -295,40 +302,35 @@ the accepted time grid. [BSIM4 startup and restart conventions](bsim4.md#numeric
 
 - **AC**: solve `G + jωC` at the OP with complex LU, sharing the symbolic factorization (same
   pattern).
-- **Noise**: adjoint method (later).
-- **Sensitivity**: adjoint DC/AC sensitivities (later; useful for agent-driven optimization loops).
+- **Noise** uses a complex adjoint per frequency and integrates independent output and input power spectra.
+- **Sensitivity** uses one nominal DC adjoint or a forward and adjoint AC solve at each frequency. The AC matrix derivative includes operating-point motion.
 
-### 5.5 Periodic steady state (later)
+### 5.5 Periodic steady state
 
-Shooting-method PSS and HB. Thanks to the DAE form (D1), devices need no additional code.
+PSS propagates the transient charge and current Jacobians over one period. A bordered shooting system solves for the period of autonomous oscillators. Driven circuits use a prescribed period. [Shooting equations and limits](analyses.md#periodic-steady-state)
 
 ---
 
-## 6. Linear solver (`spx-sparse`)
+## 6. Linear solver (`sansho-sparse`)
 
 ```rust
 pub trait LinearSolver<T> {
     fn analyze(&mut self, pattern: &CscPattern) -> Result<()>;        // ordering, BTF, symbolic
     fn factor(&mut self, values: &[T]) -> Result<()>;                 // first time: partial pivoting
-    fn refactor(&mut self, values: &[T]) -> Result<RefactorOutcome>;  // reuse pivots; fall back to factor if unstable
     fn solve(&self, rhs: &mut [T]) -> Result<()>;
 }
 ```
 
 | Stage | Implementation | Notes |
 |---|---|---|
-| S0 | faer sparse LU | Get running quickly; also the accuracy reference |
 | S1 | Own KLU-style solver: BTF → per-block AMD → Gilbert–Peierls left-looking LU → pivot-reuse refactor | Implemented from papers (Davis & Palamadai 2010; Gilbert & Peierls 1988). SuiteSparse source is not consulted |
 | S2 | Parallelism across BTF blocks; level-scheduled parallel refactor | Techniques from NICSLU/CKTSO and Basker papers |
 | S3 | Iterative methods for large power grids (preconditioned GMRES/CG); GPU (cuDSS as an optional plugin) | Optional |
 
-Real Newton solves reuse the symbolic ordering and simplicial pivot sequence. After a pivoted
-factorization, the solver records scatter offsets and ordered updates reachable from the active
-CSC entries. Activating a previously omitted entry triggers fresh pivoting and expands the
-support used for subsequent plans. Both solves traverse the same flat factor storage.
-Each subsequent factorization checks the pivot against the remaining column entries and monitors
-upper-factor growth. Ties, tiny pivots or excessive growth trigger fresh pivoting. The general
-backend handles dense and supernodal patterns and complex solves.
+Real Newton, AC, noise and sensitivity use the same Gilbert–Peierls kernel.
+A symbolic plan stores original CSC offsets and the column permutation. Each
+job owns its numeric factors, pivot history and solve workspace. Adjoint solves
+apply the ordinary transpose, including for complex matrices.
 
 For real systems with at least 2,048 unknowns and at most 16 structural
 entries per column on average, automatic selection first tests a block
@@ -340,35 +342,55 @@ the complete pattern. BTF is used for multiple blocks when the largest holds
 at most half the unknowns or at least 2% of structural entries lie in columns
 outside that block.
 
-Each diagonal block uses an original left-looking real LU. Blocks with at
-least 256 columns first try minimum degree on the union of the matched
-pattern and its transpose. Eliminating a vertex completes its neighbor clique.
-Degree ties use the lower original column. A budget of 256 times the block
-input count bounds the sum of squared elimination degrees. Exhausting the
-budget falls back to faer's public column ordering, which also handles blocks
-of four to 255 columns. Smaller blocks use natural order. A priority queue visits
-reachable earlier pivots in order. Fresh pivoting prefers the matched diagonal
-when it is at least 0.1 times the column maximum. Subsequent assemblies replay
-the same lower-column updates and check the same relative threshold. On a
-failed check the accepted prefix remains valid and pivot search resumes at
-the rejected column. Triangular solves propagate off-block contributions in
+Each diagonal block orders the union of its matched pattern and its transpose.
+This represents the near-symmetric circuit stamps directly. A quotient graph
+represents a fill clique by one element. Eliminating a variable absorbs its
+incident elements and any other element wholly contained in its boundary.
+The degree estimate counts the boundary once and sums the sizes of external
+neighbor sets. Variables with no external neighbors can be eliminated together.
+Degree ties in the queue use the smaller block-local index. Vertices with initial
+degree above max(16, 10√n) follow the sparse vertices in index order.
+For blocks of at least 16,384 vertices, breadth-first level sets identify
+narrow separators. A separator must leave at least a quarter of the region on
+each side. Its vertices are ordered after the two interiors. The same quotient
+degree rule orders each level.
+
+Fresh LU visits reachable earlier pivots in elimination order, preferring the
+matched diagonal when it is at least 0.1 times the column maximum. Later
+assemblies replay the updates and check that threshold. A failed check retains
+the accepted prefix. Large blocks with more than 16 strict L entries per
+column on average can pack eight consecutive columns with a common lower
+row pattern. Refactorization traverses earlier L columns once per panel,
+and solves reuse the packed rows. A rejected panel resumes scalar pivot
+search at its first column. BTF solves propagate off-block contributions in
 fixed CSC order.
 
-After declining BTF, automatic selection keeps the existing simplicial
-refactorization where applicable below 16,384 unknowns. The general real
-fallback uses faer's sequential numeric and solve kernels and reusable
-scratch at every size. A large linear job reuses valid factors when all assembled Jacobian
-bits match the previous successful factorization. Set `SPX_REAL_SOLVER` to
-`auto`, `newton` (previous selection), `faer` (general backend), or `btf`
-(attempt BTF regardless of size and partition quality). All real backend
-selections use sequential kernels for general LU so worker-count changes
-preserve the single-worker arithmetic.
+`SANSHO_REAL_SOLVER=auto` uses the BTF selection above. `newton` uses
+unblocked LU. `btf` requests BTF regardless of size and partition quality.
+An unavailable transversal or an activated entry above the block diagonal
+selects unblocked LU. Large linear jobs reuse numeric factors when every
+assembled Jacobian entry matches the previous factorization bit for bit.
+
+`mixed` (experimental) factors each Newton matrix in single precision and refines
+every solve with double-precision residuals. A solve is accepted when the
+componentwise backward error max|b − Ax| / (|A||x| + |b|) is at most 8 ε₆₄.
+Otherwise, or when the single-precision factorization fails, the same matrix is
+factored in double precision. Later factorizations then skip the single-precision
+attempt 1, 3, 7, …, 63 times. Accuracy therefore never rests on the
+low-precision factors. All 148 ngspice comparison decks pass with `mixed`. In
+those runs 94 % of solves refined (1.4 steps on average) and 6 % fell back. The
+large benchmarks are too ill-conditioned for single-precision factors (roughly
+cond(A) > 1e7). The 300 × 300 RC mesh and the MOS1 16-bit multiplier fall back on
+nearly every solve and run about 4 % slower than `newton`. `SANSHO_PROFILE_MIXED=1`
+prints the refinement counters. A batched GPU factorization would be the
+setting where single-precision factors pay off. On the CPU the backend is kept as a
+measurement tool.
 
 ---
 
 ## 7. Agent-native design
 
-### 7.1 API (`spx-api`)
+### 7.1 API (`sansho-api`)
 
 ```rust
 let mut s = Session::new(SessionOptions::default());
@@ -415,12 +437,12 @@ alterations is planned with the own sparse solver (M5).
   (e.g. `1M` vs `1Meg`), implausible values, default MOSFET geometry, `.meas` signals that do not
   exist (with "did you mean" suggestions), suspicious `.tran` steps.
 - Error codes are stable IDs, each with documentation: the registry in
-  `spx-diag/src/codes.rs` generates [`diagnostics.md`](diagnostics.md), and a test fails when a code
+  `sansho-diag/src/codes.rs` generates [`diagnostics.md`](diagnostics.md), and a test fails when a code
   is used without being registered.
 - Convergence failures report the non-converged unknowns with their last value and update ratio,
   the devices attached to the worst node, the strategies tried, and suggestions (implemented in M3).
 
-### 7.4 MCP server (`spx-mcp`)
+### 7.4 MCP server (`sansho-mcp`)
 
 | Tool | Purpose |
 |---|---|
@@ -431,6 +453,7 @@ alterations is planned with the own sparse solver (M5).
 | `get_waveform` | Fetch a signal over a range with a point budget (LTTB) |
 | `measure` | Evaluate `.meas`-style measurements after the fact |
 | `alter_and_rerun` | Rerun with parameter deltas |
+| `monte_carlo` | Statistical instances of a deck from text or path, returning per-run measurements and distribution summaries |
 | `sweep` | Parameter sweep run in parallel (L0), table of measurements |
 | `explain_failure` | Diagnostic details and remedies, by job or by code |
 | `export_deck` | Export the canonical ngspice deck (for cross-checking) |
@@ -440,10 +463,10 @@ revisions 2024-11-05 through 2025-11-25) directly on `serde_json`, without an SD
 surface needed is small, and this keeps startup fast and the dependency tree permissive. Tool
 results carry both `structuredContent` and the same JSON as text. Request errors (unknown ids, bad
 arguments) are tool results with `isError: true` and structured diagnostics; only protocol errors
-use JSON-RPC errors. `monte_carlo` and an HTTP transport are planned.
+use JSON-RPC errors. An HTTP transport is planned.
 
 Guarantees fast startup (single static binary) and determinism (same input → same hash → same
-result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/stdio.rs`.
+result). The M3 exit criterion is tested end to end in `crates/sansho-mcp/tests/stdio.rs`.
 
 ---
 
@@ -451,11 +474,11 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 
 | Layer | Target | Mechanism | When |
 |---|---|---|---|
-| L0 | Independent jobs (analyses of one netlist, batches of netlists) | Shared compiled circuit, one workspace per job, `std::thread::scope` with index-ordered results | M2 (done) |
+| L0 | Independent jobs (analyses of one netlist, batches of netlists) | Shared compiled circuit, one workspace per job, Rayon with index-ordered results | M2 (done) |
 | L1 | Device evaluation within a run | Parallel over group × chunk (D3/D4) | M3 (done) |
 | L2 | Matrix assembly within a run | Parallel reduction per value index | M3 (done) |
-| L3 | LU within a run | Parallel BTF blocks, parallel refactor | M5 |
-| G1 | GPU batch | Same topology × N instances (MC): device eval on GPU; LU as CPU batch or cuDSS uniform batch | M5 |
+| L3 | Numeric LU within a run | Independent column subtrees of a pivoted BTF block | M5-4 |
+| G1 | GPU batch | Same topology × N instances (MC): device eval on GPU; LU as CPU batch or cuDSS uniform batch | Diode kernel done (§8.2) |
 | G2 | GPU-resident single run | Assembly through LU entirely on GPU. Research track | TBD |
 
 - All levels run on a rayon pool. `run_with` uses up to `threads` workers.
@@ -467,16 +490,78 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
   BSIM4 has weight four. Linear-only analyses currently use one engine worker.
   The serial gather traverses source slots by group. Parallel workers can
   gather conductance and charge concurrently, each in fixed addition order.
-- BTF factorization is serial in M5-1. In both multipliers one block holds
-  5,034 of the 5,106 unknowns. Parallel work within this block would address
-  substantially more arithmetic than scheduling the 67 other blocks.
+- L3 uses the upper pattern of the pivoted Gilbert–Peierls factors. Each
+  upper entry in column `j` creates a dependency on the corresponding earlier
+  lower column. For blocks of at least 2,048 columns, a union-find traversal
+  collects independent components until the next component exceeds
+  `max(64, block_size / min(workers, 8))` columns. A prefix of at least 256 columns and two components
+  qualifies. Whole components are assigned by estimated update count to at
+  most twelve tasks on the run's existing pool. Each task has a private
+  scatter vector of eight bytes per block row and exclusive write ownership
+  of its columns. The join precedes the serial suffix.
+- Each column follows its original input and update order. Tasks return the
+  smallest rejected column in elimination order. All preceding factors are
+  then valid for this Jacobian. Fresh pivot search reconstructs the suffix
+  in serial order. It can replay a structural reach when every predecessor
+  still has the recorded pivot and lower-row sequence and every candidate
+  row is still free. Blocks enable this cache after at least eight pivot
+  searches in a window of 128 factorizations. A changed edge crossing
+  task boundaries triggers a schedule rebuild.
+  Triangular solves accumulate contributions in the original column order.
+- Native nonlinear circuits of at least 2,048 unknowns can split gather maps
+  of at least 32,768 contributions into 512-destination tiles. Each tile
+  accumulates every contribution in group and slot order. For histories of
+  at least 32,768 charge samples the step controller computes derivatives
+  and LTE in chunks of 2,048. Each sample follows the same scalar formula.
+  The parallel reduction takes the maximum after mapping a nonfinite error
+  ratio to infinity. The MOS1 converged sampler writes its terminal charges
+  and Meyer history using the same voltage reconstruction as Newton.
 - L1 and L2 use the circuit-size thresholds in §4. The [performance report](performance.md) describes the VA benchmarks and timings.
 - Measured (M3, 1001-stage MOS1 ring oscillator, 1595 Newton iterations): assembly 466 ms on 1
   thread, 219 ms on 4, 194 ms on 8; LU (serial until M5) ≈ 145 ms. Results are bit-identical.
 
+### 8.1 Fixed-topology statistical batches (L0 and G1)
+
+`ParameterPlan` expands the include tree and hierarchy once. It retains a flat nominal netlist, expressions for sampled fields, and model bindings for live primitives. A binding holds the destination model and primitive indices, numeric field offsets and, for varying geometry, possible bins and their bounds. `ParameterPlan::sample(Sample { seed, index })` materializes one run's numeric inputs. Top-level process draws and local mismatch draws have separate lexical identities.
+
+`MonteCarlo` owns this plan and the compiled nominal circuit. Each run's circuit references the same `Arc<CircuitTopology>` for external node numbers, internal unknown ranges, layouts, CSC pattern and gather maps. `BatchBindings` identifies native chunks whose parameters vary or whose sources a DC analysis mutates. `Circuit::bind_run` shares the other native device groups, prepares run-local model coefficients for those chunks and verifies their internal unknowns and layouts against the compiled stamp slots. VA modules and terminal maps are shared. VA instances have private buffers and run-scoped JIT specializations. The real and complex numeric solvers reuse the same immutable block pattern and column ordering. Each factorization can pivot on that sample's assembled values.
+
+This is the CPU boundary for G1. The stable indices identify a model field or device lane independently of the run. A future device evaluator can transpose a window of sampled numeric fields into arrays indexed by field, instance and run, evaluate a group for that window and return the existing ordered stamp slots for each run. Newton histories, numeric pivots and timestep acceptance belong to each run. The current backend evaluates CPU groups. The CPU backend runs one whole run per worker lane. Each lane claims the next index as soon as its run finishes, so a slow sample never idles the other workers, and the rows are reordered by index. Lanes evaluate serially in a one-thread pool, because run-level parallelism needs no synchronization. Device-level parallelism is used, with two lanes, only for a parallel circuit when the runs alone cannot occupy the workers. Live runs are capped so that their unknowns total at most 65,536, which bounds waveform memory. Retained results contain measurements and diagnostics unless waveforms were requested.
+
+See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and replay.
+
+### 8.2 G1 GPU batch (`sansho-gpu`, feature `gpu`)
+
+`sansho mc --gpu` and `MonteCarlo::batch_gpu` simulate `lanes` runs at once, each on
+its own OS thread with a one-worker pool and the unchanged CPU engine. After binding,
+groups with a GPU kernel (currently the diode) are replaced by `sansho_gpu::Batched`.
+Its evaluations go to a coordinator. When every live lane is waiting, the last
+arrival launches one kernel for all pending requests. A kernel thread reads only its
+own lane's unknowns, state and model row, so results are bit-identical for any lane
+count. Output and startup-bias evaluations and runs whose rows the kernel cannot
+express stay on the CPU.
+
+The kernel transcribes the Rust diode in the same operation order, without FMA
+contraction. Per evaluation it agrees with the CPU group to 1e-12 relative, and the
+limited junction voltages agree exactly (`crates/sansho-gpu/tests`). The remaining
+differences come from the CUDA `exp`/`log`/`pow` implementations. They are amplified
+through Newton and step control to at most 2e-4 relative in `verify/mc-decks/diode_clamp.cir`
+(median 6e-9), inside RELTOL.
+
+`--gpu-jacobian f32` computes the derivative part of the dual numbers in single
+precision during limited DC and transient Newton iterations. Residuals, charges and
+all unlimited evaluations (AC, noise, converged linearizations) stay double, so the
+converged solution satisfies the same tolerances. On a 512-diode ladder the Newton
+iteration count is unchanged and measurements move by 1e-13 relative.
+
+Measured on an NVIDIA GB10 (FP64 ≈ 0.32 TFLOP/s, about equal to its 20-core CPU),
+the 512-diode ladder with 256 runs takes 21 s on the GPU and 7.8 s on the CPU. The
+lock-step rounds and per-launch transfers dominate. A speedup needs an FP64-strong GPU
+or a compute-heavy kernel (BSIM4, Verilog-A), and LU moved off the lane threads.
+
 ---
 
-## 9. Accuracy assurance and verification (`spx-verify`)
+## 9. Accuracy assurance and verification (`sansho-verify`)
 
 - **Oracles**: ngspice (BSD; installed and run in CI) as primary, Xyce as secondary — invoked only as
   external processes, no code imported. Circuits with analytic solutions (RC, RLC, linear networks)
@@ -486,7 +571,7 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
   interpolated onto the reference time points, AC compares complex values, `.meas` scalars are
   compared relatively. Tolerances can be overridden per deck with `* verify:` comments. An
   RMS-based variant (`xyce_verify` style) can be added for long waveforms.
-- **Running**: `cargo run -p spx-verify` runs every deck in `verify/decks` with spx and with
+- **Running**: `cargo run -p sansho-verify` runs every deck in `verify/decks` with Sansho and with
   ngspice in Docker (`tools/ngspice`); `--cached` reuses reference results.
 - **Tiers**:
   1. Device level (I-V / C-V curves; Jacobian checked against finite differences)
@@ -505,7 +590,7 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 - **Netlists**: ngspice dialect first (PDKs depend on it), then the main parts of the HSPICE dialect;
   Spectre dialect later. The dialect is chosen via `LoadOpts`; after elaboration everything is the
   common IR.
-- **Implemented ngspice dialect (M4, part 1)** — `spx-netlist/src/preproc.rs`, `expr.rs`:
+- **Implemented ngspice dialect (M4, part 1)** — `sansho-netlist/src/preproc.rs`, `expr.rs`:
   - `.include` / `.inc`, `.lib file section` with `.lib name` … `.endl` sections, resolved
     relative to the including file through a `SourceLoader` (`FsLoader` for files; `NoFiles` for
     text-only input such as MCP `netlist`, where includes are rejected with `E-PARSE-INCLUDE`).
@@ -522,25 +607,102 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
     expression sees global parameters or the current subcircuit instance's overrides and
     defaults. Only the selected body loads includes and elaborates definitions and devices.
     Conditions also work inside `.lib` sections. Paths resolve from the containing file.
-  - `temper` in a parameter expression is the circuit temperature in °C. Typical-corner
-    `agauss(nominal, variation, sigma)` returns nominal when variation or sigma is zero.
-    Active random variation reports a diagnostic. Unknown simulator options produce warnings.
+  - `temper` in a parameter expression is the circuit temperature in °C. Statistical functions use the nominal value in ordinary runs and draw during Monte Carlo analysis. Unknown simulator options produce warnings.
   - `.hdl` loads VA modules independently of model-card order. An `N` instance matches the
     module type case-insensitively and accepts numeric and quoted parameter expressions.
     The simulator scales parallel copies at the terminals when it supplies an implicit
     multiplier. See the binding rules in [Verilog-A §11](verilog-a.md#11-va-4b-production-circuits).
-  - Not yet: `.option scale`, `B` sources, `K` coupling, switches, `.temp` scaling,
-    instance `ic=`.
+  - `Kname L1 L2 k` contributes symmetric branch fluxes with
+    `M = k sqrt(L1 L2)`. The first node of each winding is its dotted terminal.
+    Couplings accumulate in source order. DC sees shorted windings, AC sees
+    the full inductance matrix, and both transient methods integrate the same flux.
+    Each pair requires distinct positive inductors and `|k| ≤ 1`. For networks
+    of three or more windings, the author must supply a physically realizable matrix.
+  - A behavioural voltage source adds a branch equation. A behavioural current
+    source injects equal and opposite terminal currents. The expression parser
+    expands parameters and `.func` in the instance scope and resolves `v(a,b)`
+    and `i(Vsense)` after flattening. Node numbering visits each element's
+    terminals first, then voltage probes in the expanded expression from left
+    to right. A differential probe registers its negative node first. A probe
+    can introduce a node with no device terminal. In the R22b operating point
+    with `.options rshunt=1e9`, that node measured 0 V. A voltage probe in a
+    `.param` declaration produces E-PARSE-EXPR even when the parameter is unused. Directional dual numbers differentiate
+    against each distinct input for Newton and AC. `time` is in seconds and
+    `temper` in °C. Comparisons and `u(x)` have zero small-signal gain.
+    A conditional differentiates its selected arm. The Sansho expression dialect
+    uses natural `ln` and `log`, decimal `log10`, and signed-magnitude `pwr`.
+    An `E/G value={expr}` card expands at its original position into a
+    unity-gain controlled source followed by a B voltage source. The latter
+    drives `<name>_int1` relative to ground and exports `i(b<name>)`. An E/G TABLE uses another node for the
+    evaluated expression and an A PWL driver for the lookup voltage. Flat outer
+    segments clamp the transfer. End and interior knots have a quadratic blend
+    spanning one tenth of the shorter adjacent interval on either side.
+    Expression lookups `pwl(x,x0,y0,...)` interpolate linearly and use the
+    right-hand slope at an interior knot.
+  - S and W devices use the model threshold plus or minus the magnitude of
+    the hysteresis parameter. Between thresholds they retain the accepted
+    state. An optional `on` or `off` sets the initial state there (default off).
+    Each continuous Newton solve holds conductances fixed. An outer loop
+    tests the converged controls and re-solves any changed configuration.
+    Repeated configurations fail the trial. During a transient, Sansho estimates
+    a bracketed crossing by linear interpolation, retries with a shorter step,
+    and restarts integration history at an accepted transition. Rejected steps
+    discard trial switch states. Crossings between two samples on the same
+    side of a threshold require a smaller maximum step to resolve.
+  - `.temp` or `.options temp` sets the operating temperature. Model `tnom`
+    defaults to `.options tnom` (27 °C by default). Instance `temp` overrides
+    the circuit value, otherwise `dtemp` adds a local offset. R/C/L values
+    use `1 + tc1 ΔT + tc2 ΔT²` with explicit nominal component values and
+    optional R/C/L model cards. The diode and BJT adjust saturation current,
+    built-in junction potentials and depletion capacitances. BJT gain scales
+    with XTB. MOS1 adjusts threshold, mobility, surface potential and junctions.
+    Level 54 receives the operating temperature through its geometry binding.
+    A `.dc temp` sweep rebuilds the temperature-dependent bindings at every point.
+    Ordinary `.param` expressions retain their preprocessing-time values.
+  - With `.tran ... uic`, capacitor `ic=` specifies initial voltage from the
+    first terminal to the second. Each capacitor seeds its own charge history.
+    Inductor `ic=` specifies branch current entering the first terminal and
+    contributes to both self and mutual flux. A transient starting from an
+    operating point uses the solved charges and currents.
+  - `.option scale` multiplies explicitly supplied MOS `l`, `w`, `pd` and
+    `ps` by the scale and `ad` and `as` by its square. Geometry defaults
+    are in SI units. BSIM4 also scales the instance distances `sa`, `sb`,
+    `sd` and `xgw`. Finger count and multiplicity are dimensionless.
 - `.save v(node) i(vsrc)` selects exported raw and API vectors across analysis cards. Multiple
-  cards accumulate selections. The independent scale and circuit ordering are preserved, and
-  `.save all` exports all vectors. Both deck measurements and later session measurements have
+  cards accumulate ordinary selections in first-request order after the independent scale,
+  then device-parameter requests in first-request order. Batch raw files omit solver-private
+  states and access nodes by default. Both deck measurements and later session measurements have
   access to the complete traces. Raw files use the ngspice format readable by Xschem.
-- Built-in MOS levels 1 and 54 use the same nonlinear slot assembly. Level 54 specializes
+- Lossless T lines allocate an entering branch current per differential port.
+  Each port equates its incident wave to the opposite outgoing wave after TD.
+  DC uses a unit propagation factor. AC, noise and AC sensitivity include the
+  complex delay in the matrix. Transient history belongs to each analysis job.
+- SPICE2 POLY controls resolve in subcircuit scope. Their monomials use total
+  degree order and differentiate through the behavioral source stamp.
+- NJF and PJF share a normalized channel, two gate junctions and optional
+  internal drain/source resistances. MOS2 and MOS3 share the classical MOS
+  limiting, junction, temperature, Meyer and noise assembly with MOS1.
+- Built-in MOS levels 1, 2, 3 and 54 use the same nonlinear slot assembly. Level 54 specializes
   the silicon model at binding time and differentiates terminal current and charge during
   evaluation. Its optional resistance networks allocate internal unknowns during setup.
   The parser binds selected geometry bins in the lexical scope of each instance.
   The coverage and SKY130 dialect rules are in [the BSIM4 model notes](bsim4.md).
-  Production Verilog-A models are compiled by spx-va.
+  Production Verilog-A models are compiled by sansho-va.
+
+Analog A devices use the same DAE and deterministic stamp assembly as native circuit elements. Signal current inputs introduce a sensing branch. Dynamic transfer functions allocate state unknowns. [Analog code models](xspice.md)
+
+Digital connectivity and fanout are immutable after elaboration. Each analysis owns its resolved nodes, sequential state, DAC ramps and ordered queue. Trial states follow transient acceptance and rollback. Simultaneous drivers resolve as a batch ahead of fanout evaluation. [Event timing](xspice.md#event-timing-and-output)
+
+The [batch control interpreter](control.md) parses scoped command blocks in the netlist layer and runs them against isolated circuit and plot state in the session layer.
+
+TXL and CPL use the distributed RLGC solution in DC and AC, with delayed modal
+propagation in transient. [Line equations and compatibility](distributed-lines.md#txl-and-cpl)
+
+### Not yet supported
+
+T-line IC tuples, pole-zero extraction for distributed delays, JFET level two,
+full MOS2/MOS3 short-channel corrections, interactive Nutmeg and an OSDI
+loader remain outside the current implementation. [Compatibility and numerical differences](compatibility.md)
 
 ---
 
@@ -561,20 +723,21 @@ result). The M3 exit criterion is tested end to end in `crates/spx-mcp/tests/std
 | M | Scope | Exit criteria |
 |---|---|---|
 | M0 | Repository foundation: workspace, licenses, CI, cargo-deny, PROVENANCE | CI green |
-| M1 | Linear circuits: basic parser, elaboration, MNA, OP/DC/AC/TRAN (trapezoidal), faer LU, raw output | RC/RLC match analytic solutions and ngspice |
+| M1 | Linear circuits: basic parser, elaboration, MNA, OP/DC/AC/TRAN (trapezoidal), sparse LU, raw output | RC/RLC match analytic solutions and ngspice |
 | M2 | Nonlinear: diode, BJT (GP), MOS1, Newton + limiting, gmin/source stepping, BDF2, LTE step control, `.meas`, L0 parallelism, JSON output | Small-circuit benchmarks within RMS error ≤ 1 vs ngspice (done: `verify/decks`) |
-| M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP (done: `spx-mcp/tests/stdio.rs`) |
+| M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP (done: `sansho-mcp/tests/stdio.rs`) |
 | M4 | OSDI loader and PDKs: IHP SG13G2 (PSP103, ...), SKY130 (built-in level 54), broader ngspice dialect | PDK testbenches match ngspice (dialect part done: `verify/decks/{subckt_ring,lib_include,nodeset_latch,uic_rlc}`) |
 | M5 | Performance: own KLU-style solver, bypass, parallel LU, GPU batch (G1) | ≥ 1.x× ngspice on C6288 single-core; further gains multi-core |
-| M6 | Extensions: noise, sensitivity, PSS/HB, HSPICE dialect, Python | — |
+| M6 | Extensions: PSS/HB, HSPICE dialect, Python | — |
 
 ---
 
 ## 13. Open questions
 
-1. Final project name (trademark and crates.io checks)
+1. ~~Final project name~~ — Sansho (山椒).
 2. MSRV (proposal: latest stable − 2)
 3. ~~Choice of Rust MCP SDK~~ — resolved in M3: own implementation of the stdio transport (see §7.4)
-4. ~~SKY130 BSIM4 delivery~~ — level 54 is a clean-room built-in in `spx-devices`.
-5. First GPU backend: wgpu (portability) or CUDA (performance)
+4. ~~SKY130 BSIM4 delivery~~ — level 54 is a clean-room built-in in `sansho-devices`.
+5. ~~First GPU backend~~ — CUDA through `cudarc`, loaded at run time. D7 requires double
+   precision, which WGSL does not portably provide.
 6. Spilling the waveform store to disk for large transients (Arrow / Parquet?)

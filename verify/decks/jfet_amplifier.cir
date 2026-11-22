@@ -1,0 +1,13 @@
+Source-degenerated junction FET common-source amplifier
+* Provenance: original R3 verification circuit.
+Vdd rail 0 12
+Vin gate 0 dc -0.65 ac 1 sin(-0.65 0.05 100k)
+Rd rail drain 3k
+Rs source 0 200
+Jamp drain gate source jn
+.model jn njf(level=1 vto=-2 beta=0.9m lambda=0.018 rd=11 rs=8 cgs=9p cgd=3p pb=0.82 is=2e-14 fc=0.45)
+.save v(drain) v(source) i(Vdd)
+.dc Vin -2.2 0 0.05
+.ac dec 5 1k 100meg
+.tran 0.1u 20u
+.end

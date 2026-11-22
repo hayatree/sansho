@@ -1,0 +1,13 @@
+AC coupling and access impedance varying cgsl
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: cgsl 0 100p 300p
+.param probe=0
+Vd d 0 0.95
+Vg g 0 .78 ac 1
+Ve e 0 0
+Vb b 0 .08
+M1 d g 0 e b dev l=.48u w=2.4u ad=3p as=2p
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 cgsl={probe})
+.ac dec 5 10k 100G
+.save i(Vg) i(Vd) i(Ve) i(Vb)
+.end

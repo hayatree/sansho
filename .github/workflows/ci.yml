@@ -1,3 +1,4 @@
+# Provenance: original GitHub checks for Sansho.
 name: CI
 
 # Runs only when changes land on main (and on demand). Day-to-day checks run
@@ -42,6 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fetch --locked
+      - run: python3 tools/third_party_licenses.py --check
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   verify:
@@ -51,9 +55,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: docker build -t spx-ngspice:latest tools/ngspice
-      - run: cargo run --release -p spx-verify -- --json > verify-report.json || (cat verify-report.json; exit 1)
-      - run: cargo run --release -p spx-verify -- verify/bsim4-decks
+      - run: docker build -t sansho-ngspice:latest tools/ngspice
+      - run: cargo run --release -p sansho-verify -- --json > verify-report.json || (cat verify-report.json; exit 1)
+      - run: cargo run --release -p sansho-verify -- verify/bsim3-decks
+      - run: cargo run --release -p sansho-verify -- verify/bsim4-decks
       - uses: actions/upload-artifact@v4
         if: always()
         with:

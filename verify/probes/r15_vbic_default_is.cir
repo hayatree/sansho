@@ -1,0 +1,14 @@
+Default transport scale against explicit controls
+* Provenance: original Sansho R15 circuit.
+* sweep: default_is 1e-17 1e-16 1e-15
+.param probe=1e-17
+Vc c 0 2
+Vb b 0 .70
+Vref cref 0 2
+Qref cref b 0 ref
+.model ref npn(level=4)
+Q1 c b 0 dev
+.model dev npn(level=4 is={probe})
+.dc Vb .35 .82 .01
+.save i(Vc) i(Vref) i(Vb)
+.end

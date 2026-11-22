@@ -1,0 +1,15 @@
+Asymmetric CPL settling to separate DC dividers
+* Provenance: original Sansho R18b circuit.
+* sweep: resistance 12 24 60
+* known-difference: 12 24 60 | v(a) v(b) v(x) v(y)
+.param probe=12
+V1 src 0 pulse(0 1 1n .16n .16n 200n 400n)
+Ra src a 50
+Rb b 0 50
+Rx x 0 75
+Ry y 0 80
+P1 a b 0 x y 0 pair
+.model pair cpl length=1 r=12 0 {probe} g=0 0 0 l=300n 65n 300n c=115p -13p 115p
+.tran .1n 100n
+.save v(a) v(b) v(x) v(y)
+.end

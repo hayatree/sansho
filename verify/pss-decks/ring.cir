@@ -1,0 +1,20 @@
+Three CMOS inverters driving explicit load capacitances
+* Provenance: original level-one MOS ring oscillator and startup state.
+* sansho-verify: pss-analytic ring
+Vdd supply 0 2
+.model nm NMOS(VTO=0.5 KP=100u LAMBDA=0.02)
+.model pm PMOS(VTO=-0.5 KP=50u LAMBDA=0.02)
+Mn1 out b 0 0 nm W=4u L=1u
+Mp1 out b supply supply pm W=8u L=1u
+Mn2 a out 0 0 nm W=4u L=1u
+Mp2 a out supply supply pm W=8u L=1u
+Mn3 b a 0 0 nm W=4u L=1u
+Mp3 b a supply supply pm W=8u L=1u
+C1 out 0 1p ic=2
+C2 a 0 1p ic=0
+C3 b 0 1p ic=0
+.ic v(supply)=2
+.options itl4=60
+.pss 40meg 150n out 256 10 25 1e-7 uic
+.tran 25p 300n 200n 25p uic
+.end

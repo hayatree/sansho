@@ -1,0 +1,10 @@
+Comparator under a triangular drive
+* Provenance: original Sansho verification circuit.
+Vdrive a 0 PWL(0 -1 2u 2 4u -1)
+Acompare a out sch
+Rload0 out 0 10k
+.model sch hyst(in_low=0.25 in_high=0.75 hyst=0.2 input_domain=0.02)
+.tran 20n 4u
+.save v(a) v(out)
+.print tran v(a) v(out)
+.end

@@ -1,0 +1,12 @@
+Turn-off after charging a forward-biased floating film
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: forward_film 0 .001 .02
+.param probe=0
+Vd d 0 0.95
+Vg g 0 pulse(.25 1.15 1u 100n 100n 14u 40u)
+Ve e 0 0
+M1 d g 0 e tj dev l=.48u w=2.4u tnodeout
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 shmod=1 rth0=.036 cth0=.00012 isdif={probe})
+.tran .4u 35u
+.save v(tj) i(Vd) @m1[vbs]
+.end

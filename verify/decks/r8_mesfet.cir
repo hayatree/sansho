@@ -1,0 +1,13 @@
+GaAs channel output curve and a loaded common-source stage
+* Provenance: original Sansho R8 circuit.
+Vdd rail 0 3
+Rload rail d 250
+Vg g 0 dc -1 ac 1 pulse(-1.5 -0.6 2n 0.3n 0.3n 6n 15n)
+Z1 d g 0 ga
+.model ga nmf(level=1 vto=-2 beta=4m b=0.3 alpha=2 lambda=0.02
++ rd=3 rs=2 cgs=3p cgd=0.4p pb=0.9 fc=0.5 kf=1e-18 af=1)
+.dc Vdd 0 4 0.1
+.ac dec 4 1meg 1g
+.tran 0.1n 15n
+.save v(d) i(vdd)
+.end

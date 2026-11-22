@@ -1,0 +1,10 @@
+Level-one MOS channel and flicker noise
+* verify: atol_v=1e-18 atol_i=1e-21
+* Provenance: original R2 verification circuit.
+Vdd rail 0 3
+Vsig g 0 dc 1 ac 1
+Rd rail out 3k
+Mamp out g 0 0 amp w=12u l=2u
+.model amp nmos(level=1 kp=40u vto=0.5 lambda=0.03 tox=15n kf=1e-26 af=1)
+.noise v(out) Vsig dec 6 10 1meg
+.end

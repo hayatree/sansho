@@ -1,0 +1,12 @@
+Temperature sweep of forward series drop and avalanche voltage
+* Provenance: original R8 extension of junction_temperature.cir.
+* sansho-verify: pending-reference
+Ifwd 0 f 0.1
+Irev r 0 1m
+Df f 0 hot
+Dr r 0 hot
+.model hot d(is=2p rs=3 bv=6.2 ibv=1m tcv=0.0007
++ trs1=0.004 trs2=2u tnom=20)
+.dc temp -20 100 10
+.save v(f) v(r)
+.end

@@ -1,0 +1,13 @@
+SOI body junction sweep varying ahli
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: ahli 0 1e-7 1e-5
+.param probe=0
+Vd d 0 .45
+Vg g 0 .15
+Ve e 0 0
+Vb b 0 .1
+M1 d g 0 e b dev l=.48u w=2.4u
+.model dev nmos(level=10 version=4.4 tox=4.6n tsi=75n tbox=105n nch=1.1e17 k1=.42 vth0=.48 u0=.047 isbjt=.03 ahli={probe})
+.dc Vb -.45 .57 .03
+.save i(Vb) i(Vd)
+.end

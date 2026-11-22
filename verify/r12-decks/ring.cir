@@ -1,0 +1,17 @@
+Enable-started three-inversion ring
+* Provenance: original Sansho circuit.
+Ven en 0 PULSE(0 1 5n 1n 1n 65n 100n)
+Astart [en] [go] adc
+Afirst [go last] first nand2
+Asecond first middle inv
+Athird middle last inv
+Aout [last] [out] dac
+Rout out 0 10k
+.model adc adc_bridge(in_low=0.5 in_high=0.5 rise_delay=0 fall_delay=0)
+.model nand2 d_nand(rise_delay=2n fall_delay=2n)
+.model inv d_inverter(rise_delay=2n fall_delay=2n)
+.model dac dac_bridge(out_low=0 out_high=1 t_rise=0.2n t_fall=0.2n)
+.tran 0.5n 82n
+.save v(out)
+.print tran v(out)
+.end

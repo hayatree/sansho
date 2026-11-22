@@ -1,0 +1,11 @@
+Recombination of excess high-current charge
+* Provenance: original Sansho R16 circuit.
+* sweep: tbhrec 0 .5n 2n
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 tbhrec={probe} thcs=40p fthc=.4 vlim=.15)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

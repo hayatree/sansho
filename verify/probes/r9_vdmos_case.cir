@@ -1,0 +1,10 @@
+Case voltage step with zero electrical dissipation
+* Provenance: original Sansho R9b black-box experiment.
+* sweep: 0 10 27
+.param probe=0
+Vcase tc 0 pulse({probe} {probe+5} 50u 1u 1u 1m 3m)
+M1 0 0 0 tj tc p thermal
+.model p vdmos(vto=2 kp=1 rthjc=5 cthj=100u)
+.tran 2u 2m
+.save v(tj) v(tc) i(Vcase)
+.end

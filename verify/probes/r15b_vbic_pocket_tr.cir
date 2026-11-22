@@ -1,0 +1,12 @@
+Pocket diffusion capacitance under forward parasitic drive
+* Provenance: original Sansho R15b circuit.
+* sweep: tr 0 .2n 2n
+.param probe=0
+Vc c 0 .08
+Vs s 0 -.3
+Vb b 0 .7 ac 1
+Q1 c b 0 s dev
+.model dev npn(level=4 is=1e-25 ibci=0 ibei=0 isp=1e-14 wsp=1 ikp=20u rbp=50 tr={probe})
+.ac dec 6 1meg 10G
+.save i(Vb) i(Vs) i(Vc)
+.end

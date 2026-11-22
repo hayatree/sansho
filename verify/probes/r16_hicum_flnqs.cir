@@ -1,0 +1,11 @@
+Current and charge delay after a fast drive edge
+* Provenance: original Sansho R16 circuit.
+* sweep: flnqs 0 1
+.param probe=0
+Vc c 0 1
+Vb b 0 pulse(.66 .78 1n 20p 20p 3n 10n)
+Q1 c b 0 0 dev
+.model dev npn(level=8 flnqs={probe} t0=50p)
+.tran 20p 8n
+.save i(Vc) i(Vb)
+.end

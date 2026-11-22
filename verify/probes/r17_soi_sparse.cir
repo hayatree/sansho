@@ -1,0 +1,12 @@
+Default card transfer at three lengths
+* Provenance: original Sansho R17 circuit with synthetic parameters.
+* sweep: sparse 100n 250n 1u
+.param probe=100n
+Vd d 0 0.95
+Vg g 0 .8
+Ve e 0 0
+M1 d g 0 e dev l={probe} w=1u
+.model dev nmos(level=10)
+.dc Vg 0 1.4 .05
+.save i(Vd) @m1[vbs] @m1[vth]
+.end

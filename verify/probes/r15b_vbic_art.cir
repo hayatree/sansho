@@ -1,0 +1,15 @@
+Reverse reach-through at and beside the knee with positive AJC
+* Provenance: original Sansho R15b circuit.
+* sweep: art .01 .1 .4
+.param probe=.01
+Vb b 0 0
+V1 c1 0 .4 ac 1
+V2 c2 0 .5 ac 1
+V3 c3 0 .6 ac 1
+Q1 c1 b 0 dev
+Q2 c2 b 0 dev
+Q3 c3 b 0 dev
+.model dev npn(level=4 cjc=8p pc=.75 mc=.4 ajc=.05 vrt=.5 art={probe})
+.ac dec 2 100k 1meg
+.save i(V1) i(V2) i(V3)
+.end

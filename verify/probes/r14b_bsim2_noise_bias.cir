@@ -1,0 +1,12 @@
+BSIM2 noise under changing gate drive
+* Provenance: original Sansho R14b circuit.
+* sweep: vgs .4 1.4 2.4
+.param probe=1.4
+Vd d 0 1.5
+Vg g 0 {probe} ac 1
+Vb b 0 -.25
+M1 d g 0 b dev w=4u l=1.2u
+.model dev nmos(level=5 phi=.7 vfb=-.52 k1=.55 tox=.025 mu0=470 ua0=.12 ub0=.02 u10=.1 eta0=.012 vdd=3 temp=27 n0=1.45 xpart=0 k2=.025 af=1.1 kf=1e-24)
+Hsense out 0 Vd 1k
+.noise v(out) Vg dec 4 1 100meg
+.end

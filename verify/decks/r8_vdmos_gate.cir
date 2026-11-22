@@ -1,0 +1,13 @@
+Resistive gate drive and Miller charge during turn-on
+* Provenance: original Sansho R8 circuit.
+Vdd rail 0 12
+Rload rail d 8
+Vdrive in 0 dc 0 ac 1 pulse(0 6 4n 1n 1n 150n 300n)
+Rdrive in g 80
+M1 d g 0 sw
+.model sw vdmos(vto=2.1 kp=2 rd=0.03 rs=0.02 rg=2 cgs=200p
++ cgdmin=12p cgdmax=160p a=0.7)
+.ac dec 5 10k 100meg
+.tran 0.5n 120n
+.save v(d) v(g) i(vdrive)
+.end

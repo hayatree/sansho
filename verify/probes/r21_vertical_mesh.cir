@@ -1,0 +1,28 @@
+R21 surface-normal mesh convergence
+* Provenance: original Sansho fixture, ngspice 44 manual chapter 26.
+* sweep: nodes 5 11 23
+.param probe=5
+Vgate g 0 dc -0.45 ac 1
+Dcap g 0 capacitor
+.model capacitor numd level=2
++ options capacitor defw=10u
++ x.mesh loc=0 n=1
++ x.mesh loc=2 n=3
++ y.mesh loc=-0.02 n=1
++ y.mesh loc=0 n=3
++ y.mesh loc=0.08 n={probe}
++ y.mesh width=0.72 h.start=0.01 h.max=0.05 ratio=1.35
++ material num=1 silicon
++ material num=2 oxide
++ domain num=1 mat=1 y.l=0
++ domain num=2 mat=2 y.h=0
++ electrode num=1 iy.h=1
++ electrode num=2 y.l=0.8
++ contact num=1 workf=4.8
++ doping uniform p.type conc=1e16 domains=1
++ method ac.analysis=direct
++ end
+.options itl1=150 itl2=100
+.ac lin 1 100k 100k
+.save i(vgate)
+.end

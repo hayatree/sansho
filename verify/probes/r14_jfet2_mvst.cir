@@ -1,0 +1,11 @@
+JFET2 MVST bias dependence
+* Provenance: original Sansho R14 circuit.
+* sweep: mvst -.3 0 .3
+.param probe=-.3
+Vd d 0 1.8
+Vg g 0 -.6 ac 1
+J1 d g 0 dev
+.model dev njf(level=2 beta=0.7m vto=-1.6 cgs=4p cgd=1p vst=.06 mvst={probe})
+.dc Vg -2.3 .0 .05 Vd .12 2.12 1
+.save i(Vd) i(Vg)
+.end

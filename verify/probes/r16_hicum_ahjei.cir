@@ -1,0 +1,11 @@
+Bias dependence of the heterojunction weight
+* Provenance: original Sansho R16 circuit.
+* sweep: ahjei 0 1 4
+.param probe=0
+Vc c 0 1
+Vb b 0 .72
+Q1 c b 0 0 dev
+.model dev npn(level=8 cjei0=10f ahjei={probe} dvgbe=.72 rhjei=2)
+.dc Vb .4 .88 .02
+.save i(Vc) i(Vb)
+.end

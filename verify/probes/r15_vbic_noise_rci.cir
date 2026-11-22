@@ -1,0 +1,13 @@
+Noise through a modulated collector resistance
+* Provenance: original Sansho R15 circuit.
+* sweep: noise_rci 2 15 60
+.param probe=2
+Vc c 0 .12 ac 1
+Vb b 0 .69
+Vs s 0 -.2
+Hread out 0 Vc 1k
+Rload out 0 1k
+Q1 c b 0 s dev
+.model dev npn(level=4 ibci=5e-16 gamm=1e-10 vo=.5 rci={probe})
+.noise v(out) Vc dec 2 1 1meg
+.end

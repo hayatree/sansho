@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare every IHP result vector from two release CLI binaries.
 
-Provenance: original regression driver for spx's round-trip JSON representation.
+Provenance: original regression driver for Sansho's round-trip JSON representation.
 """
 import argparse
 import hashlib
@@ -42,22 +42,22 @@ def results(binary, path, jobs, env):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("baseline", type=Path)
-    parser.add_argument("candidate", nargs="?", type=Path, default=ROOT / "target/release/spx")
+    parser.add_argument("candidate", nargs="?", type=Path, default=ROOT / "target/release/sansho")
     args = parser.parse_args()
     decks = sorted((ROOT / "verify/va-decks").glob("*.cir")) + [ROOT / "benches/psp_ring21.cir"]
     for deck in decks:
-        with NamedTemporaryFile(mode="w", suffix=".spx-input", dir=deck.parent) as full, TemporaryDirectory() as cache:
+        with NamedTemporaryFile(mode="w", suffix=".sansho-input", dir=deck.parent) as full, TemporaryDirectory() as cache:
             # Keep relative include resolution and strip the decks' save projection.
             full.writelines(line for line in deck.read_text().splitlines(keepends=True)
                             if line.strip().lower().split()[:1] != [".save"])
             full.flush()
-            env = dict(os.environ, SPX_CACHE_DIR=cache, SPX_CACHE="1", SPX_VA_JIT="1")
-            before = results(args.baseline, full.name, ["-j1"], dict(env, SPX_CACHE="0"))
+            env = dict(os.environ, SANSHO_CACHE_DIR=cache, SANSHO_CACHE="1", SANSHO_VA_JIT="1")
+            before = results(args.baseline, full.name, ["-j1"], dict(env, SANSHO_CACHE="0"))
             for mode, jobs in (("cold", ["-j1"]), ("warm", []), ("warm", ["-j1"])):
                 if before != results(args.candidate, full.name, jobs, env):
                     raise SystemExit(f"{deck.name} differs ({mode}, {jobs or 'default'})")
             with TemporaryDirectory() as parallel:
-                if results(args.candidate, full.name, [], dict(env, SPX_CACHE_DIR=parallel)) != before:
+                if results(args.candidate, full.name, [], dict(env, SANSHO_CACHE_DIR=parallel)) != before:
                     raise SystemExit(f"{deck.name} differs (cold, default)")
                 def artifacts(directory):
                     return {p.name: hashlib.sha256(p.read_bytes()).digest()

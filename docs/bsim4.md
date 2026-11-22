@@ -2,7 +2,9 @@
 
 Provenance: Original implementation of the UC Berkeley BSIM Group's *BSIM4 4.8.2 Technical Manual*, chapters 1–15 and Appendix A, with the published 4.8.2 update notes. The reference waveforms come from the maintainer's ngspice 44.2 runs.
 
-Use a four-terminal MOS instance in drain, gate, source, bulk order and a model of type `nmos` or `pmos` with `level=54`. The channel sign convention changes with the type. DC, AC and transient analyses share a quasi-static terminal-current and charge model. The implementation is in `crates/spx-devices/src/bsim4/`. It uses the existing fixed-size forward-mode dual numbers and the engine's ordinary device-group interface.
+BSIM4 cards are extracted against the Berkeley reference implementation. For departures from the manual, Sansho follows behavior established solely by black-box observation of ngspice 44.2. That release embeds the Berkeley model and may include ngspice-specific changes. [Compact-model policy](compatibility.md#compact-model-compatibility)
+
+Use a four-terminal MOS instance in drain, gate, source, bulk order and a model of type `nmos` or `pmos` with `level=54`. The channel sign convention changes with the type. DC, AC and transient analyses share a quasi-static terminal-current and charge model. The implementation is in `crates/sansho-devices/src/bsim4/`. It uses the existing fixed-size forward-mode dual numbers and the engine's ordinary device-group interface.
 
 ## Terminal evaluation and bypass
 
@@ -28,12 +30,18 @@ Currents and charges receive the first-order correction at the current iterate.
 The combined stamp additionally requires unchanged `gmin`, completed limiting
 and ordinary bias initialization. Cross-instance sharing requires identical
 model bindings and voltage bits. `.options bypass=0` selects exact-bias reuse.
-The converged charge sample always uses the actual voltages. The M5-3 benchmarks
+The converged charge sample applies the same rule: when all four terminals lie
+within `vntol` of the instance's last linearization, the terminal charges receive
+the first-order correction and the twelve LTE component charges are reused.
+Otherwise, and always with `bypass=0`, it evaluates the charges at the actual
+voltages. In the 51-stage ring benchmark 98% of the samples take the expansion.
+Across the ngspice comparison suites, only three BSIM4 transient waveforms change,
+by at most 1.7e-10 of their range. The M5-3 benchmarks
 measure the accuracy and work counts for both bypass settings. [Performance measurements](performance.md#m5-3-single-worker-bsim4)
 
 ## Equation coverage
 
-| Manual section | Evaluation in spx |
+| Manual section | Evaluation in Sansho |
 |---|---|
 | 1, dielectric and geometry | Electrical, physical and extraction oxide thicknesses, polysilicon depletion, per-finger effective IV, CV and junction dimensions. Silicon substrate and gate. |
 | 2, threshold | Surface potential and depletion depth, derived or supplied body coefficients, lateral pocket doping, short- and narrow-channel effects, body bias, DIBL and drain-induced threshold shifts. |
@@ -46,11 +54,11 @@ measure the accuracy and work counts for both bypass settings. [Performance meas
 | 8, alternative materials | Selecting a nonzero MTRLMOD produces E-UNSUPPORTED during binding. |
 | 9.1, non-quasi-static response | Selecting transient or AC NQS produces E-UNSUPPORTED during binding. |
 | 9.2–9.3, RF | Gate resistance modes 0–3, the middle-gate overlap connection and a controlled channel-charging conductance. Body modes 0–2 include drain-side and source-side junction nodes. |
-| 10, noise | The evaluated card retains the noise selectors and Appendix A.10 coefficients. Noise spectra require a future noise analysis. |
+| 10, noise | Channel thermal and flicker noise selectors 0 and 1, resistive network thermal noise and gate leakage shot noise feed adjoint noise analysis. The correlated thermal selector 2 is unsupported. [Methods and outputs](analyses.md#noise) |
 | 11, junctions | Bottom, isolation-sidewall and gate-edge leakage and charge, dioMod 0–2, avalanche and limiting currents, trap-assisted reverse current. |
 | 12, layout | Supplied or derived drain/source area, perimeter and squares, finger count, gate contacts and electrode resistance. Shared/contact diffusion resistances use a rectangular approximation. |
 | 13, temperature | Threshold, mobility, velocity, resistance, diode current and junction capacitance specialization for tempMod 0–3. Circuit TEMP and model TNOM are converted from °C to kelvin. |
-| 14–15, stress and well proximity | Per-finger inverse isolation distances, reference-normalized mobility and velocity, threshold, K2 and ETA0 shifts. WPE uses supplied SCA, SCB and SCC with WPEMOD enabled. |
+| 14–15, stress and well proximity | Per-finger inverse isolation distances, reference-normalized saturation velocity, threshold, K2 and ETA0 shifts. WPE uses supplied SCA, SCB and SCC with WPEMOD enabled. |
 | Appendix A | The public `bsim4::catalog::PARAMETERS` table gives the card name, nominal value and unit, binning flag, model/instance scope and printed manual page. A derived default refers to its input parameters or equation. The table also lists dialect aliases. Material-model selectors, SC-only WPE and NQS are outside the evaluated scope. |
 
 The numerical comparison suite exercises fewer combinations than this table. In particular, the high mobility selectors, velocity overshoot, trap-assisted leakage, all RF reductions and cvchargeMod 1 lack dedicated ngspice reference sweeps. The unit tests compare analytic AD derivatives with numerical perturbations independently of the reference decks.
@@ -61,7 +69,7 @@ The numerical comparison suite exercises fewer combinations than this table. In 
 - Model expressions see the netlist values of L and W before geometric scaling. The final `.option scale` multiplies supplied MOS lengths, widths, perimeters and isolation distances. Area scales quadratically. Model dimensions such as TOXE and the bin bounds are already in physical units. The effective dimensions used with L, W and P bin coefficients include XL/XW and the IV geometry reductions. BINUNIT 1 uses micrometres, BINUNIT 2 uses metres.
 - Parameter definitions can refer forward or form an unused cycle. A referenced unresolved name or cycle produces a diagnostic. Unselected model expressions can contain unresolved parameters. Structural errors such as malformed card headers or duplicate model names can still be reported while reading a library.
 - Identical arguments to the same model definition can share evaluated values. A single named model with different live argument values can produce distinct bound cards. The flat netlist writer exports evaluated live cards. Unused symbolic templates can retain only their literal fields. The parser retains the version field, including three-part strings such as `4.8.2`. The version identifies the card. It does not select a historical simulator implementation.
-- `gauss(nom,spread,sigma)`, `agauss(nom,spread,sigma)`, `unif(nom,spread)` and `aunif(nom,spread)` return their nominal value when the visible SKY130 statistical switches are zero. Zero spread is also deterministic. Active random sampling is unsupported. This rule covers nominal TT simulation.
+- Statistical functions return the nominal value during ordinary TT runs. Monte Carlo batches evaluate selected model expressions per primitive, including independent AGAUSS calls in the Volare NMOS mismatch model. The PDK's `mc_mm_switch` multiplies its mismatch terms. See [Monte Carlo analysis](monte-carlo.md).
 - An undeclared M or MULT on an X line replicates its enclosed MOS, BJT, diode, R, L and C elements. Factors accumulate through nested calls. A multiplier declared by the subcircuit is an ordinary parameter available to its own formulas. This distinction matters on the SKY130 wrappers. A MOS primitive scales its current and charge by its own multiplier. Parallel copies multiply C and divide R and L.
 
 ## Numerical conventions and limitations
@@ -82,23 +90,23 @@ The numerical comparison suite exercises fewer combinations than this table. In 
 
 ### Mobility stress
 
-Equations 14.3–6 and §14.1.3 specify the ratio `(1 + rho) / (1 + rho_ref)`. Both rhos use KU0 divided by the same size and temperature factor. Only the actual inverse isolation distances are averaged over fingers. For `b4_n_lod_ku0` the inverse-distance sum is 2.948505 per µm, compared with 1.886792 per µm for the reference geometry. Its U0 multiplier is 1.039488. For `b4_n_lod_nf` the four-finger average gives 0.958365 as the U0 multiplier. The unit tests exercise the size factor, reference normalization, nonzero TKU0 and distinct mobility and velocity ratios.
+Equation 14.5 predicts a U0 multiplier of 1.039488 in the one-finger KU0 deck and 0.958365 in the four-finger deck. All 121 points of the cached KU0-only sweep equal the zero-KU0 control. In the independent mobility-control deck at Vg = 1.2 V, the reference-spacing and close-spacing devices both draw 77.4561 µA. A device with U0 explicitly multiplied by 1.039488 draws 80.0302 µA. The circuit can resolve a mobility shift of the predicted size.
 
-All saved values in the 121-point KU0-only reference are identical to the zero-KU0/KVSAT control reference. With KU0 zero, equation 14.6 also gives unit velocity scaling in the control. As a separate experiment, suppressing only the U0 multiplier in spx produced scores of 0.220 for KU0, 0.237 for NF and 0.017 for the combined bin/layout deck. Velocity scaling, threshold shifts and the spacing average were active in that experiment. The maintainer selected equation 14.5 for spx. In a separate ngspice 44.2 black-box probe, Id was identical with KU0 omitted and with KU0 enabled at SA = SB = 0.3 µm and SAREF = SBREF = 1 µm. The verifier reports the KU0, NF and combined bin/layout decks as `KNOWN` with their measured scores. The cached traces establish the missing measurable mobility response, but do not identify its cause inside the reference run.
+Sansho therefore leaves U0 at its pre-LOD value. KU0 still enters the equation 14.6 saturation-velocity ratio, including size, temperature, reference spacing and the average over fingers. The KVTH0, STK2 and STETA0 shifts and separate well-proximity model apply as before. Zeroing KU0 altogether in Sansho gives maximum current errors of 2.535 µA for the four-finger deck and 0.998 µA for the binned deck. Suppressing just the LOD mobility multiplier reduces those to 0.729 and 0.065 µA, respectively. The three previously marked decks pass at their original tolerances.
 
 ### Body-network transients
 
 Figure 9.3 and §11.2 place each junction between its physical diffusion and the corresponding db or sb body node. Intrinsic bulk charge belongs to bNodePrime. The generic ramp test exposed an integration restart error on those nodes. At 300.1 ps both simulators reached −35.03 µV on db. At 300.3 ps B4-1's second backward-Euler step gave 203.55 µV against 330.17 µV in the reference. Returning to trapezoidal integration after the first right-sided derivative resolves that discrepancy. Holding the initial interval until a second startup sample is available also resolves the initial ramp errors.
 
-The SKY130 inverter has a second effect. Its second-stage wrappers pass zero perimeter, and the output briefly swings outside the supply rails. Evaluating spx's discrete KCL on the saved voltages at 175 ps gave a 1.74 µA drain-body discrepancy on the second NMOS, with the opposite discrepancy at the output. The reverse-biased junction at 177 ps agreed to within 0.1 nA. Retaining the signed perimeter in the forward capacitance reduced the inverter score from 4.112 after the restart fixes to 0.190.
+The SKY130 inverter has a second effect. Its second-stage wrappers pass zero perimeter, and the output briefly swings outside the supply rails. Evaluating Sansho's discrete KCL on the saved voltages at 175 ps gave a 1.74 µA drain-body discrepancy on the second NMOS, with the opposite discrepancy at the output. The reverse-biased junction at 177 ps agreed to within 0.1 nA. Retaining the signed perimeter in the forward capacitance reduced the inverter score from 4.112 after the restart fixes to 0.190.
 
-The earlier UIC version of the five-stage SKY130 ring begins with a 1.8 V supply imposed on a zero-initialized supply node under UIC. The first accepted samples at 20 fs agree within tolerance across all signals. At the next reference sample, 28.0002 fs, the fourth NMOS internal body is at 152.936 mV. The spx waveform interpolates to 125.740 mV there. On that body row the saved 20–28 fs interval has a 7.5 µA KCL residual using backward Euler and a 2.06 mA residual using trapezoidal integration. At the following sample, 44 fs, the residuals are 1.48 mA and 3.49 µA respectively. These measurements support a backward-Euler step followed by trapezoidal integration. In a separate refinement experiment we kept the same first accepted state and limited subsequent intervals through 200 fs to 0.25 fs and then 0.125 fs. The values were 124.205 and 124.185 mV. Refining this part of the spx trajectory does not reproduce the coarse reference sample. From 10 ps onward the worst score over all signals, using the full-deck normalization, is 0.367. The source of the reference's initial post-impulse step size remains unresolved.
+The earlier UIC version of the five-stage SKY130 ring begins with a 1.8 V supply imposed on a zero-initialized supply node under UIC. The first accepted samples at 20 fs agree within tolerance across all signals. At the next reference sample, 28.0002 fs, the fourth NMOS internal body is at 152.936 mV. The Sansho waveform interpolates to 125.740 mV there. On that body row the saved 20–28 fs interval has a 7.5 µA KCL residual using backward Euler and a 2.06 mA residual using trapezoidal integration. At the following sample, 44 fs, the residuals are 1.48 mA and 3.49 µA respectively. These measurements support a backward-Euler step followed by trapezoidal integration. In a separate refinement experiment we kept the same first accepted state and limited subsequent intervals through 200 fs to 0.25 fs and then 0.125 fs. The values were 124.205 and 124.185 mV. Refining this part of the Sansho trajectory does not reproduce the coarse reference sample. From 10 ps onward the worst score over all signals, using the full-deck normalization, is 0.367. The source of the reference's initial post-impulse step size remains unresolved.
 
 #### Five-stage ring started at the .ic operating point
 
-The current `sky_ring5` starts at a constrained operating point. Its 1,508 reference samples and the spx samples reach a 2 ps step after startup. The worst main node is D (score 0.277). Its 25 crossings of 0.9 V drift from a 1.4 fs spx lag at the first crossing to 80.6 fs at the last. The fourth NMOS body error grows from at most 0.97 µV over the first 150 samples to 10.57 µV over the last 150. At 2.827–2.837 ns the error alternates sign at every sample. This is characteristic of trapezoidal ringing on a fast body RC network.
+The current `sky_ring5` starts at a constrained operating point. Its 1,508 reference samples and the Sansho samples reach a 2 ps step after startup. The worst main node is D (score 0.277). Its 25 crossings of 0.9 V drift from a 1.4 fs Sansho lag at the first crossing to 80.6 fs at the last. The fourth NMOS body error grows from at most 0.97 µV over the first 150 samples to 10.57 µV over the last 150. At 2.827–2.837 ns the error alternates sign at every sample. This is characteristic of trapezoidal ringing on a fast body RC network.
 
-To isolate the body equations, we replayed each saved trajectory on its own time grid. We held A–E at their saved voltages at each Newton solve, initialized the full state from sample zero, took two backward-Euler steps, then used trapezoidal integration with the converged spx charges. Replaying spx reproduced all 15 NMOS body traces within 0.01 nV. Replaying the reference gave these peak absolute errors for the fourth NMOS.
+To isolate the body equations, we replayed each saved trajectory on its own time grid. We held A–E at their saved voltages at each Newton solve, initialized the full state from sample zero, took two backward-Euler steps, then used trapezoidal integration with the converged Sansho charges. Replaying Sansho reproduced all 15 NMOS body traces within 0.01 nV. Replaying the reference gave these peak absolute errors for the fourth NMOS.
 
 | Fourth NMOS node | Free ring (µV) | Reference-driven replay (µV) |
 |---|---:|---:|
@@ -108,27 +116,27 @@ To isolate the body equations, we replayed each saved trajectory on its own time
 
 Across all five stages the largest reference-driven error was 1.32 µV, within the ordinary tolerance for every body trace. On the reference trajectory we also evaluated the fourth NMOS discrete KCL directly, using `f[n] + f[n−1] + 2(q[n]−q[n−1])/h` on trapezoidal steps. Peak residuals at body, sbody and dbody were 57.6, 0.0015 and 33.3 nA against peak charge terms of 18.64, 0.0484 and 35.98 µA. This checks the individual junction connections as well as the intrinsic body charge.
 
-Halving the spx step from 2 to 1, 0.5 and 0.25 ps moved the last D crossing from +0.081 ps relative to the fixed reference to −1.079, −1.369 and −1.441 ps. Successive shifts decreased roughly fourfold. Refining spx alone therefore moves it away from this coarse reference. The terminal-driven replay and the passing NFET/PFET charge and generic RBODY controls localize the out-of-tolerance error to the free-running switching trajectory and its sampled body response. A small fixed-trajectory discrepancy remains. These measurements do not establish an error in the body conductance or junction charge partition. The free-running deck keeps its ordinary score and failure status.
+Halving the Sansho step from 2 to 1, 0.5 and 0.25 ps moved the last D crossing from +0.081 ps relative to the fixed reference to −1.079, −1.369 and −1.441 ps. Successive shifts decreased roughly fourfold. Refining Sansho alone therefore moves it away from this coarse reference. The terminal-driven replay and the passing NFET/PFET charge and generic RBODY controls localize the out-of-tolerance error to the free-running switching trajectory and its sampled body response. A small fixed-trajectory discrepancy remains. These measurements do not establish an error in the body conductance or junction charge partition. The verifier reports this free-running deck as a known difference at the original tolerance.
 
 ### Cached deck results
 
-Worst signal and maximum absolute difference use the ordinary verification harness. A score at or below 1 passes. All 30 cached decks ran. Three KU0 comparisons report a known difference, and one free-running transient exceeds tolerance.
+Worst signal and maximum absolute difference use the ordinary verification harness. A score at or below 1 passes. All 30 cached decks ran. The 22 generic BSIM4 decks pass. One free-running SKY130 transient exceeds tolerance.
 
 | Deck | Worst signal | Score | Maximum absolute difference |
 |---|---|---:|---:|
 | `b4_cs_ac` | `v(d)` | 0.038 | 1.672e-4 V |
 | `b4_inverter_tran` | `v(out)` | 0.015 | 1.930e-4 V |
-| `b4_n_bin_layout` | `i(vd)` | **8.235** | 3.080e-5 A |
+| `b4_n_bin_layout` | `i(vd)` | 0.017 | 6.501e-8 A |
 | `b4_n_capmod` | `i(vg)` | 0.036 | 2.744e-7 A |
 | `b4_n_diode` | `i(vb)` | 0.487 | 1.022e-5 A |
 | `b4_n_idvd` | `i(vd)` | 0.375 | 4.186e-7 A |
 | `b4_n_idvg_lin` | `i(vd)` | 0.250 | 2.885e-8 A |
 | `b4_n_idvg_sat` | `i(vd)` | 0.216 | 2.407e-7 A |
 | `b4_n_igate` | `i(vd)` | 0.031 | 4.984e-8 A |
-| `b4_n_lod_ku0` | `i(vd)` | **12.886** | 1.895e-5 A |
+| `b4_n_lod_ku0` | `i(vd)` | 0.220 | 3.233e-7 A |
 | `b4_n_lod_kvsat` | `i(vd)` | 0.220 | 3.233e-7 A |
 | `b4_n_lod_kvth0` | `i(vd)` | 0.777 | 2.336e-6 A |
-| `b4_n_lod_nf` | `i(vd)` | **14.234** | 4.383e-5 A |
+| `b4_n_lod_nf` | `i(vd)` | 0.237 | 7.287e-7 A |
 | `b4_n_mobmod` | `i(vd)` | 0.135 | 3.309e-8 A |
 | `b4_n_nf_geo` | `i(vd)` | 0.220 | 6.427e-7 A |
 | `b4_n_rbody_tran` | `v(m1#dbody)` | 0.012 | 6.013e-8 V |
@@ -147,8 +155,18 @@ Worst signal and maximum absolute difference use the ordinary verification harne
 | `sky_pfet_iv` | `i(vs)` | 0.173 | 2.918e-7 A |
 | `sky_ring5` | `v(m.x4.xn.msky130_fd_pr__nfet_01v8#body)` | **2.079** | 1.057e-5 V |
 
-The original 14 decks and ten JIT Verilog-A decks passed and all 24 spx raw files matched their pre-change SHA-256 digests. The ten Verilog-A decks also passed in the interpreter. Two additional inputs in `verify/diag-decks` have cached maintainer references. The mobility control measures separate drain currents for two spacings on one model card alongside a device with the hand-calculated mobility. The close-spacing and explicit-mobility currents agree at every spx sweep point. The tight-tolerance ring keeps the 2 ps maximum timestep and the initial UIC jump.
+The original 14 decks and ten JIT Verilog-A decks passed and all 24 Sansho raw files matched their pre-change SHA-256 digests. The ten Verilog-A decks also passed in the interpreter. Two additional inputs in `verify/diag-decks` have cached maintainer references. The mobility control measures separate drain currents for two spacings on one model card alongside a device with the hand-calculated mobility. The close-spacing and reference-spacing currents agree throughout the sweep. The tight-tolerance ring keeps the 2 ps maximum timestep and the initial UIC jump.
 
 In B4-1, median check / run times in seconds for three warm release CLI invocations were 0.154 / 0.167 for `sky_cs_ac`, 0.188 / 0.217 for `sky_inverter_tran`, 0.163 / 0.154 for `sky_nfet_idvd`, 0.164 / 0.158 for `sky_nfet_iv`, 0.158 / 0.209 for `sky_pfet_iv` and 0.169 / 0.220 for `sky_ring5`.
 
 The B4-1 release microbenchmark measured 431.3 ns per intrinsic current, charge and both four-terminal Jacobians with default selectors. External network stamps and the matrix solve are excluded. The maintainer reports approximately 16 s for ngspice to load the SKY130 library.
+
+## Noise defaults
+
+The unified flicker model defaults NOIC to 8.75e9. The cached explicit-8.75e9 and omitted-NOIC spectra agree at all 31 frequencies. On the omitted-NOIC deck, the 44.2 input spectrum is 4.82368 µV/√Hz at 10 Hz. In Sansho the printed Appendix A value of 8.75 gives 4.51146 µV/√Hz and an explicit 8.75e9 gives 4.82238 µV/√Hz. The omitted-value deck now passes with a worst score of 0.225. An explicit NOIC on a model card takes precedence, including zero. [Noise decks](../verify/README.md#r2-noise-audit)
+
+## Default-card threshold and drain current
+
+The reported NMOS Vth is the channel threshold at the oriented intrinsic drain and body biases. It includes the body, pocket, short-channel, narrow-width, temperature and DIBL terms. Vgsteff is calculated downstream from the gate voltage and this threshold. The R7 sweep holds VDS at 1.2 V and VBS at zero, so the reported threshold stays constant as VGS changes.
+
+The model coefficients for doping-derived GAMMA1, GAMMA2 and VBX change the default K1 from 0.382038 to 0.381535 V½. With the same channel and reporting equations, Vth moves from 0.211842 to 0.211349 V against 0.211334 V in 44.2. At VGS = 0.8 V the drain current moves from 0.822157 to 0.823511 mA against 0.823471 mA. At 1.4 V it reaches 2.414651 mA against 2.414073 mA. The shared threshold correction accounts for most of the original current difference. [Doping equations](bsim3.md#derived-body-coefficients-on-the-r7-default-cards)

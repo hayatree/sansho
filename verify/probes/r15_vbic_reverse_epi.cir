@@ -1,0 +1,11 @@
+Epitaxial high-field law under reverse current
+* Provenance: original Sansho R15 circuit.
+* sweep: reverse_epi .2 .8 3
+.param probe=.2
+Vc c 0 -.03
+Vb b 0 .76
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibci=1e-16 rci=15 rcx=2 gamm=1e-9 hrcf=.8 vo={probe})
+.dc Vc -.15 .3 .005
+.save i(Vc) i(Vb)
+.end

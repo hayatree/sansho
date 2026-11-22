@@ -1,0 +1,11 @@
+Reverse transport temperature exponent
+* Provenance: original Sansho R15 circuit.
+* sweep: xisr 0 2 5
+.param probe=0
+Vc c 0 -.05
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 isrr=2 dear=.05 xisr={probe})
+.dc temp -20 100 10
+.save i(Vc) i(Vb)
+.end

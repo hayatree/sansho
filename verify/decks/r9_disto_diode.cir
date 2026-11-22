@@ -1,0 +1,8 @@
+Biased diode with series resistance and nonlinear junction storage
+* Provenance: original Sansho R9 circuit.
+Vin in 0 dc 0.63 distof1 5m
+Rfeed in out 120
+D1 out 0 junction
+.model junction d(is=1f n=1.05 rs=2 cjo=15p vj=0.8 m=0.4 tt=1n)
+.disto dec 3 100k 10meg
+.end

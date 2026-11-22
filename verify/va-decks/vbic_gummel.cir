@@ -1,7 +1,7 @@
 * HBT collector and base Gummel currents
 * Requires va-models/ihp/vbic_1p3/vbic_1p3.va with adjacent includes,
 * and ngspice-models/cornerHBT.lib with sg13g2_hbt_mod.lib.
-* ngspice uses its native level-9 Q device. spx uses five-terminal VBIC 1.3.
+* ngspice uses its native level-9 Q device. Sansho uses five-terminal VBIC 1.3.
 * The ngspice voltage-limit warnings are advisory.
 * Provenance: original SG13G2 test circuit.
 .lib "../../va-models/ihp/ngspice-models/cornerHBT.lib" hbt_typ

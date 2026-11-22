@@ -1,0 +1,15 @@
+Model declaration order versus first instance order
+* Provenance: original R22c operating point with built-in BSIM4 body networks.
+* Declarations: ma, mb, mc. First uses: mb, ma, mc. Final card uses mb again.
+* Reverse first use and reverse instance order predict Mthird Msecond Mlast Mfirst.
+.model ma nmos(level=54 rbodymod=1 rbpb=50 rbpd=50 rbps=50 rbdb=50 rbsb=50)
+.model mb nmos(level=54 rbodymod=1 rbpb=60 rbpd=60 rbps=60 rbdb=60 rbsb=60)
+.model mc nmos(level=54 rbodymod=1 rbpb=70 rbpd=70 rbps=70 rbdb=70 rbsb=70)
+Vd d 0 0.1
+Vg g 0 0.4
+Mfirst d g 0 0 mb w=2u l=1u
+Msecond d g 0 0 ma w=2u l=1u
+Mthird d g 0 0 mc w=2u l=1u
+Mlast d g 0 0 mb w=2u l=1u
+.op
+.end

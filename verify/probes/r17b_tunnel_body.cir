@@ -1,0 +1,13 @@
+Gate-body tunnelling field and thermal slope at three body biases
+* Provenance: original Sansho B4SOI 4.4 black-box discriminator.
+* sweep: vb -.2 0 .2
+.param probe=-.2
+Vd d 0 .05
+Vg g 0 0
+Vb b 0 {probe}
+M1 d g 0 0 b dev l=.48u w=2.4u
+.model dev nmos(level=10 tox=2.2n tsi=75n tbox=105n nch=1.1e17 k1=.42
++ vth0=.48 igmod=1 alphagb2=.23 isbjt=0 isrec=0 isdif=0)
+.dc Vg -1.4 1.6 .05
+.save i(Vg) i(Vb) @m1[vth]
+.end

@@ -1,0 +1,15 @@
+First references to ports and internal nodes in repeated subcircuits
+* Provenance: original Sansho node-order probe for R22b.
+* Assume voltage order one, x1.local, ctl, x1.middle, two, x2.local, x2.middle.
+* The B source sees each instance's local node and its mapped control port.
+.subckt stage out control
+Bfirst out 0 I={1m*v(local,control)}
+Ro out 0 1k
+Rm middle 0 1k
+Vl local 0 2
+.ends
+X1 one ctl stage
+X2 two ctl stage
+Vc ctl 0 1
+.op
+.end

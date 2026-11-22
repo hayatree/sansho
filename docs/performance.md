@@ -1,9 +1,62 @@
 # Simulator performance
 
-The benchmark runs the IHP SG13G2 decks with the release Cranelift JIT. The
+The IHP SG13G2 measurements use the release Cranelift JIT. The
 comparison is against ngspice 44.2 with the corresponding OSDI models. The
 campaign goal is at most 0.80× reference time for each of three measurements
 on every deck.
+
+## Clean-room solver replacement
+
+The comparison uses revision `81209fe` and the replacement solver, built
+offline with the release profile and JIT feature on the same Ryzen AI Max+
+395 host. The five decks came from `python3 benches/large/gen.py`. Each
+timed CLI process used one worker, phase profiling and projected raw output.
+The baseline and candidate ran in alternating order, one deck at a time.
+The multiplier checks sample all 32 product bits for each input vector.
+
+The fill column counts scalar entries in L and U at the first successful
+Newton factorization, counting the diagonal once. For BTF this is the sum
+over diagonal blocks. Off-block couplings are applied separately during
+the solve. For the baseline’s general LU, a separate instrumentation run
+counted structural reach with its actual numeric row permutation and symbolic
+column permutation. The counts exclude workspace and dense-panel padding.
+Use `SANSHO_PROFILE_MATRIX=shape target/release/sansho run -j1 DECK` to
+obtain the candidate counts.
+
+Wall times are medians of nine paired runs for the ring and chain and three
+pairs for the grid and multipliers. Fill is a snapshot. It can change during
+Newton pivoting, and the first successful factorization can follow different
+attempts on the two builds. Both multipliers store 7,553 off-block coupling
+entries in each build.
+
+| Large deck | LU before | LU after | Wall before (s) | Wall after (s) | Wall change |
+|---|---:|---:|---:|---:|---:|
+| `ring1001_mos1` | 8,006 | 8,006 | 0.094 | 0.095 | +1.3% |
+| `inv_chain1000_bsim4` | 6,012 | 6,012 | 0.147 | 0.148 | +0.8% |
+| `rc_grid_300` | 8,812,579 | 4,361,437 | 3.434 | 3.186 | -7.2% |
+| `mult16_mos1` | 253,001 | 58,614 | 11.870 | 11.339 | -4.5% |
+| `mult16_bsim4` | 206,239 | 180,124 | 45.181 | 45.783 | +1.3% |
+
+On the grid the quotient-degree ordering delays narrow level separators.
+Packing eight columns with the same lower row pattern lets each refactor
+apply preceding dense updates to all eight columns together. All five
+decks produced identical full-precision waveforms with `-j1` and `-j4`.
+
+The verification table sums the first Newton LU count for each deck in
+the suite. Its wall time is the median of three alternating cached verifier
+runs, including reading references and computing scores.
+
+| Verification suite | Decks | LU before | LU after | Wall before (s) | Wall after (s) |
+|---|---:|---:|---:|---:|---:|
+| `decks` | 56 | 1,224 | 1,229 | 0.109 | 0.107 |
+| `bsim3-decks` | 13 | 397 | 417 | 0.065 | 0.066 |
+| `bsim4-decks` | 22 | 699 | 699 | 0.106 | 0.091 |
+| `sky130-decks` | 8 | 933 | 769 | 1.580 | 1.524 |
+| `va-decks` | 15 | 7,596 | 3,939 | 2.891 | 2.469 |
+
+Both builds recorded 110 passes and four known differences. The largest
+absolute change in a variable or measurement score was 2.78e-07,
+for `onoise_total` in both `noise_bsim4_noic_default.cir` and `noise_bsim4_cs.cir`.
 
 ## Method
 
@@ -14,7 +67,7 @@ for each executable over seven or more pairs. Analysis is measured inside a
 single-worker process. Wall time comes from separate launches with profiling
 disabled and includes process startup, reading the deck, preparation, output
 and exit. Each executable and each timing mode has its own private cache.
-Cold means an empty spx cache. The OS file cache can be warm on both launches.
+Cold means an empty Sansho cache. The OS file cache can be warm on both launches.
 
 The reference timings come from the maintainer's simultaneous measurements of
 ngspice and the baseline. For each deck and worker setting, the estimated ratio
@@ -230,18 +283,18 @@ In a clean baseline checkout, build and save the executable. Run the remaining
 commands in the candidate checkout, using the same Rust toolchain. Use `63b70bd` for round 6 and `c49c242` for round 5.
 
 ```sh
-cargo build --offline --release -p spx-cli --features jit
-cp target/release/spx /tmp/spx-baseline
+cargo build --offline --release -p sansho-cli --features jit
+cp target/release/sansho /tmp/sansho-baseline
 # In the candidate checkout
-cargo build --offline --release -p spx-cli --features jit
-python3 benches/run.py --baseline /tmp/spx-baseline --runs 9
-python3 benches/run.py --warm-analysis --baseline /tmp/spx-baseline --runs 41
-taskset -c 2 python3 benches/run.py --warm-analysis --baseline /tmp/spx-baseline --runs 31 --deck benches/psp_ring21.cir --deck verify/va-decks/psp_ring5.cir
-python3 benches/run.py --warm-wall --baseline /tmp/spx-baseline --runs 41
-python3 benches/run.py --warm-wall --baseline /tmp/spx-baseline --runs 41 --jobs default
-python3 benches/run.py --devices --baseline /tmp/spx-baseline --runs 9 --deck benches/psp_ring21.cir
+cargo build --offline --release -p sansho-cli --features jit
+python3 benches/run.py --baseline /tmp/sansho-baseline --runs 9
+python3 benches/run.py --warm-analysis --baseline /tmp/sansho-baseline --runs 41
+taskset -c 2 python3 benches/run.py --warm-analysis --baseline /tmp/sansho-baseline --runs 31 --deck benches/psp_ring21.cir --deck verify/va-decks/psp_ring5.cir
+python3 benches/run.py --warm-wall --baseline /tmp/sansho-baseline --runs 41
+python3 benches/run.py --warm-wall --baseline /tmp/sansho-baseline --runs 41 --jobs default
+python3 benches/run.py --devices --baseline /tmp/sansho-baseline --runs 9 --deck benches/psp_ring21.cir
 python3 benches/run.py --profile --runs 5
-python3 benches/compare.py /tmp/spx-baseline target/release/spx
+python3 benches/compare.py /tmp/sansho-baseline target/release/sansho
 python3 benches/blocks.py --runs 15 --spills benches/psp_ring21.cir
 python3 benches/ordering.py
 ```
@@ -290,8 +343,8 @@ general input loads.
 
 Release build on an AMD Ryzen AI Max+ 395, one worker, warm disk cache.
 Each number is the median of five runs after one warm-up. Analysis time
-comes from `SPX_PROFILE=1` with device profiling disabled. Per-evaluation
-cost comes from separate runs with `SPX_PROFILE_DEVICES=1`. It includes
+comes from `SANSHO_PROFILE=1` with device profiling disabled. Per-evaluation
+cost comes from separate runs with `SANSHO_PROFILE_DEVICES=1`. It includes
 native and interpreted evaluator time, divided by executed instance
 evaluations. Exact stamp reuse is excluded from that denominator.
 
@@ -305,11 +358,11 @@ evaluations plus 5,662 exact reuses. The ring recorded 23,620 native
 evaluations and 6,060 reuses. All five CMG decks agree between backends on
 the binary64 values of every scale and output vector.
 
-To reproduce, build `spx-cli` with `--offline --release --features jit` and
-run `target/release/spx run -j1 verify/va-decks/cmg_ring5.cir` or the inverter
-deck. Set `SPX_VA_JIT=0` for the interpreter. In the device profile,
-`spx-device` reports native, interpreted and reused counts followed by native
-nanoseconds. `spx-interpreted-ns` reports the interpreted nanoseconds per group.
+To reproduce, build `sansho-cli` with `--offline --release --features jit` and
+run `target/release/sansho run -j1 verify/va-decks/cmg_ring5.cir` or the inverter
+deck. Set `SANSHO_VA_JIT=0` for the interpreter. In the device profile,
+`sansho-device` reports native, interpreted and reused counts followed by native
+nanoseconds. `sansho-interpreted-ns` reports the interpreted nanoseconds per group.
 
 ## Large circuits
 
@@ -330,16 +383,18 @@ vertical resistors, a feed resistor and three pulsed loads.
 
 ### Reproduction
 
+Generate the five large decks in a fresh checkout before running the benchmark or accuracy drivers.
+
 ```sh
 python3 benches/large/gen.py
-cargo build --offline --release -p spx-cli
+cargo build --offline --release -p sansho-cli
 python3 benches/large/run.py --runs 3
 python3 benches/large/run.py --check-bits
 ```
 
 The driver launches a fresh release CLI for each repetition and reports
 median milliseconds. It times from process launch to exit with
-`SPX_PROFILE=1` and includes writing the projected ASCII raw file. Product
+`SANSHO_PROFILE=1` and includes writing the projected ASCII raw file. Product
 checks run outside that interval. The optional `--wall-binary` obtains wall
 time from a second executable with profiling disabled. The phase columns are
 independent medians. Setup includes file reading, preprocessing, flattening,
@@ -432,7 +487,7 @@ preserves duplicate diagnostics with expected linear total lookup time.
 Elaboration now checks repeated terminals of the current device in constant
 time even on a high-fanout rail. The final grid makes 63 solves with 20
 factorizations. Exactly repeating Jacobians account for the other 43.
-An intermediate build that retained general faer's pool-dependent frontal
+An intermediate build that retained the previous solver’s pool-dependent frontal
 kernels produced different grid waveforms across worker settings. Explicitly
 sequential kernels and reusable scratch give identical full-precision results.
 
@@ -490,10 +545,10 @@ equality as high. Sum the absolute count difference for each bit. This counts
 a missed pulse on one bit even if another bit has an extra pulse.
 
 ```sh
-cargo build --offline --release --features jit -p spx-cli -p spx-verify
-target/release/spx run benches/large/mult16_mos1.cir -r /tmp/mos1.raw
+cargo build --offline --release --features jit -p sansho-cli -p sansho-verify
+target/release/sansho run benches/large/mult16_mos1.cir -r /tmp/mos1.raw
 python3 benches/large/accuracy.py mult16_mos1 /tmp/mos1.raw
-target/release/spx run benches/large/mult16_bsim4.cir -r /tmp/bsim4.raw
+target/release/sansho run benches/large/mult16_bsim4.cir -r /tmp/bsim4.raw
 python3 benches/large/accuracy.py mult16_bsim4 /tmp/bsim4.raw
 python3 benches/large/run.py --runs 1
 python3 benches/large/run.py --check-bits
@@ -503,26 +558,26 @@ Generate a tighter candidate from a temporary copy of either deck. For example,
 
 ```sh
 sed 's/^\.options /.options reltol=1e-4 /' benches/large/mult16_mos1.cir > /tmp/mos1-tight.cir
-target/release/spx run /tmp/mos1-tight.cir -r /tmp/mos1-tight.raw
+target/release/sansho run /tmp/mos1-tight.cir -r /tmp/mos1-tight.raw
 python3 benches/large/accuracy.py mult16_mos1 /tmp/mos1.raw /tmp/mos1-tight.raw
 ```
 
 The comparison reads gold and ngspice-default data from `verify/out/large`.
-It accepts additional candidate paths or uses the cached spx raw when invoked
-with just the deck name. The `reltol=1e-4` spx runs change only that option.
+It accepts additional candidate paths or uses the cached Sansho raw when invoked
+with just the deck name. The `reltol=1e-4` Sansho runs change only that option.
 
 | Deck | Run | Points | Mean absolute error (mV) | Crossings | Crossing difference |
 |---|---|---:|---:|---:|---:|
 | MOS1 | ngspice gold | 9,301 | 0 | 502 | 0 |
 | MOS1 | ngspice default | 657 | 15.628 | 490 | 36 |
-| MOS1 | spx at `6ef1df7` | 206 | 63.113 | 278 | 224 |
-| MOS1 | spx M5-2 default | 1,560 | 4.338 | 486 | 24 |
-| MOS1 | spx M5-2 `reltol=1e-4` | 3,682 | 0.772 | 502 | 4 |
+| MOS1 | Sansho at `6ef1df7` | 206 | 63.113 | 278 | 224 |
+| MOS1 | Sansho M5-2 default | 1,560 | 4.338 | 486 | 24 |
+| MOS1 | Sansho M5-2 `reltol=1e-4` | 3,682 | 0.772 | 502 | 4 |
 | BSIM4 | ngspice gold | 21,414 | 0 | 556 | 0 |
 | BSIM4 | ngspice default | 934 | 36.771 | 554 | 30 |
-| BSIM4 | spx at `6ef1df7` | 222 | 95.089 | 302 | 254 |
-| BSIM4 | spx M5-2 default | 2,750 | 4.834 | 558 | 6 |
-| BSIM4 | spx M5-2 `reltol=1e-4` | 7,624 | 0.191 | 556 | 0 |
+| BSIM4 | Sansho at `6ef1df7` | 222 | 95.089 | 302 | 254 |
+| BSIM4 | Sansho M5-2 default | 2,750 | 4.834 | 558 | 6 |
+| BSIM4 | Sansho M5-2 `reltol=1e-4` | 7,624 | 0.191 | 556 | 0 |
 
 At the old defaults the charge-error allowance was at least 70 fC. A full
 1.8 V transition on a 3 fF load moves only 5.4 fC. The controller now applies
@@ -540,7 +595,7 @@ projections. The runs include profiling and ASCII raw output. Large decks ran
 one at a time for this table. Times are seconds. The maintainer measured the
 ngspice 44.2 comparison times separately.
 
-| Deck | spx one worker | spx default | Default workers | ngspice default |
+| Deck | Sansho one worker | Sansho default | Default workers | ngspice default |
 |---|---:|---:|---:|---:|
 | ring1001_mos1 | 0.098 | 0.092 | 2 | OP failed |
 | inv_chain1000_bsim4 | 0.600 | 0.349 | 3 | 0.33 |
@@ -571,7 +626,7 @@ have been removed. Multiplier assembly took 2.32 s on one worker and 1.20 s
 on five workers for MOS1, and 13.75 s on one worker and 7.46 s on twelve for BSIM4.
 At the BSIM4 default, device evaluation still took 13.27 s and numeric
 factorization took 12.59 s. On one worker BSIM4 remains slower than the
-maintainer's ngspice default. The spx run takes nearly three times as many
+maintainer's ngspice default. The Sansho run takes nearly three times as many
 points and resolves more of the gold waveform's glitches.
 
 The release JIT-enabled cached verifier preserved all four suites' verdicts.
@@ -747,8 +802,8 @@ library still take about 0.13 s per process.
 Run the release binary as follows to reproduce the counters and inspect the matrix shape.
 
 ```sh
-SPX_PROFILE=1 SPX_PROFILE_BSIM4=1 target/release/spx run -j1 benches/large/mult16_bsim4.cir -r /tmp/mult16.raw
-SPX_PROFILE=1 SPX_PROFILE_MATRIX=shape target/release/spx run -j1 benches/large/mult16_bsim4.cir -r /tmp/mult16-shape.raw
+SANSHO_PROFILE=1 SANSHO_PROFILE_BSIM4=1 target/release/sansho run -j1 benches/large/mult16_bsim4.cir -r /tmp/mult16.raw
+SANSHO_PROFILE=1 SANSHO_PROFILE_MATRIX=shape target/release/sansho run -j1 benches/large/mult16_bsim4.cir -r /tmp/mult16-shape.raw
 python3 benches/large/accuracy.py mult16_bsim4 /tmp/mult16.raw
 python3 benches/large/run.py --check-bits --deck mult16_mos1 --deck mult16_bsim4
 ```
@@ -766,3 +821,166 @@ the BSIM4 chain.
 | mult16_bsim4, 1 and 12 workers | `130ab727c5e26c4a7156b4bd9e5ccc0f7db4a3fd61b4abd06f4c9012bcd29a7f` |
 | mult16_mos1, 1 and 5 workers | `39e09dabb59609e26c98704a96e01987e11f25b581dfda889eb6fb96621ab935` |
 | inv_chain1000_bsim4, 1 and 3 workers | `f5739483db7c3f68cb55c9fc4c7031745f92fd5d958c3c0678d9b820fb8274eb` |
+
+### M5-4 column-parallel numeric refactor
+
+The BSIM4 multiplier missed the 9 s target. With profiling disabled,
+three interleaved default-worker runs per build gave a median of **23.96 s
+at a37d005 and 20.28 s at M5-4**, a 15.4% wall reduction. The ranges
+were 23.54–25.21 and 19.12–20.54 s. The full-precision waveform matches
+M5-3, and every deck met the single-worker guard in the profiled comparison.
+
+Both multiplier decks still have 68 BTF blocks. The 5,034-column block sets
+the cost. In the fixed-pivot factorization, an upper entry at row `i` of
+column `j` reads the completed lower column `i`. This gives a DAG directly
+from the stored factors. Disjoint components of its prefix can run on the
+existing pool with private scatter vectors. After the join, the remaining
+columns run in order. A failed pivot preserves every valid earlier column
+for the serial search. The triangular solves retain their original ordering.
+
+The M5-1 estimate refers to an earlier column ordering. For the M5-3
+minimum-degree ordering, counting columns, inputs, L and U entries and
+scalar updates gives 7,551,526 work units and a 7,024,156-unit critical path
+for the startup factorization. A transient sample after 350 attempts had
+59,861 factor entries, 212 levels, 446,136 units of work and an ideal speedup
+of 1.71. These are structural estimates. They exclude synchronization,
+zero-update skips and fresh pivoting.
+
+**Ordering and pivot experiments.** A recursive breadth-first separator
+trial on the block graph kept minimum-degree order within leaves of fewer
+than 128 columns. The startup factor grew from 206,151 to 493,498 entries.
+The estimated ideal speedup rose from 1.08 to 1.19. On a 9 ns transient
+with the original 320 ps step limit, numeric time rose from 1.19 to 14.03 s
+and the waveform changed. Reducing the fixed-pivot acceptance threshold
+from 0.1 to 0.01 cut fresh searches from 274 to 87 and numeric time to
+0.91 s on this interval. It changed the waveform and took 952 Newton
+iterations against the original 951. The shipped ordering and threshold
+preserve the M5-3 waveform.
+
+**Incremental measurements.** Each pair below compares the affected phase
+on the same 9 ns deck. Times are median milliseconds across three interleaved
+processes per executable. Each row is its own experiment. Host load varied
+between and within experiments, especially in the gather trial.
+
+| Change | Phase | Before (ms) | After (ms) |
+|---|---|---:|---:|
+| Copy contiguous charge slots and parallelize the maximum LTE reduction | Control | 687.5 | 262.5 |
+| Schedule independent fixed-pivot subtrees | Numeric | 1,285.4 | 1,253.1 |
+| Replay verified reach during fresh pivot search | Numeric | 1,039.7 | 956.0 |
+| Gather native stamps into disjoint destination tiles | Assembly | 510.2 | 307.8 |
+| Rotate accepted charge buffers and compute local derivatives with LTE | Control | 198.0 | 119.6 |
+
+The last control comparison used a 16-worker trial budget. A backward solve
+trial processed the serial separator first and then solved independent upper
+subtrees in reverse column order. Copying the pivot RHS into per-task scratch
+and gathering solutions took the solve phase from 138 to 139 ms. A four-column
+packed separator increased numeric time from 474 to 561 ms. A contiguous
+lower-factor run kernel took 531 versus 506 ms, and a 96-column dense frontal
+trial took 796 versus 791 ms. The fixed-pivot kernel keeps the original
+scalar update for each column. Testing for unchanged individual columns gave
+1,015 versus 1,021 ms with extra bookkeeping. These trials were discarded.
+
+The MOS1 batch caches voltage-independent geometry and reuses the junction
+limiting voltage for devices with the same peak saturation current. The
+converged-point sampler evaluates terminal charges and updates Meyer histories
+without writing current or Jacobian stamps. In two interleaved full-deck
+single-worker comparisons, the MOS1 multiplier took 12.02 and 12.74 s with
+these changes, against 15.31 and 14.43 s at HEAD. Unit coverage compares
+every charge and history slot across both device polarities, reversed drain
+bias and series resistance.
+
+**Complete decks.** The comparison below uses two release CLIs on the same
+32-hardware-thread host. Each process ran on its own, without affinity.
+For each deck and worker setting the M5-3 and M5-4 builds alternated order.
+Times are medians of three runs per build for the multipliers and generated
+RC grid and seven for the shorter decks. The host was shared. Wall includes
+CLI startup and raw output, and the phase timers were enabled in both builds.
+The 3% guard uses the single-worker wall medians.
+
+| Deck | Default workers | M5-3 -j1 (s) | M5-4 -j1 (s) | -j1 change | M5-3 default (s) | M5-4 default (s) |
+|---|---:|---:|---:|---:|---:|---:|
+| mult16_bsim4 | 12 | 56.87 | 53.90 | −5.2% | 25.85 | 19.11 |
+| mult16_mos1 | 5 | 14.11 | 12.31 | −12.8% | 8.42 | 7.54 |
+| rc_grid_300 | 1 | 4.87 | 4.10 | −15.9% | 4.32 | 4.67 |
+| inv_chain1000_bsim4 | 3 | 0.1960 | 0.1909 | −2.6% | 0.1988 | 0.1463 |
+| ring1001_mos1 | 2 | 0.1135 | 0.1078 | −5.0% | 0.1338 | 0.0911 |
+| sky_ring5 | 1 | 0.3022 | 0.2810 | −7.0% | 0.2963 | 0.2803 |
+| ring_osc | 1 | 0.0054 | 0.0053 | −1.8% | 0.0052 | 0.0047 |
+
+All seven decks met the single-worker guard in this comparison. The RC grid
+used one worker in both modes, and its two series moved in opposite
+directions. The grid used the general sparse backend in M5-4. The earlier M5-3
+reference measured 41.87 s at one worker and 14.79 s at twelve on the BSIM4
+multiplier. The same-session baseline above is the denominator for speedups.
+
+**BSIM4 worker sweep.** Times below are seconds. The one- and twelve-worker
+rows are medians from the paired experiment. Other rows are single
+processes. Phase medians are calculated independently. Wall also includes
+engine work outside the phase timers. The production CLI treats `-j` as
+a ceiling. To measure sixteen actual workers, the timing build raised only
+the native single-analysis budget floor to sixteen and ran with `-j16`.
+The production worker heuristic and affinity policy are unchanged.
+
+| Build | Actual workers | Wall | Setup + parse | Device | Assembly | Symbolic | Numeric LU | Solve | Step control | Output |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| M5-3 | 1 | 56.871 | 0.074 | 39.191 | 3.546 | 0.016 | 8.132 | 1.243 | 4.249 | 0.031 |
+| M5-4 | 1 | 53.902 | 0.061 | 38.447 | 3.318 | 0.019 | 7.162 | 1.218 | 3.212 | 0.040 |
+| M5-4 | 4 | 23.064 | 0.056 | 11.770 | 2.213 | 0.016 | 5.800 | 1.309 | 1.445 | 0.033 |
+| M5-4 | 8 | 19.007 | 0.091 | 7.315 | 2.096 | 0.024 | 6.469 | 1.369 | 1.161 | 0.029 |
+| M5-3 | 12 | 25.848 | 0.077 | 6.799 | 3.169 | 0.017 | 8.701 | 1.386 | 5.256 | 0.036 |
+| M5-4 | 12 | 19.106 | 0.090 | 6.426 | 2.460 | 0.023 | 6.888 | 1.457 | 1.212 | 0.037 |
+| M5-4 | 16 | 20.248 | 0.051 | 6.667 | 2.484 | 0.015 | 7.476 | 1.532 | 1.364 | 0.078 |
+
+The complete BSIM4 transient required 10,257 Newton iterations and rejected
+527 steps. Of its 10,257 LU calls, 2,122 (20.7%) searched for a new pivot
+and 8,135 completed with fixed pivots. At twelve workers the respective
+times were 2.79 and 4.10 s. The replay cache reduces the cost of a search
+while preserving the original pivot decisions. Eight and twelve workers
+were within 0.1 s in this sweep. Sixteen increased wall by 1.14 s relative
+to twelve, and a lighter-load trial favored twelve over eight. These runs
+did not justify raising the default worker budget.
+
+**Accuracy and determinism.** Each projected raw file at one and default
+workers matched its HEAD counterpart byte for byte on all seven decks.
+The four-, eight-, twelve- and sixteen-worker BSIM4 sweep also produced
+the HEAD projection. Removing the save projection and hashing all internal
+and exported binary64 time series reproduced the M5-3 SHA-256 values above
+at one, four and default workers for both multipliers. Both passed the
+per-bit product checks on every profiled run.
+
+| Multiplier | Points | Mean absolute error against cached gold (mV) | Crossings | Crossing difference |
+|---|---:|---:|---:|---:|
+| BSIM4 | 2,750 | 4.834 | 558 | 6 |
+| MOS1 | 1,560 | 4.338 | 486 | 24 |
+
+The unit test for fixed-pivot L3 forces accepted refactors and pivot changes
+on a random sparse block-banded matrix and a coupled ladder. It compares
+the earliest failed column, factor index sequences, every factor value and
+the triangular solution against the serial traversal.
+
+| Verification | Result |
+|---|---|
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings`, default and all features | Both passed |
+| `cargo test`, default and all features | 182 passed, 2 ignored / 193 passed, 3 ignored |
+| Release JIT verifier with cached regular, VA, BSIM4 and SKY130 decks | 55/55 passed, 4 known, 0 skipped |
+| `run.py --check-bits` on both multipliers | Both matched M5-3 at all three worker settings |
+
+**Next measurements.** Repeat the paired default-worker runs on an idle host
+to compare against the historical 14.79 s baseline. Instrument update counts
+and time by column in the serial factor suffix, including the 2,122 calls
+that repivoted. The 12-worker profile puts 13.31 s into numeric LU and
+device evaluation together. For LU, evaluate SIMD across independent
+destination rows of a single predecessor update. For device evaluation,
+measure batching BSIM4 cache misses across instances with the same geometry.
+Both experiments can preserve the existing operation order per output.
+
+The checked-in runner accepts repeated worker limits. From the repository
+root the following runs reproduce the normal CLI sweep and full-vector checks.
+
+```sh
+cargo build --release -p sansho-cli
+python3 benches/large/gen.py
+python3 benches/large/run.py --deck mult16_bsim4 --jobs 1 --jobs 4 --jobs 8 --jobs 12
+python3 benches/large/run.py --check-bits --deck mult16_bsim4 --deck mult16_mos1
+```

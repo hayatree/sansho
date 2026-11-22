@@ -1,0 +1,11 @@
+Reverse transport scale at forward collector-base bias
+* Provenance: original Sansho R15 circuit.
+* sweep: isrr .25 1 4
+.param probe=.25
+Vc c 0 -.05
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=1e-18 isrr={probe})
+.dc Vb .35 .82 .01
+.save i(Vc) i(Vb)
+.end

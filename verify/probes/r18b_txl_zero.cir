@@ -1,0 +1,16 @@
+Explicit series resistance approaching the ideal line
+* Provenance: original Sansho R18b circuit.
+* sweep: resistance 0 1u .1
+* known-difference: .1 | v(x)
+.param probe=0
+Vin src 0 pulse(0 1 1n .1n .1n 20n 50n)
+Ra src a 50
+Rb src b 50
+Y1 a 0 x 0 wire
+T1 b 0 y 0 z0=50 td=5n
+.model wire txl length=1 r={probe} l=250n g=0 c=100p
+Rx x 0 135
+Ry y 0 135
+.tran .02n 18n
+.save v(a) v(b) v(x) v(y)
+.end

@@ -1,0 +1,11 @@
+Collector-base weak avalanche AVC2
+* Provenance: original Sansho R15 circuit.
+* sweep: avc2 1 3 6
+.param probe=1
+Vc c 0 2
+Vb b 0 .70
+Q1 c b 0 dev
+.model dev npn(level=4 is=1e-16 ibei=1e-18 avc1=.08 avc2={probe})
+.dc Vc 1 8 .25
+.save i(Vb) i(Vc)
+.end

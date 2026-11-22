@@ -1,0 +1,25 @@
+Planar NPN output at fixed base voltage
+* Provenance: original Sansho fixture, ngspice 44 manual chapter 26.
+Vc c 0 0.55
+Vb b 0 0.48
+Qplanar c b 0 np
+.model np nbjt level=2
++ options bipolar defw=5u
++ x.mesh loc=0 n=1
++ x.mesh loc=1.8 n=19
++ y.mesh loc=0 n=1
++ y.mesh loc=0.3 n=4
++ domain num=1 mat=1
++ material num=1 silicon tn=2n tp=3n
++ electrode num=1 ix.l=19
++ electrode num=2 ix.l=8 ix.h=9 iy.h=1
++ electrode num=3 ix.h=1
++ doping uniform n.type conc=1e16
++ doping uniform p.type conc=2e17 x.l=0.55 x.h=0.95
++ doping uniform n.type conc=1e18 x.h=0.55
++ models srh
++ end
+.options itl1=150 itl2=100
+.dc Vc 0.08 0.68 0.05
+.save i(vc) i(vb)
+.end
