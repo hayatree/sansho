@@ -4,7 +4,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-11-22
+## [0.1.0] - 2026-11-23
 
 First public release, distributed on GitHub.
 
