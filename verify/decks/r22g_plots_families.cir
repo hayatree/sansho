@@ -1,0 +1,22 @@
+duplicate analyses
+* Provenance: original R22g black-box regression deck. Two cards per analysis family: plots are written family by family in reverse card order. No .pz: 44.2 keeps ac sources open after pole-zero, which corrupts later analyses.
+Vin in 0 dc 0.6 ac 1 distof1 1m sin(0.6 0.1 1k)
+R1 in out 1k
+C1 out 0 10n
+D1 out 0 dj
+.model dj d(is=1e-14)
+.ac lin 3 1k 2k
+.ac lin 4 1k 2k
+.dc Vin 0 1 0.5
+.dc Vin 0 1 0.25
+.op
+.op
+.tran 10u 1m
+.tran 20u 1m
+.tf v(out) Vin
+.tf i(Vin) Vin
+.noise v(out) Vin lin 3 1k 2k
+.noise v(out) Vin lin 4 1k 2k
+.disto lin 1 1k 2k
+.disto lin 2 1k 2k
+.end

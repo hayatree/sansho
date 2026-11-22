@@ -300,7 +300,7 @@ impl DeviceGroup for Diodes {
     fn noise(
         &self,
         ctx: &EvalCtx,
-        x: &[f64],
+        _x: &[f64],
         slots: &Slots,
         out: &mut Vec<crate::NoiseSource>,
     ) -> Result<(), Diagnostic> {
@@ -319,7 +319,10 @@ impl DeviceGroup for Diodes {
                 emit("rs", self.a[i], p, thermal * self.area[i] / m.rs, 0.);
                 at.f += 2;
             }
-            let id = (slots.f[at.f] - ctx.gmin * (volt(x, p) - volt(x, n))).abs();
+            // ngspice 44.2 evaluates shot and flicker noise from the junction
+            // current including its parallel gmin branch. At low bias the
+            // measured power ratio is (I + gmin V) / I (R22g probes).
+            let id = slots.f[at.f].abs();
             emit("id", p, n, 2. * crate::CHARGE * id, 0.);
             emit("1overf", p, n, m.kf * id.powf(m.af), 1.);
         }

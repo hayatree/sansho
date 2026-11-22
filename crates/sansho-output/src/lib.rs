@@ -336,6 +336,30 @@ fn integrated_noise_name(name: &str) -> bool {
         || name.starts_with("inoise_total_")
 }
 
+/// ngspice 44.2 batch raw spelling of transfer-function, pole-zero and
+/// S-parameter results: every value is written as a voltage vector named
+/// `v(...)`, with the capitalisation of its printed report (R22g probes).
+fn special_raw_name(kind: AnalysisKind, name: &str) -> Option<String> {
+    if name.starts_with("v(") || name.starts_with("i(") {
+        return None;
+    }
+    match kind {
+        AnalysisKind::Pz | AnalysisKind::Sp => Some(name.to_owned()),
+        AnalysisKind::Tf => Some(if name == "transfer_function" {
+            "Transfer_function".to_owned()
+        } else if let Some(source) = name.strip_suffix("#input_impedance") {
+            format!("{source}#Input_impedance")
+        } else if let Some(branch) = name.strip_suffix("#output_impedance") {
+            format!("{branch}#Output_impedance")
+        } else if let Some(node) = name.strip_prefix("output_impedance_at_v(") {
+            format!("output_impedance_at_V({node}")
+        } else {
+            name.to_owned()
+        }),
+        _ => None,
+    }
+}
+
 struct RawColumn<'a> {
     index: usize,
     name: std::borrow::Cow<'a, str>,
@@ -381,7 +405,9 @@ struct RawPlot {
 impl SimResults {
     fn raw_layout(&self) -> Vec<RawPlot> {
         let mut intervals = self.batch_raw.iter().flat_map(|b| &b.noise_intervals);
-        let mut integrated = intervals.clone();
+        // A single-frequency noise card has no integrated plot, so the totals
+        // take the interval of the spectrum that precedes them.
+        let mut last_interval = None;
         let mut ac = self.batch_raw.iter().flat_map(|b| &b.ac_start_only);
         let mut layout: Vec<_> = self
             .analyses
@@ -389,8 +415,11 @@ impl SimResults {
             .enumerate()
             .map(|(index, a)| {
                 let interval = match a.kind {
-                    AnalysisKind::Noise => intervals.next(),
-                    AnalysisKind::IntegratedNoise => integrated.next(),
+                    AnalysisKind::Noise => {
+                        last_interval = intervals.next();
+                        last_interval
+                    }
+                    AnalysisKind::IntegratedNoise => last_interval,
                     _ => None,
                 }
                 .copied()
@@ -410,22 +439,56 @@ impl SimResults {
             })
             .collect();
         if self.batch_raw.is_some() {
-            // Keep unmeasured families in their original slots. The order among
-            // the four measured families holds even across an intervening card.
-            let rank = |p: &RawPlot| match self.analyses[p.index].kind {
-                AnalysisKind::Ac => Some(0),
-                AnalysisKind::Dc => Some(1),
-                AnalysisKind::Op => Some(2),
-                AnalysisKind::Tran => Some(3),
-                _ => None,
+            // ngspice 44.2 batch raw files list plots in a fixed analysis-type
+            // order, independent of card order (R22e/R22f black-box probes).
+            // Plots of one family keep their card order, so a noise spectrum
+            // stays next to its integrated totals and PSS time next to PSS
+            // frequency. The Fourier report is not written: with a rawfile
+            // ngspice ignores `.four` and keeps only the transient.
+            let rank = |p: &RawPlot| -> i32 {
+                match self.analyses[p.index].kind {
+                    AnalysisKind::Ac => 0,
+                    AnalysisKind::Dc => 1,
+                    AnalysisKind::Op => 2,
+                    AnalysisKind::Tran => 3,
+                    AnalysisKind::Pz => 4,
+                    AnalysisKind::Tf => 5,
+                    k if k.is_distortion() => 6,
+                    AnalysisKind::Noise | AnalysisKind::IntegratedNoise => 7,
+                    AnalysisKind::Sens => 8,
+                    AnalysisKind::Pss | AnalysisKind::PssFreq => 9,
+                    AnalysisKind::Sp => 10,
+                    _ => 11,
+                }
             };
-            let mut ranked: Vec<_> = layout.iter().filter_map(|p| Some((rank(p)?, *p))).collect();
-            ranked.sort_by_key(|&(rank, _)| rank);
-            for (slot, (_, plot)) in layout.iter_mut().filter(|p| rank(p).is_some()).zip(ranked) {
-                *slot = plot;
-            }
-            // Sansho appends its Fourier report derived from the completed transient.
-            layout.sort_by_key(|p| self.analyses[p.index].kind == AnalysisKind::Four);
+            layout.retain(|p| self.analyses[p.index].kind != AnalysisKind::Four);
+            // Within one family ngspice writes the cards in reverse order, each
+            // card's plots kept together in their own order (R22g probes).
+            let part = |kind: AnalysisKind| match kind {
+                AnalysisKind::IntegratedNoise | AnalysisKind::PssFreq | AnalysisKind::Harmonic3 => {
+                    1
+                }
+                AnalysisKind::Sum => 2,
+                AnalysisKind::Difference => 3,
+                AnalysisKind::Intermod3 => 4,
+                _ => 0,
+            };
+            let mut card = 0usize;
+            let mut previous: Option<(i32, i32)> = None;
+            let mut keyed: Vec<_> = layout
+                .iter()
+                .map(|p| {
+                    let kind = self.analyses[p.index].kind;
+                    let (family, sub) = (rank(p), part(kind));
+                    if previous.is_none_or(|(f, s)| f != family || sub <= s) {
+                        card += 1;
+                    }
+                    previous = Some((family, sub));
+                    ((family, std::cmp::Reverse(card), sub), *p)
+                })
+                .collect();
+            keyed.sort_by_key(|&(key, _)| key);
+            layout = keyed.into_iter().map(|(_, p)| p).collect();
         }
         layout
     }
@@ -545,6 +608,13 @@ fn write_raw(results: &SimResults, w: &mut impl Write, binary: bool) -> io::Resu
         for (i, (name, quantity)) in vars.enumerate() {
             if i == 0 && a.kind == AnalysisKind::Dc && name == "v-sweep" {
                 writeln!(w, "\t{i}\tv(v-sweep)\tvoltage")?;
+                continue;
+            }
+            if batch.is_some()
+                && !(i == 0 && a.scale.is_some())
+                && let Some(name) = special_raw_name(a.kind, name)
+            {
+                writeln!(w, "\t{i}\tv({name})\tvoltage")?;
                 continue;
             }
             let wrapped = name.starts_with('@')

@@ -574,6 +574,10 @@ pub struct SourceSpec {
     pub ac_mag: f64,
     /// AC phase in degrees.
     pub ac_phase_deg: f64,
+    /// Whether the card carries an `ac` specification, even `ac 0`. Pole-zero
+    /// analysis treats such a voltage source as the open excitation port.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ac_given: bool,
     /// One-based RF port number and real reference resistance in ohms.
     pub port: Option<(usize, f64)>,
     /// DISTOF1 and DISTOF2 peak magnitudes and phases in degrees.

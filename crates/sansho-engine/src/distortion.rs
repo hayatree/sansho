@@ -85,7 +85,15 @@ pub(super) fn analyze(
     grid: FrequencySweep,
     ratio: Option<f64>,
 ) -> Result<Vec<AnalysisResult>, Diagnostic> {
-    let freq = ac_frequencies(grid.sweep, grid.points, grid.fstart, grid.fstop)?;
+    // ngspice 44.2 places `np` interior points on a linear distortion grid:
+    // `.disto lin np f1 f2` gives np + 2 evenly spaced frequencies including
+    // both ends (R22g probes, np = 1..7). Decade and octave grids follow AC.
+    let points = if grid.sweep == sansho_netlist::AcSweep::Lin {
+        grid.points.saturating_add(2)
+    } else {
+        grid.points
+    };
+    let freq = ac_frequencies(grid.sweep, points, grid.fstart, grid.fstop)?;
     let (bias, ws, ctx) = linearize(c, opts, Mode::Ac)?;
     let mut terms = Vec::new();
     for g in &c.groups {

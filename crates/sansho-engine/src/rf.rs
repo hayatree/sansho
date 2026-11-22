@@ -149,6 +149,10 @@ pub(super) fn analyze(
     if n == 0 || ports.iter().enumerate().any(|(i, p)| p.number != i + 1) {
         return Err(error("SP requires unique consecutive ports starting at 1"));
     }
+    // ngspice 44.2 stops with a fatal error for a single port (R22f probe).
+    if n < 2 {
+        return Err(error("SP requires at least two RF ports"));
+    }
     if noise && n != 2 {
         return Err(error("SP noise parameters require two ports"));
     }

@@ -188,7 +188,18 @@ fn verify(deck: &Path, cli: &Cli) -> Result<(DeckReport, Option<String>, bool), 
             {
                 return Err(Problem::Failed(warning.to_string()));
             }
-            o.results.into_raw_output()
+            // The batch raw omits the Fourier report, as ngspice does with a
+            // rawfile; keep it for comparison against the derived reference.
+            let four: Vec<_> = o
+                .results
+                .analyses
+                .iter()
+                .filter(|a| a.kind == sansho_output::AnalysisKind::Four)
+                .cloned()
+                .collect();
+            let mut raw = o.results.into_raw_output();
+            raw.analyses.extend(four);
+            raw
         }
         Err(e) => {
             return Err(Problem::Failed(format!(

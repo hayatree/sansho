@@ -6,7 +6,7 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use sansho_netlist::{ElementKind, Netlist};
-use sansho_output::{AnalysisKind, AnalysisResult, Data};
+use sansho_output::{AnalysisKind, AnalysisResult, Data, Quantity, Variable};
 
 fn circuit_plot(kind: AnalysisKind) -> bool {
     kind.is_distortion()
@@ -36,6 +36,66 @@ pub(crate) fn model_instances(nl: &Netlist) -> HashMap<&str, (usize, usize)> {
             (e.name.as_str(), (model, i))
         })
         .collect()
+}
+
+/// Append the internal node of each RF port source to a default-output circuit
+/// plot. ngspice 44.2 lists `v(<port>#res)` in every circuit plot except
+/// sensitivity (R22f probes). The node sits between the ideal source and its
+/// series reference impedance, so by Kirchhoff's voltage law it equals
+/// `v(p) - z0 * i(port)` in every analysis, real or complex.
+pub(crate) fn add_port_nodes(plot: &mut AnalysisResult, nl: &Netlist) {
+    if !circuit_plot(plot.kind) || matches!(plot.kind, AnalysisKind::Sens | AnalysisKind::Sp) {
+        return;
+    }
+    for e in &nl.elements {
+        let ElementKind::VoltageSource { source, p, .. } = &e.kind else {
+            continue;
+        };
+        let Some((_, z)) = source.port else {
+            continue;
+        };
+        let name = format!("v({}#res)", e.name);
+        let find = |n: &str| plot.variables.iter().position(|v| v.name == n);
+        if find(&name).is_some() {
+            continue;
+        }
+        let Some(branch) = find(&format!("i({})", e.name)) else {
+            continue;
+        };
+        let pin = if p == "0" || p.eq_ignore_ascii_case("gnd") {
+            None
+        } else {
+            let Some(i) = find(&format!("v({p})")) else {
+                continue;
+            };
+            Some(i)
+        };
+        match &mut plot.data {
+            Data::Real { columns } => {
+                let column = columns[branch]
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &i)| pin.map_or(0., |c| columns[c][k]) - z * i)
+                    .collect();
+                columns.push(column);
+            }
+            Data::Complex { columns } => {
+                let column = columns[branch]
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &(re, im))| {
+                        let (vr, vi) = pin.map_or((0., 0.), |c| columns[c][k]);
+                        (vr - z * re, vi - z * im)
+                    })
+                    .collect();
+                columns.push(column);
+            }
+        }
+        plot.variables.push(Variable {
+            name,
+            quantity: Quantity::Voltage,
+        });
+    }
 }
 
 /// Move columns together with their names after analysis. Solver unknown indices

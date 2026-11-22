@@ -724,6 +724,33 @@ pub(crate) fn compile_cached(
             .with_note("every circuit needs a reference node named `0` (or `gnd`)"),
         ]);
     }
+    // ngspice 44.2 rejects any netlist whose RF port numbers are not exactly
+    // 1..n, whatever the analysis (R22g probe: a lone portnum=2 is fatal).
+    let mut ports: Vec<(usize, &str)> = nl
+        .elements
+        .iter()
+        .filter_map(|e| match &e.kind {
+            ElementKind::VoltageSource { source, .. } => {
+                source.port.map(|(n, _)| (n, e.name.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    ports.sort_unstable();
+    if let Some(&(_, name)) = ports
+        .iter()
+        .enumerate()
+        .find(|&(i, &(n, _))| n != i + 1)
+        .map(|(_, p)| p)
+    {
+        return Err(vec![
+            Diagnostic::error(
+                "E-ELAB-PARAM",
+                format!("{name}: incorrect RF port ordering"),
+            )
+            .with_note("port numbers must be unique and run consecutively from portnum=1"),
+        ]);
+    }
     let mut node_elements: Vec<Vec<String>> = vec![Vec::new(); node_names.len()];
     for nonlinear in [true, false] {
         for e in &nl.elements {

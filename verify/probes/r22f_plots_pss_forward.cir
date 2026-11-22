@@ -1,0 +1,17 @@
+Plot order with PSS and SP, forward
+* Provenance: original Sansho R22f plot-order probe. Autonomous cubic LC tank, no diode, so the PSS shooting completes.
+Vdrive in 0 dc 0.4 ac 1 portnum=1 z0=50
+Rdrive in out 1k
+Rload out 0 2k
+Vport2 port 0 dc 0 ac 0 portnum=2 z0=50
+Rport port out 100
+Ltank tank 0 1m
+Ctank tank 0 1u ic=0.5
+Bactive tank 0 I={0.004*(v(tank)*v(tank)-1)*v(tank)}
+.pss 5k 2m tank 64 5 30 1e-3 uic
+.sp lin 3 1k 2k
+.tran 2u 1m uic
+.op
+.ac lin 2 700 2.6k
+.tf v(out) Vdrive
+.end

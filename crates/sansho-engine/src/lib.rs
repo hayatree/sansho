@@ -289,7 +289,7 @@ fn run_analysis(
             zeros,
             ..
         } => {
-            return small_signal::pz(ckt, opts, nodes, *voltage, *poles, *zeros)
+            return small_signal::pz(ckt, nl, opts, nodes, *voltage, *poles, *zeros)
                 .map(|a| (vec![a], None));
         }
         AnalysisCard::Four { .. } => return Ok((vec![], None)),
@@ -622,6 +622,7 @@ fn run_checked(nl: &Netlist, checked: Checked) -> Result<RunOutput, RunError> {
                             sansho_output::AnalysisKind::Sp | sansho_output::AnalysisKind::Sens
                         )
                     {
+                        output_order::add_port_nodes(plot, nl);
                         output_order::default_order(plot, nl, ckt.num_nodes());
                     }
                 }

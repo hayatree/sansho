@@ -1080,6 +1080,7 @@ impl Parser {
                 }
                 "ac" => {
                     i += 1;
+                    spec.ac_given = true;
                     spec.ac_mag = 1.0;
                     if let Some(v) = t.get(i).and_then(|x| parse_number(&x.text)) {
                         spec.ac_mag = v;

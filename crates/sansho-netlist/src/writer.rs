@@ -35,7 +35,7 @@ fn source(out: &mut String, s: &SourceSpec) {
     if let Some(dc) = s.dc {
         let _ = write!(out, " dc {}", num(dc));
     }
-    if s.ac_mag != 0.0 || s.ac_phase_deg != 0.0 {
+    if s.ac_given || s.ac_mag != 0.0 || s.ac_phase_deg != 0.0 {
         let _ = write!(out, " ac {} {}", num(s.ac_mag), num(s.ac_phase_deg));
     }
     if let Some((n, r)) = s.port {

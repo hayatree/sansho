@@ -1,0 +1,12 @@
+Transfer-function current outputs
+* Provenance: original R22g black-box regression deck. The output resistance of a current output is the input resistance when the output branch is the input source, else 1e20 ohm.
+V1 in 0 dc 1
+R1 in x 500
+Vb x y dc 2 ac 1
+R5 y 0 800
+I1 0 in 1m
+R2 in 0 3k
+.tf i(Vb) V1
+.tf i(V1) V1
+.tf i(Vb) I1
+.end

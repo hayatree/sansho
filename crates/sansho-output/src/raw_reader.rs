@@ -248,6 +248,8 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
         } else {
             (None, Vec::new(), vars)
         };
+        let mut vars = vars;
+        restore_special_names(kind, &mut vars);
         let skip = usize::from(has_scale);
         let data = if complex {
             Data::Complex {
@@ -268,6 +270,61 @@ pub fn read_raw_ascii(text: &str) -> Result<SimResults, RawError> {
         });
     }
     Ok(results)
+}
+
+/// Undo the batch spelling of transfer-function, pole-zero and S-parameter
+/// vectors, which ngspice writes as `v(...)` voltages, so that a Sansho raw
+/// file reads back with its native names and units.
+fn restore_special_names(kind: AnalysisKind, vars: &mut [Variable]) {
+    if !matches!(kind, AnalysisKind::Tf | AnalysisKind::Pz | AnalysisKind::Sp) {
+        return;
+    }
+    let unwrap = |name: &str| {
+        name.strip_prefix("v(")
+            .and_then(|s| s.strip_suffix(')'))
+            .map(str::to_owned)
+    };
+    // In a TF plot the output vector says whether the output is a current
+    // and the input impedance names the source, which fixes the gain unit.
+    let current_out = vars.iter().any(|v| v.name.ends_with("#output_impedance)"));
+    let current_in = vars
+        .iter()
+        .any(|v| v.name.starts_with("v(i") && v.name.ends_with("#input_impedance)"));
+    for v in vars.iter_mut() {
+        let Some(inner) = unwrap(&v.name) else {
+            continue;
+        };
+        let quantity = match kind {
+            AnalysisKind::Pz if inner.starts_with("pole(") || inner.starts_with("zero(") => {
+                Quantity::PoleZero
+            }
+            AnalysisKind::Sp => match inner.split('_').next() {
+                Some("s") if inner.matches('_').count() == 2 => Quantity::Scalar,
+                Some("y") if inner.matches('_').count() == 2 => Quantity::Admittance,
+                Some("z") if inner.matches('_').count() == 2 => Quantity::Resistance,
+                _ => continue,
+            },
+            AnalysisKind::Tf if inner == "transfer_function" => match (current_out, current_in) {
+                (false, true) => Quantity::Resistance,
+                (true, false) => Quantity::Admittance,
+                _ => Quantity::Scalar,
+            },
+            AnalysisKind::Tf
+                if inner.ends_with("#input_impedance")
+                    || inner.ends_with("#output_impedance")
+                    || inner.starts_with("output_impedance_at_") =>
+            {
+                Quantity::Resistance
+            }
+            _ => continue,
+        };
+        v.name = if kind == AnalysisKind::Sp {
+            inner.to_ascii_uppercase()
+        } else {
+            inner
+        };
+        v.quantity = quantity;
+    }
 }
 
 #[cfg(test)]

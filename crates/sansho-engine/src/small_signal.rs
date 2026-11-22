@@ -137,7 +137,15 @@ pub(super) fn tf(
     };
     let test = read(&solve(out)?, out);
     let voltage = matches!(output, Probe::Voltage(..));
-    let rout = if voltage { test } else { reciprocal(test) };
+    // The manual leaves the output resistance of a current output open.
+    // ngspice 44.2 reports the input resistance when the output branch is the
+    // input source itself and a fixed 1e20 ohm otherwise, in every topology
+    // probed (R22g).
+    let rout = match output {
+        Probe::Voltage(..) => test,
+        Probe::Current(b) if b.eq_ignore_ascii_case(source) => rin,
+        _ => 1e20,
+    };
     let gain_unit = match (voltage, src.voltage) {
         (true, false) => Quantity::Resistance,
         (false, true) => Quantity::Admittance,
@@ -331,6 +339,11 @@ pub(super) fn noise(
     }
     if detail {
         values.rotate_left(2);
+    }
+    // A single frequency spans no band, and ngspice 44.2 then writes only
+    // the spectrum (R22g probes with lin 1 and dec 1 grids).
+    if spectrum.scale_values.len() < 2 {
+        return Ok(vec![spectrum]);
     }
     Ok(vec![
         spectrum,
@@ -879,6 +892,7 @@ pub(super) fn sens(
 
 pub(super) fn pz(
     c: &Circuit,
+    nl: &Netlist,
     opts: &SimOptions,
     nodes: &[String; 4],
     voltage: bool,
@@ -915,10 +929,22 @@ pub(super) fn pz(
     // Open-circuit current drive uses the natural pencil. Voltage drive adds a
     // short at the input for natural modes. Transmission zeros enforce vout=0
     // while admitting an arbitrary input current for either drive convention.
-    for (label, border, enable) in [("pole", voltage, poles), ("zero", true, zeros)] {
-        if !enable {
-            continue;
-        }
+    // ngspice 44.2 removes every independent voltage source that carries an
+    // `ac` specification (even `ac 0`) from the pole-zero network, as the
+    // excitation is applied at the pz input instead; sources without one stay
+    // shorts (R22g probes). Opening a source replaces its branch equation by
+    // i = 0.
+    let opened: Vec<usize> = nl
+        .elements
+        .iter()
+        .filter_map(|e| match &e.kind {
+            ElementKind::VoltageSource { source, .. } if source.ac_given => {
+                c.unknowns.branch(&e.name)
+            }
+            _ => None,
+        })
+        .collect();
+    let pencil = |border: bool, sense: [Option<usize>; 2]| {
         let n = c.dim() + usize::from(border);
         let mut g = vec![0.; n * n];
         let mut cap = g.clone();
@@ -929,21 +955,61 @@ pub(super) fn pz(
                 cap[row * n + col] = ws.asm.c[k];
             }
         }
+        for &b in &opened {
+            for j in 0..n {
+                g[b * n + j] = 0.;
+                cap[b * n + j] = 0.;
+            }
+            g[b * n + b] = 1.;
+        }
         if border {
             for (i, sign) in [(input[0], 1.), (input[1], -1.)] {
                 if let Some(i) = i {
                     g[i * n + n - 1] += sign;
                 }
             }
-            let sense = if label == "pole" { input } else { out };
             for (i, sign) in [(sense[0], 1.), (sense[1], -1.)] {
                 if let Some(i) = i {
                     g[(n - 1) * n + i] += sign;
                 }
             }
         }
-        let roots = sansho_sparse::pencil_roots(&g, &cap, n)
-            .map_err(|e| error(format!("{label} pencil: {e}")))?;
+        sansho_sparse::pencil_roots(&g, &cap, n)
+    };
+    let singular =
+        |e: &sansho_sparse::SolverError| matches!(e, sansho_sparse::SolverError::Singular { .. });
+    // An ideal voltage source across the input already shorts it, so the
+    // added short is a dependent constraint and the bordered pencil is
+    // singular for every s. The natural modes are then those of the circuit
+    // as it stands, and with the input pinned no input current reaches the
+    // output, so there is no finite transmission zero. ngspice 44.2 reports
+    // the same poles and no zeros for such a card (R22g probe).
+    let mut shorted = false;
+    for (label, enable) in [("pole", poles), ("zero", zeros)] {
+        if !enable {
+            continue;
+        }
+        let roots = if label == "pole" {
+            match pencil(voltage, input) {
+                Err(e) if voltage && singular(&e) => {
+                    shorted = true;
+                    pencil(false, input)
+                }
+                r => r,
+            }
+        } else {
+            match pencil(true, out) {
+                Err(e)
+                    if singular(&e)
+                        && (shorted
+                            || matches!(pencil(true, input), Err(ref e) if singular(e))) =>
+                {
+                    Ok(vec![])
+                }
+                r => r,
+            }
+        }
+        .map_err(|e| error(format!("{label} pencil: {e}")))?;
         for (i, z) in roots.into_iter().enumerate() {
             variables.push(var(format!("{label}({})", i + 1), Quantity::PoleZero));
             columns.push(vec![(z.re, z.im)]);

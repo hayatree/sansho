@@ -1,0 +1,13 @@
+tf forms
+* Provenance: original R22g black-box regression deck. Current output, differential output and current input spellings of the transfer-function plot.
+Vsig in 0 dc 1
+Isig 0 a dc 1m
+R1 in a 1k
+Vm a b 0
+R2 b 0 2k
+R3 a c 3k
+R4 c 0 1k
+.tf i(Vm) Vsig
+.tf v(a,c) Isig
+.tf v(c) Isig
+.end

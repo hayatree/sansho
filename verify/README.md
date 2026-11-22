@@ -139,38 +139,47 @@ The 237 earlier reference files contain 280 plots and establish order
 within each multi-plot analysis.
 Noise density precedes integrated noise, PSS time precedes frequency, and
 distortion writes harmonic 2 then 3 or the sum, difference and third-order
-intermodulation products. No cached reference places these families, TF,
-sensitivity, PZ or SP beside another analysis family. Their relative slots
-remain in card order pending capture. The `four_clipped` and `meas_events`
-reference raws contain only transient data. Sansho appends its derived
-Fourier report after native plots and returns measurements as scalars.
+intermodulation products.
 
-| Follow-up plot-order probes in `verify/probes` | Local oracle image |
+### R22f/R22g analysis families and special vectors
+
+The R22e combined probes stopped inside ngspice. Sensitivity aborted once an
+SP port node existed, and a single SP port is fatal. The R22f probes
+`r22f_plots_pss_{forward,reverse}.cir` run on `sansho-ngspice-pss:latest`. Two
+further probes, `r22f_plots_sp_{forward,reverse}`, run on the default image.
+Together they fix the batch plot order, independent of card order:
+
+AC, DC transfer, operating point, transient, pole-zero, transfer function,
+distortion, noise (spectrum then integrated), sensitivity, PSS (time then
+frequency), SP.
+
+Within a family the cards appear in reverse order. Each card's plots stay
+together (`r22g_plots_families`, `r22g_plots_sp`). With a rawfile, ngspice
+ignores `.four` and writes no Fourier plot. The Sansho batch raw does the same,
+and the verifier still compares its in-memory report with one derived from the
+reference transient.
+
+R22g regression decks in `verify/decks` cover the remaining conventions.
+
+| Deck | Behavior |
 |---|---|
-| `r22e_plots_forward.cir`, `r22e_plots_reverse.cir` | `sansho-ngspice:latest` |
-| `r22e_plots_pss_forward.cir`, `r22e_plots_pss_reverse.cir` | `sansho-ngspice-pss:latest` |
+| `r22f_plots_sp_{forward,reverse}` | Every circuit plot except sensitivity lists `v(<port>#res)` after the port current. The node lies between the ideal source and z0, so it equals `v(p) − z0·i`. |
+| `r22g_disto_lin` | `.disto lin np` gives np + 2 evenly spaced frequencies. This was measured for np = 1–7. Decade and octave grids follow AC. |
+| `r22g_noise_port` | Junction shot and flicker noise use the current including the parallel gmin branch. The measured power ratio is (I + gmin·V)/I. |
+| `r22g_noise_single` | A one-point noise grid writes no integrated plot. |
+| `r22g_pz_sources` | In pole-zero analysis, a voltage source with any `ac` specification is open, even `ac 0`. Sources without one are shorts. |
+| `r22g_tf_forms`, `r22g_tf_current` | TF vectors are written as `v(Transfer_function)`, `v(<src>#Input_impedance)`, `v(<branch>#Output_impedance)` and `v(output_impedance_at_V(...))`. A current output reports the input resistance when the branch is the input source and 1e20 Ω otherwise. |
 
-Each pair reverses the complete card sequence. Its two-point AC sweep spans
-700 Hz to 2.6 kHz to test the start-only rule at a different frequency ratio.
-The PSS pair includes a free-running LC tank. To capture with the installed images, run from the
-repository root. The local image check and explicit pull policy keep this offline.
+PZ roots and SP matrix entries are likewise written as `v(pole(n))` and
+`v(S_i_j)` voltages. The raw reader restores the native names and units.
+Port numbers that are not exactly 1..n are fatal in every analysis, and SP
+needs at least two ports.
 
-```sh
-mkdir -p target/r22e
-for deck in verify/probes/r22e_plots_*.cir; do
-    stem=$(basename "$deck" .cir)
-    case "$stem" in
-        *_pss_*) oracle=sansho-ngspice-pss:latest ;;
-        *) oracle=sansho-ngspice:latest ;;
-    esac
-    docker image inspect "$oracle" >/dev/null || break
-    if [ "$oracle" = sansho-ngspice-pss:latest ]; then
-        SANSHO_NGSPICE_IMAGE="$oracle" tools/ngspice/ngspice.sh -b "$deck" -r "target/r22e/$stem.ng.raw" >"target/r22e/$stem.ng.log" 2>&1
-    else
-        docker run --rm --pull=never --network none -e SPICE_ASCIIRAWFILE=1 -u "$(id -u):$(id -g)" -v "$PWD:$PWD" -w "$PWD" "$oracle" -b "$deck" -r "target/r22e/$stem.ng.raw" >"target/r22e/$stem.ng.log" 2>&1
-    fi
-done
-```
+ngspice 44.2 does not restore the opened `ac` sources after `.pz`. TF, distortion,
+noise and SP results after a pole-zero card then differ from the same card run
+alone. For example, the input resistance falls from 2189.5 Ω to 48.8 Ω.
+Sansho does not reproduce this state leak. The regression decks therefore keep
+`.pz` in a deck of its own.
 
 ## Built-in BSIM4 and SKY130
 

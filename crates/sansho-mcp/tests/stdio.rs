@@ -313,7 +313,7 @@ fn hierarchical_transconductance_waveform() {
 #[test]
 fn rf_port_analysis_override_and_waveform() {
     let mut client = Client::start();
-    let (r,err)=client.tool("simulate",json!({"netlist":"RF port\nV1 p 0 portnum=1\nR1 p 0 100\n.op\n.end\n","analyses":["sp lin 2 1k 2k"]}));
+    let (r,err)=client.tool("simulate",json!({"netlist":"RF port\nV1 p 0 portnum=1\nR1 p 0 100\nV2 q 0 portnum=2\nR2 q 0 50\n.op\n.end\n","analyses":["sp lin 2 1k 2k"]}));
     assert!(!err && r["job"]["status"] == "ok", "{r}");
     let (wave, err) = client.tool(
         "get_waveform",

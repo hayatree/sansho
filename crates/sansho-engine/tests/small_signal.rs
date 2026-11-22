@@ -240,7 +240,9 @@ fn canonical_cards_and_raw_plots_round_trip() {
     let mut raw = vec![];
     sansho_output::write_raw_ascii(&run.results, &mut raw).unwrap();
     let decoded = sansho_output::read_raw_ascii(std::str::from_utf8(&raw).unwrap()).unwrap();
-    assert_eq!(decoded.analyses.len(), 6);
+    // Noise, integrated noise, TF, sensitivity and transient. As in ngspice,
+    // a batch raw file does not carry the Fourier report.
+    assert_eq!(decoded.analyses.len(), 5);
     for (before, after) in run
         .results
         .into_raw_output()
@@ -453,7 +455,7 @@ fn classical_mos_temperature_noise_sensitivity_and_poles_agree_in_square_law_lim
 
 #[test]
 fn bsim3_common_source_tf_sens_and_pole() {
-    let deck = "BSIM3 loaded common source\n.model chip nmos level=49 version=3.3.0 vth0=0.52 k1=0.5 k2=0\nVd rail 0 1.8\nVg g 0 dc 1.15 ac 1\nRd rail out 4k\nM1 out g 0 0 chip l=0.5u w=2u\nCl out 0 1n\n.tf v(out) Vg\n.sens v(out)\n.pz out 0 out 0 cur pol\n.end";
+    let deck = "BSIM3 loaded common source\n.model chip nmos level=49 version=3.3.0 vth0=0.52 k1=0.5 k2=0\nVd rail 0 1.8\nVg g 0 dc 1.15\nRd rail out 4k\nM1 out g 0 0 chip l=0.5u w=2u\nCl out 0 1n\n.tf v(out) Vg\n.sens v(out)\n.pz out 0 out 0 cur pol\n.end";
     let r = simulate(deck);
     let gain = first(&r.analyses[0], "transfer_function");
     assert!(gain < -0.1);
@@ -804,14 +806,20 @@ fn voltage_feedback_mixes_the_second_order_response_into_the_third() {
 #[test]
 fn r9_raw_roundtrip_preserves_frequency_scale_and_plot_order() {
     let r = simulate(
-        "port and distortion\nV1 in 0 dc 0.5 portnum=1 distof1 .001\nR1 in 0 10k\nD1 in 0 dm\n.model dm d\n.sp lin 2 1k 2k\n.disto lin 2 1k 2k\n",
+        "port and distortion\nV1 in 0 dc 0.5 portnum=1 distof1 .001\nR1 in 0 10k\nD1 in 0 dm\nV2 o 0 dc 0 portnum=2\nR2 in o 1k\n.model dm d\n.sp lin 2 1k 2k\n.disto lin 2 1k 2k\n",
     );
     let mut raw = vec![];
     sansho_output::write_raw_ascii(&r, &mut raw).unwrap();
     let decoded = sansho_output::read_raw_ascii(std::str::from_utf8(&raw).unwrap()).unwrap();
+    // The batch file lists plots in ngspice's fixed analysis order.
+    let r = r.into_raw_output();
     assert_eq!(r.analyses.len(), decoded.analyses.len());
     for (a, b) in r.analyses.iter().zip(decoded.analyses) {
-        assert_eq!((a.kind, &a.scale_values), (b.kind, &b.scale_values));
+        assert_eq!(a.kind, b.kind);
+        assert_eq!(a.scale_values.len(), b.scale_values.len());
+        for (&x, &y) in a.scale_values.iter().zip(&b.scale_values) {
+            check(y, x, 1e-14);
+        }
         assert_eq!(a.variables.len(), b.variables.len());
         for (x, y) in a.variables.iter().zip(&b.variables) {
             assert!(x.name.eq_ignore_ascii_case(&y.name));

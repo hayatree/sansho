@@ -1,0 +1,14 @@
+Pole-zero source treatment
+* Provenance: original R22g black-box regression deck. Voltage sources with an ac specification (even ac 0) are open in pole-zero analysis; others are shorts. Two cards appear in reverse order.
+Vdrive in 0 dc 0.4 ac 1
+Rdrive in sense 1k
+Rfeed sense out 1k
+Clead sense out 10n
+Rload out 0 2k
+Vport2 port 0 dc 0 ac 0
+Rport port out 100
+Vdc d 0 dc 1
+Rd d out 300
+.pz sense 0 out 0 vol pz
+.pz sense 0 out 0 cur pol
+.end
