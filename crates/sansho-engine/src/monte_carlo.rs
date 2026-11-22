@@ -144,13 +144,12 @@ impl MonteCarlo {
                 "at least one run is required",
             )]);
         }
-        // Bound live waveforms even when nested joins yield to other ready runs.
-        let workers = rayon::current_num_threads();
-        let window = if self.base.circuit.parallel || self.base.circuit.dim() >= 256 {
-            workers.min(2)
-        } else {
-            workers
-        };
+        let plan = Schedule::new(
+            rayon::current_num_threads(),
+            n,
+            self.base.circuit.dim(),
+            self.base.circuit.parallel,
+        );
         let mut runs = Vec::new();
         runs.try_reserve(n).map_err(|_| {
             vec![Diagnostic::error(
@@ -158,15 +157,32 @@ impl MonteCarlo {
                 "cannot allocate the requested run table",
             )]
         })?;
-        for start in (0..n).step_by(window) {
-            let end = start.saturating_add(window).min(n);
-            runs.extend(
-                (start..end)
-                    .into_par_iter()
-                    .map(|i| self.row(seed, i as u64, save_waves))
-                    .collect::<Vec<_>>(),
-            );
-        }
+        // Each lane claims the next index when its run finishes, so a slow run
+        // never idles the other workers. Rows are reordered by index afterwards.
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let lanes: Vec<Vec<Run>> = (0..plan.lanes)
+            .into_par_iter()
+            .map(|_| {
+                let lane = || {
+                    let mut rows = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if i >= n {
+                            break rows;
+                        }
+                        rows.push(self.row(seed, i as u64, save_waves));
+                    }
+                };
+                // A serial lane keeps device evaluation and LU out of the shared pool.
+                if plan.inner {
+                    lane()
+                } else {
+                    super::parallel::with_threads(1, lane)
+                }
+            })
+            .collect();
+        runs.extend(lanes.into_iter().flatten());
+        runs.sort_unstable_by_key(|r| r.index);
         Ok(self.report(seed, runs))
     }
 
@@ -193,10 +209,6 @@ impl MonteCarlo {
             statistics,
         }
     }
-    fn row(&self, seed: u64, index: u64, save_waves: bool) -> Run {
-        Self::row_from(seed, index, save_waves, self.run(seed, index))
-    }
-
     pub(crate) fn row_from(
         seed: u64,
         index: u64,
@@ -218,6 +230,37 @@ impl MonteCarlo {
             measures,
             waves,
             diagnostics,
+        }
+    }
+}
+
+impl MonteCarlo {
+    fn row(&self, seed: u64, index: u64, save_waves: bool) -> Run {
+        Self::row_from(seed, index, save_waves, self.run(seed, index))
+    }
+}
+
+/// Unknowns that concurrently live runs may hold (bounds waveform memory).
+const LIVE_UNKNOWNS: usize = 1 << 16;
+
+/// How many runs execute at once and whether each also parallelizes internally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Schedule {
+    lanes: usize,
+    inner: bool,
+}
+
+impl Schedule {
+    fn new(workers: usize, runs: usize, dim: usize, parallel: bool) -> Self {
+        let workers = workers.max(1);
+        let memory = (LIVE_UNKNOWNS / dim.max(1)).max(1);
+        // Run-level parallelism has no synchronization; device-level parallelism
+        // only pays off when runs alone cannot occupy the workers.
+        let inner = parallel && (runs < workers || memory < workers);
+        let lanes = if inner { 2 } else { workers };
+        Self {
+            lanes: lanes.min(runs).min(memory).max(1),
+            inner,
         }
     }
 }
@@ -247,5 +290,65 @@ fn summarize(name: &str, mut x: Vec<f64>) -> Statistics {
         p05: quantile(0.05),
         p50: quantile(0.5),
         p95: quantile(0.95),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Schedule;
+
+    #[test]
+    fn schedule_prefers_whole_runs_per_worker() {
+        let s = |w, n, d, p| Schedule::new(w, n, d, p);
+        assert_eq!(
+            s(32, 256, 600, true),
+            Schedule {
+                lanes: 32,
+                inner: false
+            }
+        );
+        assert_eq!(
+            s(32, 256, 600, false),
+            Schedule {
+                lanes: 32,
+                inner: false
+            }
+        );
+        assert_eq!(
+            s(32, 5, 600, false),
+            Schedule {
+                lanes: 5,
+                inner: false
+            }
+        );
+        assert_eq!(
+            s(32, 5, 600, true),
+            Schedule {
+                lanes: 2,
+                inner: true
+            }
+        );
+        // Large circuits keep few live runs and parallelize each one.
+        assert_eq!(
+            s(32, 256, 40_000, true),
+            Schedule {
+                lanes: 1,
+                inner: true
+            }
+        );
+        assert_eq!(
+            s(32, 256, 8_192, false),
+            Schedule {
+                lanes: 8,
+                inner: false
+            }
+        );
+        assert_eq!(
+            s(1, 3, 10, false),
+            Schedule {
+                lanes: 1,
+                inner: false
+            }
+        );
     }
 }
