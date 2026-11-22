@@ -4,6 +4,8 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). V
 
 ## [Unreleased]
 
+- Add an optional CUDA batch for Monte Carlo (`sansho mc --gpu`, build feature `gpu`). Each run keeps its CPU Newton and step control; diode evaluations of all concurrent runs share one kernel launch, with results independent of the lane count. An experimental `--gpu-jacobian f32` uses single-precision derivatives inside Newton iterations only. [Design and measurements](docs/architecture.md#82-g1-gpu-batch-sansho-gpu-feature-gpu)
+
 - Add two-dimensional NUMD/NBJT and four-terminal NUMOS with silicon/oxide meshes, electrodes, surface mobility and interface charge. Eight acceptance circuits cover diode C–V, NPN characteristics, MOS transfer/output, gate AC and a loaded inverter transient. [Geometry, analytic checks and open calibration choices](docs/cider.md#two-dimensional-devices)
 
 - Add one-dimensional numerical silicon diodes and bipolar transistors with CIDER input cards, DC, frequency-dependent terminal admittance, carrier-storage transient and temperature. R20c resolves the silicon densities of states, transport and recombination parameters, and the bias-dependent NBJT base access. All six R20 acceptance decks pass against ngspice 44.2. [Equations and measured mesh convergence](docs/cider.md)

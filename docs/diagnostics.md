@@ -91,6 +91,8 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 | [`E-MC-COUNT`](#e-mc-count) | error | Invalid Monte Carlo run count |
 | [`E-MC-PARAM`](#e-mc-param) | error | Invalid statistical parameter |
 | [`E-MC-TOPOLOGY`](#e-mc-topology) | error | Statistical topology change |
+| [`E-GPU`](#e-gpu) | error | GPU batch failure |
+| [`E-GPU-UNSUPPORTED`](#e-gpu-unsupported) | error | GPU batch unavailable |
 | [`E-API-INPUT`](#e-api-input) | error | Invalid request |
 | [`E-API-UNKNOWN-ID`](#e-api-unknown-id) | error | Unknown circuit or job |
 | [`E-API-UNKNOWN-SIGNAL`](#e-api-unknown-signal) | error | Unknown signal |
@@ -620,6 +622,19 @@ Every diagnostic carries a stable `code`. Codes starting with `E-` are errors (t
 **Statistical topology change.** A statistical binding requires different device connectivity, internal nodes or stamps.
 
 - Use separate decks for different topologies.
+
+## E-GPU
+
+**GPU batch failure.** The CUDA driver or NVRTC could not be loaded, a kernel failed to compile or launch, or a batch lane stopped early.
+
+- Check that an NVIDIA driver and the CUDA run-time compiler are installed.
+- Run the batch without `--gpu` to use the CPU.
+
+## E-GPU-UNSUPPORTED
+
+**GPU batch unavailable.** The build has no GPU support, or no device group of the circuit has a GPU kernel.
+
+- Rebuild with `--features gpu`, or run the batch on the CPU.
 
 ## E-API-INPUT
 

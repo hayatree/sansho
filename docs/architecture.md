@@ -462,7 +462,7 @@ result). The M3 exit criterion is tested end to end in `crates/sansho-mcp/tests/
 | L1 | Device evaluation within a run | Parallel over group × chunk (D3/D4) | M3 (done) |
 | L2 | Matrix assembly within a run | Parallel reduction per value index | M3 (done) |
 | L3 | Numeric LU within a run | Independent column subtrees of a pivoted BTF block | M5-4 |
-| G1 | GPU batch | Same topology × N instances (MC): device eval on GPU; LU as CPU batch or cuDSS uniform batch | M5 |
+| G1 | GPU batch | Same topology × N instances (MC): device eval on GPU; LU as CPU batch or cuDSS uniform batch | Diode kernel done (§8.2) |
 | G2 | GPU-resident single run | Assembly through LU entirely on GPU. Research track | TBD |
 
 - All levels run on a rayon pool. `run_with` uses up to `threads` workers.
@@ -513,6 +513,35 @@ result). The M3 exit criterion is tested end to end in `crates/sansho-mcp/tests/
 This is the CPU boundary for G1. The stable indices identify a model field or device lane independently of the run. A future device evaluator can transpose a window of sampled numeric fields into arrays indexed by field, instance and run, evaluate a group for that window and return the existing ordered stamp slots for each run. Newton histories, numeric pivots and timestep acceptance belong to each run. The current backend evaluates CPU groups. It holds at most one window of active workspaces, limited to two concurrent runs for a parallel circuit or one with at least 256 unknowns. Retained results contain measurements and diagnostics unless waveforms were requested.
 
 See [Monte Carlo analysis](monte-carlo.md) for sampling rules, output fields and replay.
+
+### 8.2 G1 GPU batch (`sansho-gpu`, feature `gpu`)
+
+`sansho mc --gpu` and `MonteCarlo::batch_gpu` simulate `lanes` runs at once, each on
+its own OS thread with a one-worker pool and the unchanged CPU engine. After binding,
+groups with a GPU kernel (currently the diode) are replaced by `sansho_gpu::Batched`.
+Its evaluations go to a coordinator. When every live lane is waiting, the last
+arrival launches one kernel for all pending requests. A kernel thread reads only its
+own lane's unknowns, state and model row, so results are bit-identical for any lane
+count. Output and startup-bias evaluations and runs whose rows the kernel cannot
+express stay on the CPU.
+
+The kernel transcribes the Rust diode in the same operation order, without FMA
+contraction. Per evaluation it agrees with the CPU group to 1e-12 relative, and the
+limited junction voltages agree exactly (`crates/sansho-gpu/tests`). The remaining
+differences come from the CUDA `exp`/`log`/`pow` implementations. They are amplified
+through Newton and step control to at most 2e-4 relative in `verify/mc-decks/diode_clamp.cir`
+(median 6e-9), inside RELTOL.
+
+`--gpu-jacobian f32` computes the derivative part of the dual numbers in single
+precision during limited DC and transient Newton iterations. Residuals, charges and
+all unlimited evaluations (AC, noise, converged linearizations) stay double, so the
+converged solution satisfies the same tolerances. On a 512-diode ladder the Newton
+iteration count is unchanged and measurements move by 1e-13 relative.
+
+Measured on an NVIDIA GB10 (FP64 ≈ 0.32 TFLOP/s, about equal to its 20-core CPU),
+the 512-diode ladder with 256 runs takes 21 s on the GPU and 7.8 s on the CPU. The
+lock-step rounds and per-launch transfers dominate. A speedup needs an FP64-strong GPU
+or a compute-heavy kernel (BSIM4, Verilog-A), and LU moved off the lane threads.
 
 ---
 
@@ -693,5 +722,6 @@ loader remain outside the current implementation. [Compatibility and numerical d
 2. MSRV (proposal: latest stable − 2)
 3. ~~Choice of Rust MCP SDK~~ — resolved in M3: own implementation of the stdio transport (see §7.4)
 4. ~~SKY130 BSIM4 delivery~~ — level 54 is a clean-room built-in in `sansho-devices`.
-5. First GPU backend: wgpu (portability) or CUDA (performance)
+5. ~~First GPU backend~~ — CUDA through `cudarc`, loaded at run time. D7 requires double
+   precision, which WGSL does not portably provide.
 6. Spilling the waveform store to disk for large transients (Arrow / Parquet?)

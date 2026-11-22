@@ -663,6 +663,21 @@ pub const CODES: &[CodeInfo] = &[
         "A statistical binding requires different device connectivity, internal nodes or stamps.",
         &["Use separate decks for different topologies."],
     ),
+    e(
+        "E-GPU",
+        "GPU batch failure",
+        "The CUDA driver or NVRTC could not be loaded, a kernel failed to compile or launch, or a batch lane stopped early.",
+        &[
+            "Check that an NVIDIA driver and the CUDA run-time compiler are installed.",
+            "Run the batch without `--gpu` to use the CPU.",
+        ],
+    ),
+    e(
+        "E-GPU-UNSUPPORTED",
+        "GPU batch unavailable",
+        "The build has no GPU support, or no device group of the circuit has a GPU kernel.",
+        &["Rebuild with `--features gpu`, or run the batch on the CPU."],
+    ),
     // --- API / MCP ---
     e(
         "E-API-INPUT",

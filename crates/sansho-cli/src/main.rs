@@ -83,6 +83,8 @@ enum Command {
         /// Include the deck's saved waveforms in JSON.
         #[arg(long, requires = "json")]
         save_waves: bool,
+        #[command(flatten)]
+        gpu: GpuArgs,
     },
     /// Simulate several independent netlists in parallel and print one JSON line per netlist.
     Batch {
@@ -332,6 +334,64 @@ fn batch(netlists: &[PathBuf], jobs: Option<usize>) -> Result<ExitCode, ExitCode
     })
 }
 
+/// GPU batch options of `sansho mc`.
+#[derive(clap::Args, Debug)]
+struct GpuArgs {
+    /// Batch device evaluation on a CUDA GPU (requires the `gpu` build feature).
+    #[arg(long)]
+    gpu: bool,
+    /// Concurrently simulated runs on the GPU (default 256).
+    #[arg(long, requires = "gpu")]
+    gpu_lanes: Option<usize>,
+    /// Jacobian precision during Newton iterations: f64 or f32 (experimental).
+    #[arg(long, requires = "gpu", default_value = "f64", value_parser = ["f64", "f32"])]
+    gpu_jacobian: String,
+}
+
+#[cfg(feature = "gpu")]
+fn gpu_batch(
+    plan: &sansho_engine::monte_carlo::MonteCarlo,
+    seed: u64,
+    n: usize,
+    save_waves: bool,
+    args: &GpuArgs,
+) -> Result<sansho_engine::monte_carlo::Report, Vec<sansho_diag::Diagnostic>> {
+    use sansho_engine::gpu_batch::{GpuConfig, Jacobian};
+    let defaults = GpuConfig::default();
+    let config = GpuConfig {
+        lanes: args.gpu_lanes.unwrap_or(defaults.lanes),
+        jacobian: if args.gpu_jacobian == "f32" {
+            Jacobian::F32
+        } else {
+            Jacobian::F64
+        },
+        ..defaults
+    };
+    let (report, stats) = plan.batch_gpu(seed, n, save_waves, &config)?;
+    eprintln!(
+        "gpu: {} launches, {} group evaluations ({} with f32 Jacobians), {:.3} s in launches",
+        stats.launches,
+        stats.requests,
+        stats.f32_launches,
+        stats.launch_ns as f64 * 1e-9
+    );
+    Ok(report)
+}
+
+#[cfg(not(feature = "gpu"))]
+fn gpu_batch(
+    _plan: &sansho_engine::monte_carlo::MonteCarlo,
+    _seed: u64,
+    _n: usize,
+    _save_waves: bool,
+    _args: &GpuArgs,
+) -> Result<sansho_engine::monte_carlo::Report, Vec<sansho_diag::Diagnostic>> {
+    Err(vec![sansho_diag::Diagnostic::error(
+        "E-GPU-UNSUPPORTED",
+        "this sansho build has no GPU support; rebuild with --features gpu",
+    )])
+}
+
 fn mc(
     netlist: &PathBuf,
     n: usize,
@@ -339,10 +399,17 @@ fn mc(
     jobs: Option<usize>,
     json: bool,
     save_waves: bool,
+    gpu: &GpuArgs,
 ) -> Result<ExitCode, ExitCode> {
     let text = read(netlist)?;
-    let report = sansho_engine::monte_carlo::MonteCarlo::prepare(&text, &loader(netlist))
-        .and_then(|p| p.batch(seed, n, save_waves, &config(jobs)));
+    let report =
+        sansho_engine::monte_carlo::MonteCarlo::prepare(&text, &loader(netlist)).and_then(|p| {
+            if gpu.gpu {
+                gpu_batch(&p, seed, n, save_waves, gpu)
+            } else {
+                p.batch(seed, n, save_waves, &config(jobs))
+            }
+        });
     match report {
         Ok(report) => {
             let failed = report.runs.iter().filter(|r| !r.success).count();
@@ -629,7 +696,8 @@ fn main() -> ExitCode {
             jobs,
             json,
             save_waves,
-        } => mc(netlist, *runs, *seed, *jobs, *json, *save_waves),
+            gpu,
+        } => mc(netlist, *runs, *seed, *jobs, *json, *save_waves, gpu),
         Command::Batch { netlists, jobs } => batch(netlists, *jobs),
         Command::Check { netlist, json } => check(netlist, *json),
     };

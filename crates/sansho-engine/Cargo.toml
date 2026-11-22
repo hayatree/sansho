@@ -23,6 +23,9 @@ sansho-output = { path = "../sansho-output" }
 rayon = "1.12.0"
 serde = { version = "1", features = ["derive"] }
 sansho-va = { path = "../sansho-va" }
+sansho-gpu = { path = "../sansho-gpu", optional = true }
 
 [features]
 jit = ["sansho-devices/jit"]
+# Batched GPU device evaluation for Monte Carlo (CUDA, loaded at run time).
+gpu = ["dep:sansho-gpu"]

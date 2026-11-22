@@ -12,7 +12,7 @@ use serde::Serialize;
 #[derive(Debug)]
 pub struct MonteCarlo {
     parameters: ParameterPlan,
-    base: Checked,
+    pub(crate) base: Checked,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -56,6 +56,16 @@ impl MonteCarlo {
 
     /// Reproduce an index without advancing a generator or running earlier indices.
     pub fn run(&self, seed: u64, index: u64) -> Result<RunOutput, RunError> {
+        self.run_bound(seed, index, |_| Ok(()))
+    }
+
+    /// Run an index after `bind` has adjusted its freshly bound circuit.
+    pub(crate) fn run_bound(
+        &self,
+        seed: u64,
+        index: u64,
+        bind: impl FnOnce(&mut super::circuit::Circuit) -> Result<(), Vec<Diagnostic>>,
+    ) -> Result<RunOutput, RunError> {
         let fail = |diagnostics| RunError {
             diagnostics,
             measurement_context: None,
@@ -65,11 +75,12 @@ impl MonteCarlo {
             .parameters
             .sample(Sample { seed, index })
             .map_err(fail)?;
-        let (circuit, mut warnings) = self
+        let (mut circuit, mut warnings) = self
             .base
             .circuit
             .bind_run(&nl, &self.base.options)
             .map_err(fail)?;
+        bind(&mut circuit).map_err(fail)?;
         for w in &self.base.warnings {
             if !warnings.contains(w) {
                 warnings.push(w.clone());
@@ -156,6 +167,11 @@ impl MonteCarlo {
                     .collect::<Vec<_>>(),
             );
         }
+        Ok(self.report(seed, runs))
+    }
+
+    /// Summarize finished runs in index order.
+    pub(crate) fn report(&self, seed: u64, runs: Vec<Run>) -> Report {
         let statistics = self
             .parameters
             .nominal()
@@ -171,14 +187,23 @@ impl MonteCarlo {
                 summarize(&card.name, values)
             })
             .collect();
-        Ok(Report {
+        Report {
             seed,
             runs,
             statistics,
-        })
+        }
     }
     fn row(&self, seed: u64, index: u64, save_waves: bool) -> Run {
-        let (result, diagnostics, success) = match self.run(seed, index) {
+        Self::row_from(seed, index, save_waves, self.run(seed, index))
+    }
+
+    pub(crate) fn row_from(
+        seed: u64,
+        index: u64,
+        save_waves: bool,
+        outcome: Result<RunOutput, RunError>,
+    ) -> Run {
+        let (result, diagnostics, success) = match outcome {
             Ok(out) => (Some(out.results), out.warnings, true),
             Err(err) => (err.partial, err.diagnostics, false),
         };

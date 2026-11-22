@@ -1,0 +1,22 @@
+[package]
+name = "sansho-gpu"
+description = "Batched GPU device evaluation for fixed-topology run batches"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sansho-diag = { path = "../sansho-diag" }
+sansho-devices = { path = "../sansho-devices" }
+# CUDA is loaded at run time, so builds need no toolkit and hosts without a GPU only fail
+# when a GPU batch is requested.
+cudarc = { version = "0.19.10", default-features = false, features = ["std", "driver", "nvrtc", "dynamic-loading", "cuda-13000"] }

@@ -11,6 +11,8 @@ mod analysis;
 mod cider_outputs;
 mod circuit;
 mod fourier;
+#[cfg(feature = "gpu")]
+pub mod gpu_batch;
 pub use fourier::fourier;
 mod digital;
 mod distortion;

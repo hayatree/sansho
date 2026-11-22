@@ -30,3 +30,4 @@ sansho-diag = { path = "../sansho-diag" }
 
 [features]
 jit = ["sansho-engine/jit"]
+gpu = ["sansho-engine/gpu"]

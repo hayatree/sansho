@@ -73,6 +73,7 @@ Identical texts share an entry. Component notices are included alongside crate l
 | Crate and version | Files |
 | --- | --- |
 | hmac-sha256 1.1.15 | [LICENSE](#text-6f4e2de03c87fde1) |
+| libloading 0.9.1 | [LICENSE](#text-b29f8b01452350c2) |
 
 ## MIT
 
@@ -97,6 +98,7 @@ Identical texts share an entry. Component notices are included alongside crate l
 | arbitrary 1.5.0 | [LICENSE-APACHE](#text-a60eea8175145316) · [LICENSE-MIT](#text-15656cc11a8331f2) |
 | bitflags 2.13.2 | [LICENSE-APACHE](#text-a60eea8175145316) · [LICENSE-MIT](#text-6485b8ed310d3f03) |
 | bumpalo 3.20.4 | [LICENSE-APACHE](#text-a60eea8175145316) · [LICENSE-MIT](#text-65f94e99ddaf4f5d) |
+| cfg-if 1.0.5 | [LICENSE-APACHE](#text-a60eea8175145316) · [LICENSE-MIT](#text-378f5840b258e277) |
 | clap 4.6.8 | [LICENSE-APACHE](#text-249fdb6694467dd6) · [LICENSE-MIT](#text-6efb0476a1cc0850) |
 | clap_builder 4.6.7 | [LICENSE-APACHE](#text-249fdb6694467dd6) · [LICENSE-MIT](#text-6efb0476a1cc0850) |
 | clap_derive 4.6.8 | [LICENSE-APACHE](#text-249fdb6694467dd6) · [LICENSE-MIT](#text-6efb0476a1cc0850) |
@@ -105,6 +107,7 @@ Identical texts share an entry. Component notices are included alongside crate l
 | crossbeam-deque 0.8.8 | [LICENSE-APACHE](#text-a60eea8175145316) · [LICENSE-MIT](#text-5734ed989dfca1f6) |
 | crossbeam-epoch 0.9.21 | [LICENSE-APACHE](#text-a60eea8175145316) · [LICENSE-MIT](#text-5734ed989dfca1f6) |
 | crossbeam-utils 0.8.23 | [LICENSE-APACHE](#text-a60eea8175145316) · [LICENSE-MIT](#text-5734ed989dfca1f6) |
+| cudarc 0.19.10 | [LICENSE-APACHE](#text-62c7a1e35f564068) · [LICENSE-MIT](#text-23f18e03dc49df91) |
 | either 1.19.0 | [LICENSE-APACHE](#text-a60eea8175145316) · [LICENSE-MIT](#text-7576269ea71f767b) |
 | errno 0.3.15 | [LICENSE-APACHE](#text-a60eea8175145316) · [LICENSE-MIT](#text-8764a597675778dd) |
 | gimli 0.33.0 | [LICENSE-APACHE](#text-a60eea8175145316) · [LICENSE-MIT](#text-7b63ecd5f1902af1) |
@@ -1157,6 +1160,36 @@ is licensed under:
    <http://opensource.org/licenses/MIT>,
 
 at your option.
+```
+
+### Text 378f5840b258e277
+
+```
+Copyright (c) 2014 Alex Crichton
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 ```
 
 ### Text 3823dda7cf046602
@@ -2358,6 +2391,23 @@ the following restrictions:
     misrepresented as being the original software.
 
 3. This notice may not be removed or altered from any source distribution.
+```
+
+### Text b29f8b01452350c2
+
+```
+Copyright © 2015, Simonas Kazlauskas
+
+Permission to use, copy, modify, and/or distribute this software for any purpose with or without
+fee is hereby granted, provided that the above copyright notice and this permission notice appear
+in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
+SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE
+AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,
+NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
 ```
 
 ### Text c16f8dcf1a368b83

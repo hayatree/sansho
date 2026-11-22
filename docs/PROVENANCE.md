@@ -33,6 +33,7 @@ the references for numerical methods and model equations.
 | `sansho-api` | Original Rust sessions, job management, hashes, summaries, alterations and waveform queries. |
 | `sansho-cli` | Original argument handling, reporting, batch execution, raw/JSON export and process-level tests. |
 | `sansho-mcp` | Original stdio transport, tool schemas, session adapter and protocol tests from the MCP and JSON-RPC specifications. |
+| `sansho-gpu` | Original lock-step batch coordinator, device-group adapter and CUDA C diode kernel transcribed from Sansho's own `diode.rs`, `junction.rs` and `dual.rs`. CUDA is reached through the `cudarc` crate (MIT OR Apache-2.0) at run time. |
 | `sansho-verify` | Original raw comparison, interpolation, reference-process drivers and harness tests. |
 
 The examples, verification circuits, model cards, include wrappers, black-box
@@ -470,3 +471,16 @@ JFET2 follows Parker and Skellern, IEEE T-MTT 45(9), 1997, with parameter defini
 The early BSIM channel and charge use Sheu, Scharfetter, Ko and Jeng, IEEE JSSC 22(4), 1987, and Jeng, UCB/ERL M90/90. Parameter meanings follow §§7.6.3 and 27.6.6–7. Inverse-dimension units, body clamps, mobility normalization, weak-inversion joins and charge partition were independently checked against terminal data. All R14 and R14b circuits are original. [Quantitative derivations and remaining discrepancies](r14-models.md)
 
 Control formatting follows manual §§13.5.59 and 13.5.106 and the cached R10/R13 default print, measurement and wrdata samples. The R14c formatter uses the four corrected 44.2 control logs and wrdata byte streams. The R14b admittances and inverter comparisons independently check the charge equations, including the 0/100 partition in Berkeley ERL M85/85 §4.2 and the rounded cutoff in the Parker–Skellern PSFET model description. The zero-VMAX MOS3/9 shortening follows the paired drain sweeps and continuity at pinch-off. [Measurement details](r14-models.md)
+
+## G1 GPU batch evaluation
+
+The GPU Monte Carlo path keeps the CPU engine per run and batches only device
+evaluation, an original design from architecture §8 (G1). The diode kernel is a
+line-by-line CUDA C transcription of Sansho's own diode, junction and dual-number
+code, in the same operation order and with FMA contraction disabled. The optional
+single-precision Jacobian is inexact Newton: J. E. Dennis and R. B. Schnabel,
+*Numerical Methods for Unconstrained Optimization and Nonlinear Equations*
+(SIAM, 1996), §6, where an approximate Jacobian changes the convergence rate but
+not the fixed point. NVIDIA's CUDA C++ Programming Guide and NVRTC documentation
+define the kernel language and run-time compilation. No GPU circuit-simulator
+source was consulted.

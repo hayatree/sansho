@@ -235,6 +235,74 @@ impl Diodes {
     }
 }
 
+/// Number of `f64` values per instance in [`Diodes::batch_rows`].
+pub const DIODE_BATCH_PARAMS: usize = 26;
+
+/// Connectivity of one diode instance for batched evaluation: anode, cathode and internal
+/// anode unknowns (`-1` for ground), followed by the `G`, `C`, `f` and `q` slot offsets.
+pub type DiodeBatchTopology = [i64; 7];
+
+impl Diodes {
+    /// Flattened model rows and connectivity for batched (e.g. GPU) evaluation.
+    ///
+    /// Each instance contributes [`DIODE_BATCH_PARAMS`] values in the order
+    /// `is n rs cjo vj m fc tt bv nbv isr nr ikf jsw ns cjp php mjsw fcs perimeter area
+    /// temperature off knee at_bv has_breakdown`, where an unprepared temperature is NaN.
+    /// Returns `None` when a breakdown knee would depend on the evaluation temperature.
+    pub fn batch_rows(&self) -> Option<(Vec<DiodeBatchTopology>, Vec<f64>)> {
+        let node = |n: Node| n.map_or(-1, |i| i as i64);
+        let mut topology = Vec::with_capacity(self.len());
+        let mut params = Vec::with_capacity(self.len() * DIODE_BATCH_PARAMS);
+        for i in 0..self.len() {
+            let m = &self.model[i];
+            let at = self.at.get(i)?;
+            let breakdown = if m.bv.is_finite() {
+                Some(self.breakdown[i]?)
+            } else {
+                None
+            };
+            topology.push([
+                node(self.a[i]),
+                node(self.k[i]),
+                node(self.ai[i]),
+                at.g as i64,
+                at.c as i64,
+                at.f as i64,
+                at.q as i64,
+            ]);
+            params.extend([
+                m.is,
+                m.n,
+                m.rs,
+                m.cjo,
+                m.vj,
+                m.m,
+                m.fc,
+                m.tt,
+                m.bv,
+                m.nbv,
+                m.isr,
+                m.nr,
+                m.ikf,
+                m.jsw,
+                m.ns,
+                m.cjp,
+                m.php,
+                m.mjsw,
+                m.fcs,
+                m.perimeter,
+                self.area[i],
+                m.temperature.unwrap_or(f64::NAN),
+                f64::from(u8::from(self.off[i])),
+                breakdown.map_or(0., |b| b.knee),
+                breakdown.map_or(0., |b| b.at_bv),
+                f64::from(u8::from(breakdown.is_some())),
+            ]);
+        }
+        Some((topology, params))
+    }
+}
+
 impl DeviceGroup for Diodes {
     fn distortion(
         &self,

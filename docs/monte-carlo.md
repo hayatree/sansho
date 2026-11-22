@@ -22,6 +22,17 @@ The MCP `monte_carlo` tool accepts exactly one of `path` and `netlist`. Paths re
 
 MCP returns the scalar batch report as structured JSON. It accepts 1–256 runs and limits the serialized report to 256 KiB before MCP transport wrapping. A larger result returns a tool error. The CLI supports larger batches and waveform output.
 
+### GPU batch
+
+A build with `--features gpu` adds `sansho mc --gpu`. It needs an NVIDIA driver and
+NVRTC at run time. `--gpu-lanes N` (default 256) sets how many runs advance together,
+and `--gpu-jacobian f32` enables single-precision derivatives inside Newton
+iterations. Diode evaluations run on the GPU, and every other device stays on the CPU.
+The report has the same fields. Reruns are bit-identical for any lane count, but
+values differ from the CPU batch within RELTOL because CUDA's `exp`, `log` and `pow`
+differ in the last bits. A circuit without a supported device reports
+`E-GPU-UNSUPPORTED`. [Design and measurements](architecture.md#82-g1-gpu-batch-sansho-gpu-feature-gpu)
+
 ## Parameter semantics
 
 | Expression | Sample |
