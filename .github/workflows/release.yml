@@ -82,10 +82,11 @@ jobs:
       - name: Build binaries and test the shipped feature set
         run: |
           build=(cargo build --release --locked --target "$TARGET" -p sansho-cli -p sansho-mcp --bins)
-          features=(--all-features)
+          # jit is the only optional release feature in v0.1. The experimental gpu
+          # feature is left to source builds.
+          features=(--features sansho-cli/jit,sansho-mcp/jit)
           backend="interpreter and JIT"
           if ! "${build[@]}" "${features[@]}"; then
-            # jit is the only optional release feature in v0.1.
             echo "::warning::JIT build failed on $TARGET. Testing the interpreter-only build."
             features=(--no-default-features)
             backend="interpreter only (JIT build failed)"

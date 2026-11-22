@@ -728,7 +728,7 @@ loader remain outside the current implementation. [Compatibility and numerical d
 | M3 | Agent: Session API, diagnostics, lint, MCP server, deterministic L1/L2 parallelism | Design loop runs end-to-end via MCP (done: `sansho-mcp/tests/stdio.rs`) |
 | M4 | OSDI loader and PDKs: IHP SG13G2 (PSP103, ...), SKY130 (built-in level 54), broader ngspice dialect | PDK testbenches match ngspice (dialect part done: `verify/decks/{subckt_ring,lib_include,nodeset_latch,uic_rlc}`) |
 | M5 | Performance: own KLU-style solver, bypass, parallel LU, GPU batch (G1) | ≥ 1.x× ngspice on C6288 single-core; further gains multi-core |
-| M6 | Extensions: PSS/HB, HSPICE dialect, Python | — |
+| M6 | Extensions: PSS/HB, HSPICE dialect, Python | Shooting PSS done (R19/R22: `verify/pss-decks`, `verify/pss-ng-decks`); HB, HSPICE dialect and Python bindings open |
 
 ---
 
