@@ -2,7 +2,6 @@
 
 - Date: 2026-11-17
 - Status: Draft
-- Background: private OSS landscape survey (not included in the repository)
 
 > Sansho (山椒) uses the crate prefix `sansho-`.
 
@@ -563,8 +562,9 @@ or a compute-heavy kernel (BSIM4, Verilog-A), and LU moved off the lane threads.
 
 ## 9. Accuracy assurance and verification (`sansho-verify`)
 
-- **Oracles**: ngspice (BSD; installed and run in CI) as primary, Xyce as secondary — invoked only as
-  external processes, no code imported. Circuits with analytic solutions (RC, RLC, linear networks)
+- **Oracle**: ngspice, a separately installed program with mixed BSD, LGPL and MPL licensing, run
+  only as an external process in a container. No ngspice code is read or imported, and Sansho's
+  dual license covers only Sansho's own material. Circuits with analytic solutions (RC, RLC, linear networks)
   are compared against exact values.
 - **Metric** (implemented in M2): per variable `max|y − y_ref| / (rtol·max|y_ref| + atol)`, i.e.
   the worst error relative to the reference full scale; pass if ≤ 1. TRAN results are linearly
@@ -700,7 +700,7 @@ propagation in transient. [Line equations and compatibility](distributed-lines.m
 
 ### Not yet supported
 
-T-line IC tuples, pole-zero extraction for distributed delays, JFET level two,
+T-line IC tuples, pole-zero extraction for distributed delays,
 full MOS2/MOS3 short-channel corrections, interactive Nutmeg and an OSDI
 loader remain outside the current implementation. [Compatibility and numerical differences](compatibility.md)
 

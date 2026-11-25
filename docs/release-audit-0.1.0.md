@@ -1,6 +1,6 @@
 # Sansho v0.1.0 release audit
 
-Reviewed the `release-prep` working tree against base commit `24506bb` on 2026-11-22.
+Reviewed the `release-prep` working tree against base commit `43b4424` on 2026-11-22.
 This review replaces the 2026-11-20 audit of `bb73272`, which predated the R15–R22
 model rounds, the solver replacement, the GPU batch and the Monte Carlo throughput
 work. The review used tracked files, local Git history and the locked Cargo cache.

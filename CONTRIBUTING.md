@@ -61,8 +61,10 @@ When in doubt, ask in an issue before writing code.
 ## 6. Sign-off
 
 By submitting a contribution you certify that you have the right to submit it under both
-licenses and that it complies with this policy. Add a `Signed-off-by:` line to your commits
-([Developer Certificate of Origin](https://developercertificate.org/)).
+licenses and that it complies with this policy. External contributions must add a
+`Signed-off-by:` line to each commit ([Developer Certificate of Origin](https://developercertificate.org/)).
+Commits before the first public release were contributed by the maintainer, who confirms the right to
+license them under both licenses.
 
 ## 7. Releases
 
