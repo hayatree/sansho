@@ -88,8 +88,11 @@ fn extremum_and_transformer() {
     let a = deck("transformer");
     let primary = a.real("v(winding)").unwrap();
     assert!(primary.iter().any(|v| *v > 0.15));
+    // Both windings see the same core flux, so the ratio is exact up to Newton
+    // convergence. Allow the default reltol/vntol test: the residual depends on the
+    // platform's libm (2.7e-6 V on macOS, 3.3e-7 V on Linux).
     for (p, s) in primary.iter().zip(a.real("v(out)").unwrap()) {
-        near(*s, -0.6 * p, 1e-6);
+        near(*s, -0.6 * p, 1e-6 + 1e-3 * (0.6 * p).abs());
     }
 }
 #[test]
