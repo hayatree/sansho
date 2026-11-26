@@ -22,7 +22,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: version
         env:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs['dry-run'] }}
@@ -46,7 +46,7 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               print("version=" + version, file=output)
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: changelog-notes
           path: notes.md
@@ -71,7 +71,7 @@ jobs:
       TARGET: ${{ matrix.target }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install target for the repository toolchain
         run: rustup target add "$TARGET"
       - name: Check release notices
@@ -108,12 +108,12 @@ jobs:
           else
             tar -czf "dist/$stem.tar.gz" "$stem"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: archive-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: backend-${{ matrix.target }}
           path: backend-*.txt
@@ -123,15 +123,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: archive-*
           merge-multiple: true
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: changelog-notes
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: backend-*
           merge-multiple: true
@@ -148,7 +148,7 @@ jobs:
             printf '\n### Verilog-A backends by platform\n\n' >> ../notes.md
             sed 's/^/- /' ../backends/backend-*.txt >> ../notes.md
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-files
           path: |
@@ -164,10 +164,10 @@ jobs:
       attestations: write
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-files
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: dist/*
       - name: Create draft release

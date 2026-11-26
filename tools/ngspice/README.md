@@ -13,4 +13,6 @@ tools/ngspice/ngspice.sh -b deck.cir -r out.raw   # builds the image on first us
   The `--compile-va` invocation selects `/usr/local/bin/openvaf-r` as the image entry point.
 - The container has no network access, runs as your UID, and writes ASCII raw files
   (`SPICE_ASCIIRAWFILE=1`).
+- The checkout is mounted read-write, and a deck directory's `.spiceinit` is honored. Run the
+  wrapper only on decks you trust, such as the ones in this repository.
 - Override the image tag with `SANSHO_NGSPICE_IMAGE`.

@@ -4,6 +4,8 @@
 # black-box oracle for .pss results.
 #
 # Isolation rules (see README.md):
+# - The tarball is checked against the pinned NGSPICE_SHA256 before it is
+#   extracted; a mismatch fails the build.
 # - The source tarball is downloaded, built and deleted inside ONE RUN step of
 #   the builder stage, so no image layer or build-cache entry contains source.
 # - Compiler, configure and make output goes to /dev/null; only a one-line
@@ -12,6 +14,10 @@
 #   init scripts. Headers, man pages and sources are not copied.
 FROM debian:trixie-slim AS build
 ARG NGSPICE_VERSION=44.2
+# Expected SHA-256 of the ngspice-${NGSPICE_VERSION}.tar.gz release tarball. This is the
+# digest of the reviewed tarball recorded in README.md ("Recorded build"). Update it
+# together with NGSPICE_VERSION; the build fails if the download does not match.
+ARG NGSPICE_SHA256=e7dadfb7bd5474fd22409c1e5a67acdec19f77e597df68e17c5549bc1390d7fd
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential bison flex ca-certificates curl \
@@ -21,6 +27,8 @@ RUN set -eu; \
     src=/tmp/ngspice-src; mkdir -p "$src"; cd "$src"; \
     curl -fsSL -o ngspice.tar.gz \
       "https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/old-releases/${NGSPICE_VERSION}/ngspice-${NGSPICE_VERSION}.tar.gz"; \
+    echo "${NGSPICE_SHA256}  ngspice.tar.gz" | sha256sum -c - >/dev/null \
+      || { echo "ngspice-pss build: FAILED tarball SHA-256 mismatch"; cd /; rm -rf "$src"; exit 1; }; \
     sha=$(sha256sum ngspice.tar.gz | cut -d' ' -f1); \
     tar -xzf ngspice.tar.gz; rm ngspice.tar.gz; \
     cd "ngspice-${NGSPICE_VERSION}"; \
