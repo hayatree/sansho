@@ -15,6 +15,8 @@ from source is allowed only under these conditions:
    is active.
 2. The tarball is downloaded, compiled and deleted inside one `RUN` step. No layer or
    build-cache entry contains source, and the source is never written to the host.
+   Before extraction the tarball is checked against the pinned `NGSPICE_SHA256` build
+   argument (the digest under "Recorded build" below). A mismatch fails the build.
 3. All configure, compiler and make output goes to `/dev/null`. If the build fails, report
    only that it failed. Never open, paste or debug the log or the source.
 4. The runtime image holds only the installed executable, code models and init scripts.
